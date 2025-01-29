@@ -72,7 +72,8 @@ def set_axis_properties(ax: plt.Axes) -> None:
     ax.tick_params(axis='both', which='major', pad=1)
     # Shorten the tick length
     ax.tick_params(axis='both', which='both', length=2)
-
+    ax.tick_params(axis='y', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_S)
+    ax.tick_params(axis='x', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_S)
     # Ensure that all plot elements are not clipped
     for artist in ax.get_children():
         artist.set_clip_on(False)
