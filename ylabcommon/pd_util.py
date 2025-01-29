@@ -9,7 +9,7 @@ def get_prj_name(fname: str) -> str:
     '''
     obtain prj and paradigm name from file path
     '''
-    if os.path.basename() == "df_individual_analyzed_merged.h5":
+    if os.path.basename(fname) == "df_individual_analyzed_merged.h5":
         return os.path.basename(os.path.dirname(os.path.dirname(fname)))+"_"+os.path.basename(os.path.dirname(fname))
     raise ValueError("file name is not correct")
 
