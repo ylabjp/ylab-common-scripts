@@ -35,7 +35,9 @@ def read_and_cache(
     """
 
     project_name = os.path.join(
-        cache_path, "_cache_"+get_prj_name(fname_df)+".h5")
+        cache_path,
+        "_cache_"+get_prj_name(fname_df)+".h5"
+    )
 
     if os.path.exists(project_name):
         d = pd.read_hdf(project_name, key="dataframe")
