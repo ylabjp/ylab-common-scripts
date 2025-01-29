@@ -1,10 +1,12 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='ylabcommon',
+    name='ylab-common-scripts',
     version='0.1.0',
-    packages=find_packages(),
+    packages=find_packages(where="ylabcommon"),
+    package_dir={"": "ylabcommon"},
     install_requires=[
+        "matplotlib"
         # Add your dependencies here
     ],
     entry_points={
@@ -13,11 +15,11 @@ setup(
         ],
     },
     author='Sho Yagishita',
-    author_email='your.email@example.com',
-    description='A brief description of your package',
+    author_email='yagishita-tky@umin.ac.jp',
+    description='Common scripts for Yagishita lab',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
-    url='https://github.com/yourusername/your-repo',
+    url='https://github.com/yourusername/ylab-common-scripts',
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
