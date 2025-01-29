@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='ylab-common-scripts',
+    name='ylabcommon',
     version='0.1.0',
     packages=find_packages(where="ylabcommon"),
     package_dir={"": "ylabcommon"},
