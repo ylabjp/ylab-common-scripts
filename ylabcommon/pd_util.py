@@ -7,7 +7,8 @@ pd.set_option('display.max_columns', 300)
 
 def get_prj_name(fname: str) -> str:
     '''
-    obtain prj and paradigm name from file path
+    obtain prj and paradigm name from file path for behavior data
+    :param fname: file name
     '''
     if os.path.basename(fname) == "df_individual_analyzed_merged.h5":
         return os.path.basename(os.path.dirname(os.path.dirname(fname)))+"_"+os.path.basename(os.path.dirname(fname))
