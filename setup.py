@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='ylabcommon',
-    version='0.1.4',
+    version='0.1.5',
     packages=find_packages(),
     # package_dir={"": "ylabcommon"},
     install_requires=[
