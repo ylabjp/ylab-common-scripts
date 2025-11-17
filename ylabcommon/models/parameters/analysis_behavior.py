@@ -79,7 +79,11 @@ class TrialDiv(BaseModel):
 
 
 class GroupAnalysisConfig(BaseModel):
-    param: str
+    '''
+    paramで指定しtベースconfigでデフォルトを指定
+    その値を上書きできる
+    '''
+    param: Optional[str]=None   
     cond_group: Optional[Dict[str, List[str]]] = None
     trial_div: Optional[TrialDiv] = None
     target_key: Optional[str] = None
@@ -104,6 +108,13 @@ class BehaviorParamConfig(BaseModel):
     video_param: VideoParam
 
     group_analyses: Dict[str, GroupAnalysisConfig]
-    group_analyses_temp: Dict[str, GroupAnalysisConfig]
+
+
+    def __init__(self,config_path):
+        # load yaml or json
+        config_dict={}
+        super.__init__(self,config_dict)
+
+        # GroupAnalysisConfigのデフォルト値の取得と個別パラメータで上書きの設定
 
 
