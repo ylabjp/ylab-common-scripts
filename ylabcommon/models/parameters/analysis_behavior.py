@@ -52,10 +52,25 @@ class EventTargetItem(BaseModel):
 
 
 class VideoParam(BaseModel):
-    arena_mm_per_pix: float
+    arena_box_in_mm: Optional[float]=None
     start_frame: int
     arena_box: List[List[int]]
     roi: Dict[str, Any]
+
+    def __init__(self):
+        super.__init__(self)
+
+        self.arena_mm_per_pix_from_individual=False
+        self.arena_mm_per_pix=None
+        if self.arena_box is not None\
+                and self.arena_box_in_mm is not None:
+
+            self.arena_mm_per_pix = (
+                self.arena_box_in_mm[0]/self.arena_box[0]+
+                self.arena_box_in_mm[1]/self.arena_box[1]
+                )/2
+                        
+            self.arena_mm_per_pix_from_individual= True
 
 
 class TrialDiv(BaseModel):
