@@ -9,6 +9,7 @@ from matplotlib.axes import Axes
 import seaborn as sns
 from scipy.stats import mannwhitneyu, kruskal
 import pandas as pd
+import numpy as np
 
 matplotlib.rcParams["font.family"] = "Arial"
 matplotlib.rcParams["pdf.fonttype"] = 42
