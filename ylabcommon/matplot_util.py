@@ -24,6 +24,7 @@ class STANDARD_FIGURE_SIZE:
     FONT_SIZE_S = 5  # Legend, pval
     BAR_WIDTH = 0.5
 
+
 marker_type_group = [
     MarkerStyle('o'),    # circle
     MarkerStyle('^'),    # triangle_up
@@ -51,6 +52,8 @@ marker_type_group = [
     MarkerStyle('|'),    # vline
     MarkerStyle('_'),    # hline
 ]
+
+
 def create_pdf_pages(fig_name_base: str) -> PdfPages:
     """
     Creates a PdfPages object for saving figures. Tries to create a PdfPages object 
@@ -77,36 +80,46 @@ def create_pdf_pages(fig_name_base: str) -> PdfPages:
         pp = PdfPages(fname)
 
     return pp
-def close_fig(pp):
 
 
-    plt.subplots_adjust(wspace=1.5, hspace=3.5)
+def close_fig(pp, wspace=1.5, hspace=3.5, bottom=0.15, top=0.85, left=0.07, right=0.93):
+
+    plt.subplots_adjust(
+        wspace=wspace,
+        hspace=hspace,
+        bottom=bottom,
+        top=top,
+        left=left,
+        right=right
+    )
     try:
         plt.savefig(pp, format="pdf")
     except PermissionError as e:
         print("Error saving figure to PDF:", e)
     plt.close()
 
-def standard_bar(ax:Axes, cond_label, color, y_data:pd.DataFrame):
+
+def standard_bar(ax: Axes, cond_label, color, y_data: pd.DataFrame):
     if y_data is None:
         ax.bar(
-        cond_label,
-        0,
-        yerr=[[0],[0]],
-        width=0.5,
-        color=color,
-        edgecolor=color,
-        ecolor=color,
-        align="center",
-        alpha=1,
-        zorder=-1,
-        capsize=2.5,
-        linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
-        error_kw={
-            "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
-            "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
-        }
-    )
+            cond_label,
+            0,
+            yerr=[[0], [0]],
+            width=0.5,
+            color=color,
+            edgecolor=color,
+            ecolor=color,
+            align="center",
+            alpha=1,
+            zorder=-1,
+            capsize=2.5,
+            linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+            error_kw={
+                "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+                "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+            }
+        )
+        return
     mean = y_data.mean()
     y_err = [[0], [0]]
     if mean > 0:
@@ -141,6 +154,8 @@ def standard_bar(ax:Axes, cond_label, color, y_data:pd.DataFrame):
         size=3.0,
         jitter=0.2  # 横幅を指定できる
     )
+
+
 def generate_stat_text(data_for_stat):
     out = ""
     p_str = ""
@@ -243,5 +258,3 @@ def convert_pg2mpl(x0, y0, width, height, angle_deg) -> np.ndarray:
     ])
     rotated_center = R @ local_center
     return rotated_center+np.array([x0, y0])
-
-
