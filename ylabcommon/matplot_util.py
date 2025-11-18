@@ -3,6 +3,13 @@ import matplotlib.pyplot as plt
 import colorsys
 import re
 import matplotlib.colors as mcolors
+from matplotlib.markers import MarkerStyle
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.axes import Axes
+import seaborn as sns
+from scipy.stats import mannwhitneyu, kruskal
+import pandas as pd
+
 matplotlib.rcParams["font.family"] = "Arial"
 matplotlib.rcParams["pdf.fonttype"] = 42
 matplotlib.rcParams["ps.fonttype"] = 42
@@ -16,6 +23,117 @@ class STANDARD_FIGURE_SIZE:
     FONT_SIZE_S = 5  # Legend, pval
     BAR_WIDTH = 0.5
 
+marker_type_group = [
+    MarkerStyle('o'),    # circle
+    MarkerStyle('^'),    # triangle_up
+    MarkerStyle('X'),    # x (filled)
+    MarkerStyle('s'),    # square
+    MarkerStyle('P'),    # plus (filled)
+    MarkerStyle('D'),    # diamond
+    MarkerStyle('*'),    # star
+    MarkerStyle('v'),    # triangle_down
+    MarkerStyle('8'),    # octagon
+    MarkerStyle('H'),    # hexagon2
+    MarkerStyle('.'),    # point
+    MarkerStyle(','),    # pixel
+    MarkerStyle('<'),    # triangle_left
+    MarkerStyle('>'),    # triangle_right
+    MarkerStyle('1'),    # tri_down
+    MarkerStyle('2'),    # tri_up
+    MarkerStyle('3'),    # tri_left
+    MarkerStyle('4'),    # tri_right
+    MarkerStyle('p'),    # pentagon
+    MarkerStyle('h'),    # hexagon1
+    MarkerStyle('+'),    # plus
+    MarkerStyle('x'),    # x
+    MarkerStyle('d'),    # thin_diamond
+    MarkerStyle('|'),    # vline
+    MarkerStyle('_'),    # hline
+]
+def create_pdf_pages(fig_name_base: str) -> PdfPages:
+    """
+    Creates a PdfPages object for saving figures. Tries to create a PdfPages object 
+    with a specific filename. If it fails, creates a PdfPages object with a filename 
+    that includes the current datetime.
+
+    Parameters:
+        fig_name_base (str): The base name for the figure files. without suffix
+
+    Returns:
+        PdfPages: The created PdfPages object.
+    """
+    # Check if file is writable
+    try:
+        # Try to open the file in append mode to check write permission
+        fname = f"{fig_name_base}.pdf"
+        with open(fname, 'a'):
+            pass
+        pp = PdfPages(fname)
+    except (IOError, PermissionError):
+        # If file is not writable, use alternative filename with timestamp
+        current_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{fig_name_base}_{current_datetime}.pdf"
+        pp = PdfPages(fname)
+
+    return pp
+def close_fig(pp):
+
+
+    plt.subplots_adjust(wspace=1.5, hspace=3.5)
+    try:
+        plt.savefig(pp, format="pdf")
+    except PermissionError as e:
+        print("Error saving figure to PDF:", e)
+    plt.close()
+
+def standard_bar(ax:Axes, cond_label, color, y_data:pd.DataFrame):
+    mean = y_data.mean()
+    y_err = [[0], [0]]
+    if mean > 0:
+        y_err[1][0] = y_data.sem()
+    else:
+        y_err[0][0] = y_data.sem()
+    ax.bar(
+        cond_label,
+        mean,
+        yerr=y_err,
+        width=0.5,
+        color=color,
+        edgecolor=color,
+        ecolor=color,
+        align="center",
+        alpha=1,
+        zorder=-1,
+        capsize=2.5,
+        linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+        error_kw={
+            "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+            "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+        }
+    )
+    sns.stripplot(
+        x=[cond_label] * len(y_data),
+        y=y_data.values,
+        ax=ax,
+        # order=xlabel_list,
+        marker=".",
+        facecolor=darken_color(c, amount=0.4),
+        size=3.0,
+        jitter=0.2  # 横幅を指定できる
+    )
+def generate_stat_text(data_for_stat):
+    out = ""
+    p_str = ""
+    if len(data_for_stat) == 2:
+        stat, p = mannwhitneyu(*data_for_stat)
+        out = "MW test, U = %d" % stat
+        p_str = "$\it{P}$ = %.3f" % p
+    elif len(data_for_stat) > 2:
+        stat, p = kruskal(*data_for_stat)
+        out = "KW test, H = " % stat
+    else:
+        out = ""
+    return out, p_str
 
 
 def darken_color(color: str, amount: float = 0.25) -> str:
@@ -77,3 +195,33 @@ def set_axis_properties(ax: plt.Axes) -> None:
     # Ensure that all plot elements are not clipped
     for artist in ax.get_children():
         artist.set_clip_on(False)
+
+
+def convert_pg2mpl(x0, y0, width, height, angle_deg) -> np.ndarray:
+    # Converte pg ROI parameters to matplotlib ellipse parameters
+    # x0, y0: center position
+    # width, height: axes lengths
+    # angle_deg: rotation angle in degrees
+    # Returns: (xy, width, height, angle) for matplotlib Ellipse
+    # Reference:
+    # pyqtgraph
+    # pos	(length-2 sequence) The position of the ROI’s origin.
+    # size	(length-2 sequence) The size of the ROI’s bounding rectangle
+    # angle	(float) The rotation of the ROI in degrees. Default is 0.
+    # matplotlib
+    # xy : (float, float) xy coordinates of ellipse centre.
+    # width : float Total length (diameter) of horizontal axis.
+    # height : float  Total length (diameter) of vertical axis.
+    # angle : scalar, optional Rotation in degrees anti-clockwise.
+
+    local_center = np.array([width / 2.0, height / 2.0])
+
+    angle = np.deg2rad(angle_deg)
+    R = np.array([
+        [np.cos(angle), -np.sin(angle)],
+        [np.sin(angle),  np.cos(angle)]
+    ])
+    rotated_center = R @ local_center
+    return rotated_center+np.array([x0, y0])
+
+
