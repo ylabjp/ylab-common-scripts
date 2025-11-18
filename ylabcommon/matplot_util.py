@@ -88,6 +88,25 @@ def close_fig(pp):
     plt.close()
 
 def standard_bar(ax:Axes, cond_label, color, y_data:pd.DataFrame):
+    if y_data is None:
+        ax.bar(
+        cond_label,
+        0,
+        yerr=[[0],[0]],
+        width=0.5,
+        color=color,
+        edgecolor=color,
+        ecolor=color,
+        align="center",
+        alpha=1,
+        zorder=-1,
+        capsize=2.5,
+        linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+        error_kw={
+            "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+            "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+        }
+    )
     mean = y_data.mean()
     y_err = [[0], [0]]
     if mean > 0:
@@ -118,7 +137,7 @@ def standard_bar(ax:Axes, cond_label, color, y_data:pd.DataFrame):
         ax=ax,
         # order=xlabel_list,
         marker=".",
-        facecolor=darken_color(c, amount=0.4),
+        facecolor=darken_color(color, amount=0.4),
         size=3.0,
         jitter=0.2  # 横幅を指定できる
     )
