@@ -11,8 +11,32 @@ import logging
 import datetime
 import numpy as np
 import sys
+from pathlib import Path
 from packaging import version
 
+def find_parents_for_dir(start_dir:Path,target:str)->Path:
+    '''
+    Traverses upwards from the given start_dir, looking in each parent directory
+    for a file or directory named 'target'. If found, returns the full path to that target.
+    Returns None if the target is not found up to the root of the filesystem.
+    
+    Args:
+        start_dir (Path): The directory to start searching from.
+        target (str): The name of the file or directory to find in the parent chain.
+
+    Returns:
+        Path: The path to the found target file/directory, or None if not found.
+    '''
+    cur_dir = start_dir
+    while True:
+        candidate = cur_dir / target
+        if candidate.exists():
+            return candidate
+        parent = cur_dir.parent
+        if parent == cur_dir:
+            break
+        cur_dir = parent
+    return None
 
 def init_base_drive(prefix: dict):
     '''
