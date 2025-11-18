@@ -82,7 +82,7 @@ def create_pdf_pages(fig_name_base: str) -> PdfPages:
     return pp
 
 
-def close_fig(pp, wspace=1.5, hspace=3.5, bottom=0.15, top=0.85, left=0.07, right=0.93):
+def close_fig(pp, wspace=0.5, hspace=1.5, bottom=0.15, top=0.85, left=0.07, right=0.93):
 
     plt.subplots_adjust(
         wspace=wspace,
