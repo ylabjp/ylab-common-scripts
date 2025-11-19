@@ -34,6 +34,6 @@ def test_set_axis_properties_hides_right_and_top():
     fig, ax = plt.subplots()
     mplutil.set_axis_properties(ax)
 
-    assert ax.spines["right"].get_color() == "none"
-    assert ax.spines["top"].get_color() == "none"
+    assert ax.spines["right"].get_edgecolor() == (0.0, 0.0, 0.0, 0.0)
+    assert ax.spines["top"].get_edgecolor() == (0.0, 0.0, 0.0, 0.0)
     plt.close(fig)
