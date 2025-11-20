@@ -47,7 +47,7 @@ class HierNode:
                 return node
             node = node.parent
         return None
-
+    
 def _make_level_property(level: str):
     """
     Node に level 名に対応した property を生やすための factory。
@@ -134,6 +134,7 @@ def __build_tree_generic(
 # Node ベース Kernel / Crawler（レベル非依存）
 # ============================================================
 
+# TODO これを共通化＋解析種類ごとに継承して調整する
 @dataclass
 class CrawlContext:
     """
@@ -433,13 +434,6 @@ def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
 # analysis_param.set_project_param(config_json_path)
 # prj_root = Path(analysis_param.get_prj_root_dir())
 #
-# level_specs = [make_cond_spec(), make_mouse_spec(), make_day_spec()]
-# cond_nodes: List[BehaviorNode] = build_tree_generic(
-#     root=prj_root,
-#     analysis_param=analysis_param,
-#     level_specs=level_specs,
-#     node_factory=behavior_node_factory,
-# )
 #
 # class FreezingKernel(GenericKernel):
 #     def __init__(self) -> None:
