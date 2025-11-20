@@ -242,10 +242,16 @@ class GenericCrawler:
             self._walk_node(ctx, child)
 
 
-
+def _filter_dir_basic(d: Path) -> bool:
+    name = d.name
+    if not d.is_dir():
+        return False
+    if name[0] in ("_", "@"):
+        return False
+    return True
 
 # ============================================================
-# 行動実験用ノード (BehaviorNode)
+# BehaviorNode
 #    cond/mouse/day などへのショートカットを持つが、
 #    実装は property factory で DRY に記述
 # ============================================================
@@ -271,7 +277,7 @@ def make_cond_spec() -> LevelSpec:
     return LevelSpec(
         level="cond",
         pattern="cond*",
-        filter_dir=lambda d: True,
+        filter_dir=_filter_dir_basic,
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
@@ -282,18 +288,12 @@ def make_mouse_spec() -> LevelSpec:
 
     def _empty_payload(d: Path, param: Any) -> Dict[str, Any]:
         return {}
-    def _filter_mouse(d: Path) -> bool:
-        name = d.name
-        if not d.is_dir():
-            return False
-        if name[0] in ("_", "@"):
-            return False
-        return True
+
 
     return LevelSpec(
         level="mouse",
         pattern="*",
-        filter_dir=_filter_mouse,
+        filter_dir=_filter_dir_basic,
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
@@ -331,7 +331,7 @@ def make_day_spec() -> LevelSpec:
     return LevelSpec(
         level="day",
         pattern="day*",
-        filter_dir=lambda d: d.is_dir(),
+        filter_dir=_filter_dir_basic,
         preprocess_dir=_preprocess_day,
         load_payload=_load_day_payload,
     )
@@ -350,6 +350,58 @@ def behavior_node_factory(
         parent=parent,
         payload=payload,
     )
+
+
+
+
+
+# ============================================================
+# BehaviorNode
+#    cond/mouse/day などへのショートカットを持つが、
+#    実装は property factory で DRY に記述
+# ============================================================
+
+class SliceNode(HierNode):
+    """
+    cond/cell 階層を扱うときに使うノード。
+    """
+
+# cond / mouse / day プロパティを DRY に定義
+for _lvl in ("cond", "cell"):
+    setattr(SliceNode, _lvl, _make_level_property(_lvl))
+
+
+def make_cell_spec() -> LevelSpec:
+    def _identity_preprocess(d: Path, param: Any) -> Path:
+        return d
+
+    def _empty_payload(d: Path, param: Any) -> Dict[str, Any]:
+        return {}
+
+
+    return LevelSpec(
+        level="cell",
+        pattern="*XY*",
+        filter_dir=_filter_dir_basic,
+        preprocess_dir=_identity_preprocess,
+        load_payload=_empty_payload,
+    )
+
+def slice_node_factory(
+    name: str,
+    path: Path,
+    level: str,
+    parent: Optional[SliceNode],
+    payload: Dict[str, Any],
+) -> SliceNode:
+    return SliceNode(
+        name=name,
+        path=path,
+        level=level,
+        parent=parent,
+        payload=payload,
+    )
+
 
 
 
