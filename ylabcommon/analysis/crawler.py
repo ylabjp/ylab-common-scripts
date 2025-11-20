@@ -47,7 +47,7 @@ class HierNode:
                 return node
             node = node.parent
         return None
-    
+
 def _make_level_property(level: str):
     """
     Node に level 名に対応した property を生やすための factory。
@@ -172,18 +172,19 @@ class GenericKernel(ABC):
         pass
 
     # ファイルレベル
-    def get_file_pattern(self, node: HierNode) -> str:
+    def retrieve_file_with_pattern(self, node: HierNode) -> str:
         """
+        Nodeごとにファイルの状態を調べる。
+        目的とするデータセットが揃っているか判定する。
         node.path.glob() で使うパターン。
         例: level=="day" のときのみ 'result*.csv' を返す、など。
-
         空文字列を返した場合、その node ではファイル処理を行わない。
         """
         return ""
 
     def on_file(self, ctx: CrawlContext, node: HierNode, file_path: Path) -> None:
         """
-        get_file_pattern() でマッチしたファイルごとに呼ばれるフック。
+        retrieve_file_with_pattern() でマッチしたファイルごとに呼ばれるフック。
         """
         pass
 
@@ -231,7 +232,7 @@ class GenericCrawler:
         for k in self.kernels:
             k.on_node(ctx, node)
 
-            pattern = k.get_file_pattern(node)
+            pattern = k.retrieve_file_with_pattern(node)
             if pattern:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
@@ -439,7 +440,7 @@ def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
 #     def __init__(self) -> None:
 #         self._rows = []
 #
-#     def get_file_pattern(self, node: HierNode) -> str:
+#     def retrieve_file_with_pattern(self, node: HierNode) -> str:
 #         # 例: day レベルのみ result*.csv を対象
 #         return "result*.csv" if node.level == "day" else ""
 #
