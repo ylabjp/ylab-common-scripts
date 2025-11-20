@@ -162,7 +162,7 @@ def generate_stat_text(data_for_stat):
     if len(data_for_stat) == 2:
         stat, p = mannwhitneyu(*data_for_stat)
         out = "MW test, U = %d" % stat
-        p_str = "$\it{P}$ = %.3f" % p
+        p_str = r"$\lt{P}$ = %.3f" % p
     elif len(data_for_stat) > 2:
         stat, p = kruskal(*data_for_stat)
         out = "KW test, H = " % stat
