@@ -90,7 +90,7 @@ class LevelSpec:
 
 N = TypeVar("N", bound=HierNode)
 
-def build_tree_generic(
+def __build_tree_generic(
     root: Path,
     analysis_param: Any,
     level_specs: List[LevelSpec],
@@ -148,7 +148,7 @@ class CrawlContext:
 
 class GenericKernel(ABC):
     """
-    HierNode（もしくはそのサブクラス）を前提とした汎用 Kernel 抽象クラス。
+    HierNode もしくはそのサブクラスを前提とした汎用 Kernel 抽象クラス。
 
     ※ここでは level 固有の on_cond / on_mouse / on_day などは定義しない。
       必要であれば on_node 内部で node.level を見て分岐する。
@@ -242,7 +242,7 @@ class GenericCrawler:
             self._walk_node(ctx, child)
 
 
-def _filter_dir_basic(d: Path) -> bool:
+def __filter_dir_basic(d: Path) -> bool:
     name = d.name
     if not d.is_dir():
         return False
@@ -267,7 +267,7 @@ for _lvl in ("cond", "mouse", "day"):
 
 
 
-def make_cond_spec() -> LevelSpec:
+def __make_cond_spec() -> LevelSpec:
 
     def _identity_preprocess(d: Path, param: Any) -> Path:
         return d
@@ -277,12 +277,12 @@ def make_cond_spec() -> LevelSpec:
     return LevelSpec(
         level="cond",
         pattern="cond*",
-        filter_dir=_filter_dir_basic,
+        filter_dir=__filter_dir_basic,
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
 
-def make_mouse_spec() -> LevelSpec:
+def __make_mouse_spec() -> LevelSpec:
     def _identity_preprocess(d: Path, param: Any) -> Path:
         return d
 
@@ -293,12 +293,12 @@ def make_mouse_spec() -> LevelSpec:
     return LevelSpec(
         level="mouse",
         pattern="*",
-        filter_dir=_filter_dir_basic,
+        filter_dir=__filter_dir_basic,
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
 
-def make_day_spec() -> LevelSpec:
+def __make_day_spec() -> LevelSpec:
     """
     day* ディレクトリを対象とし、
     - "_" が含まれないものはリネームして補正
@@ -331,12 +331,12 @@ def make_day_spec() -> LevelSpec:
     return LevelSpec(
         level="day",
         pattern="day*",
-        filter_dir=_filter_dir_basic,
+        filter_dir=__filter_dir_basic,
         preprocess_dir=_preprocess_day,
         load_payload=_load_day_payload,
     )
 
-def behavior_node_factory(
+def __behavior_node_factory(
     name: str,
     path: Path,
     level: str,
@@ -351,13 +351,21 @@ def behavior_node_factory(
         payload=payload,
     )
 
+def build_behavior_tree(prj_root:Path, analysis_param:Any)->List[BehaviorNode]:
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    nodes: List[BehaviorNode] = __build_tree_generic(
+        root=prj_root,
+        analysis_param=analysis_param,
+        level_specs=level_specs,
+        node_factory=__behavior_node_factory,
+    )
 
-
+    return nodes
 
 
 # ============================================================
-# BehaviorNode
-#    cond/mouse/day などへのショートカットを持つが、
+# SliceNode
+#    cond/cell などへのショートカットを持つが、
 #    実装は property factory で DRY に記述
 # ============================================================
 
@@ -371,7 +379,7 @@ for _lvl in ("cond", "cell"):
     setattr(SliceNode, _lvl, _make_level_property(_lvl))
 
 
-def make_cell_spec() -> LevelSpec:
+def __make_cell_spec() -> LevelSpec:
     def _identity_preprocess(d: Path, param: Any) -> Path:
         return d
 
@@ -382,12 +390,12 @@ def make_cell_spec() -> LevelSpec:
     return LevelSpec(
         level="cell",
         pattern="*XY*",
-        filter_dir=_filter_dir_basic,
+        filter_dir=__filter_dir_basic,
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
 
-def slice_node_factory(
+def __slice_node_factory(
     name: str,
     path: Path,
     level: str,
@@ -404,6 +412,16 @@ def slice_node_factory(
 
 
 
+def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
+    level_specs = [__make_cond_spec(), __make_cell_spec()]
+    nodes: List[SliceNode] = __build_tree_generic(
+        root=prj_root,
+        analysis_param=analysis_param,
+        level_specs=level_specs,
+        node_factory=__slice_node_factory,
+    )
+
+    return nodes
 
 # ============================================================
 # 7. 使用例（コメントアウト）

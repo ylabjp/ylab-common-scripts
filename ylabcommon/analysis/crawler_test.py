@@ -12,8 +12,8 @@ import pytest
 #     GenericCrawler, GenericKernel, CrawlContext,
 # )
 from crawler import (
-    HierNode, LevelSpec, build_tree_generic, behavior_node_factory,
-    make_cond_spec, make_mouse_spec, make_day_spec,
+    HierNode, LevelSpec, __build_tree_generic, __behavior_node_factory,
+    __make_cond_spec, __make_mouse_spec, __make_day_spec,
     GenericCrawler, GenericKernel, CrawlContext,
 )
 
@@ -75,12 +75,12 @@ class TraceKernel(GenericKernel):
 
 def test_ancestor_and_level_property(dummy_fs: Path):
     """HierNode.ancestor and BehaviorNode.cond/mouse/day properties behave."""
-    level_specs = [make_cond_spec(), make_mouse_spec(), make_day_spec()]
-    roots = build_tree_generic(
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    roots = __build_tree_generic(
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=behavior_node_factory,
+        node_factory=__behavior_node_factory,
     )
     # Locate one deep leaf: condA / mouse1 / day001_
     condA = next(r for r in roots if r.name == "condA")
@@ -100,12 +100,12 @@ def test_ancestor_and_level_property(dummy_fs: Path):
 
 def test_build_tree_generic_structure(dummy_fs: Path):
     """The builder yields the expected number of nodes and structure."""
-    level_specs = [make_cond_spec(), make_mouse_spec(), make_day_spec()]
-    roots = build_tree_generic(
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    roots = __build_tree_generic(
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=behavior_node_factory,
+        node_factory=__behavior_node_factory,
     )
     assert len(roots) == 2  # condA, condB
     condA = next(r for r in roots if r.name == "condA")
@@ -125,12 +125,12 @@ def test_build_tree_generic_structure(dummy_fs: Path):
 
 def test_generic_crawler_trace(dummy_fs: Path):
     """GenericCrawler walks nodes depth-first and calls kernel hooks."""
-    level_specs = [make_cond_spec(), make_mouse_spec(), make_day_spec()]
-    roots = build_tree_generic(
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    roots = __build_tree_generic(
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=behavior_node_factory,
+        node_factory=__behavior_node_factory,
     )
 
     kernel = TraceKernel()
