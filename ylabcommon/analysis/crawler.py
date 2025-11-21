@@ -196,52 +196,43 @@ class GenericCrawler:
     def __init__(
         self,
         kernels: Sequence[GenericKernel],
-        analysis_param: Any,
-        project_dir: Path,
-        overwrite: bool = False,
+        ctx: CrawlContext,
     ) -> None:
         self.kernels = list(kernels)
-        self.analysis_param = analysis_param
-        self.project_dir = project_dir
-        self.overwrite = overwrite
+        self.ctx = analysis_paractxm
+
 
     def crawl_from_nodes(self, roots: Sequence[HierNode]) -> None:
         """
         すでに build_tree_generic 済みの roots（最上位ノード群）から解析を開始する。
         """
-        ctx = CrawlContext(
-            analysis_param=self.analysis_param,
-            project_dir=self.project_dir,
-            overwrite=self.overwrite,
-        )
-
         # プロジェクト開始
         for k in self.kernels:
-            k.on_project_start(ctx, roots)
+            k.on_project_start(self.ctx, roots)
 
         # 各 root を再帰的にたどる
         for root in roots:
-            self._walk_node(ctx, root)
+            self._walk_node( root)
 
         # プロジェクト終了
         for k in self.kernels:
-            k.on_project_end(ctx, roots)
+            k.on_project_end(self.ctx, roots)
 
-    def _walk_node(self, ctx: CrawlContext, node: HierNode) -> None:
+    def _walk_node(self,node: HierNode) -> None:
         # 各 Kernel に対して node フック & file フック
         for k in self.kernels:
-            k.on_node(ctx, node)
+            k.on_node(self.ctx, node)
 
             pattern = k.retrieve_file_with_pattern(node)
             if pattern:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
                     # Kernel 側でやる or ここに書く
-                    k.on_file(ctx, node, f)
+                    k.on_file(self.ctx, node, f)
 
         # 子ノードを再帰
         for child in node.children:
-            self._walk_node(ctx, child)
+            self._walk_node( child)
 
 
 def __filter_dir_basic(d: Path) -> bool:
@@ -476,11 +467,11 @@ def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
 #         if hasattr(ctx.analysis_param, "log_info"):
 #             ctx.analysis_param.log_info(f"Saved freezing summary to: {out_path}")
 #
+# ctx = CrawlContext(analysis_param,prj_root,overwrite)
 # crawler = GenericCrawler(
 #     kernels=[FreezingKernel()],
-#     analysis_param=analysis_param,
-#     project_dir=prj_root,
-#     overwrite=False,
+#       ctx=ctx
+#
 # )
 #
 # crawler.crawl_from_nodes(cond_nodes)
