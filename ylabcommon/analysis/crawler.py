@@ -199,7 +199,7 @@ class GenericCrawler:
         ctx: CrawlContext,
     ) -> None:
         self.kernels = list(kernels)
-        self.ctx = analysis_paractxm
+        self.ctx = ctx
 
 
     def crawl_from_nodes(self, roots: Sequence[HierNode]) -> None:
@@ -403,6 +403,8 @@ def __slice_node_factory(
         payload=payload,
     )
 
+
+    
 
 
 def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
