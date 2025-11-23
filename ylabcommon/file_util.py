@@ -13,6 +13,8 @@ import numpy as np
 import sys
 from pathlib import Path
 from packaging import version
+import questionary
+import yaml
 
 def find_parents_for_dir(start_dir:Path,target:str)->Path:
     '''
@@ -53,6 +55,45 @@ def init_base_drive(prefix: dict):
         raise ValueError(
             "Cannot access to %s. Check drive and network status" % dirbase)
     return dirbase
+
+def get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[str, Path]:
+
+    config_list=list(
+        find_parents_for_dir(Path(base_path),config_dir_name).glob("*."+file_type)
+    )
+    if len(config_list)==0:
+        raise ValueError("Critical error: config dir not found.")
+    config_base=config_list[0].parent
+
+    config_basename_dict={}
+    for c in config_list:
+        if c.name[0]=="_":
+            continue
+        config_basename_dict[c.name]=c
+
+    return config_basename_dict
+
+def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml") -> list:
+    config_basename_dict=get_config_list(base_path,config_dir_name,file_type)
+
+    answers = questionary.checkbox(
+        "Select config and <enter>",
+        choices=config_basename_dict.keys(),
+    ).ask()
+
+    config_list = list(map(lambda x:config_basename_dict[x],answers))
+
+    sap_list=[]
+    
+    for idx, t in enumerate(config_list):
+        with open(t, 'r', encoding="utf-8") as f:
+            analysis_json = yaml.safe_load(f)
+            sap_list.append(
+                param_model(**analysis_json)
+            )
+
+    return sap_list
+
 
 def replace_yen_in_path(self, fname: str):
     '''
