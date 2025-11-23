@@ -11,6 +11,7 @@ from typing import (
     Sequence,
     TypeVar,
 )
+from ylabcommon.models.parameters.general import  ArgModel
 from abc import ABC
 
 
@@ -141,11 +142,11 @@ class CrawlContext:
     解析全体で共通のコンテキスト。
     - analysis_param: CC_Analysis_Param など
     - project_dir   : プロジェクトルート
-    - overwrite     : 上書きフラグ（必要なら拡張）
+    - arg     : 
     """
     analysis_param: Any
     project_dir: Path
-    overwrite: bool = False
+    arg: ArgModel 
 
 class GenericKernel(ABC):
     """
