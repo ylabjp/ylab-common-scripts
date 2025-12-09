@@ -81,8 +81,8 @@ class LevelSpec:
     level: str
     pattern: str
     filter_dir: Callable[[Path], bool]
-    preprocess_dir: Callable[[Path, Any], Path]
-    load_payload: Callable[[Path, Any], Dict[str, Any]]
+    preprocess_dir: Callable[[Path], Path]
+    load_payload: Callable[[Path], Dict[str]]
 
 
 # ============================================================
@@ -93,7 +93,6 @@ N = TypeVar("N", bound=HierNode)
 
 def __build_tree_generic(
     root: Path,
-    analysis_param: Any,
     level_specs: List[LevelSpec],
     node_factory: Callable[[str, Path, str, Optional[N], Dict[str, Any]], N],
 ) -> List[N]:
@@ -117,10 +116,10 @@ def __build_tree_generic(
                 continue
 
             # 前処理（rename など）
-            d2 = spec.preprocess_dir(d, analysis_param)
+            d2 = spec.preprocess_dir(d)
 
             # payload を作成（exp_param など）
-            payload = spec.load_payload(d2, analysis_param)
+            payload = spec.load_payload(d2)
 
             node = node_factory(d2.name, d2, spec.level, parent, payload)
             node.children = _build_level(node, d2, depth + 1)
@@ -263,10 +262,10 @@ for _lvl in ("cond", "mouse", "day"):
 
 def __make_cond_spec() -> LevelSpec:
 
-    def _identity_preprocess(d: Path, param: Any) -> Path:
+    def _identity_preprocess(d: Path) -> Path:
         return d
 
-    def _empty_payload(d: Path, param: Any) -> Dict[str, Any]:
+    def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
     return LevelSpec(
         level="cond",
@@ -277,12 +276,11 @@ def __make_cond_spec() -> LevelSpec:
     )
 
 def __make_mouse_spec() -> LevelSpec:
-    def _identity_preprocess(d: Path, param: Any) -> Path:
+    def _identity_preprocess(d: Path) -> Path:
         return d
 
-    def _empty_payload(d: Path, param: Any) -> Dict[str, Any]:
+    def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
-
 
     return LevelSpec(
         level="mouse",
@@ -299,7 +297,7 @@ def __make_day_spec() -> LevelSpec:
     - analysis_param.get_exp_param(...) を payload["exp_param"] に格納
     """
 
-    def _preprocess_day(d: Path, param: Any) -> Path:
+    def _preprocess_day(d: Path) -> Path:
         if len(d.name.split("_")) < 2:
             old = d
             new = d.with_name(d.name + "_")
@@ -312,7 +310,7 @@ def __make_day_spec() -> LevelSpec:
             return new
         return d
 
-    def _load_day_payload(d: Path, param: Any) -> Dict[str, Any]:
+    def _load_day_payload(d: Path) -> Dict[str, Any]:
         exp_param = None
         if hasattr(param, "get_exp_param"):
             try:
@@ -374,10 +372,10 @@ for _lvl in ("cond", "cell"):
 
 
 def __make_cell_spec() -> LevelSpec:
-    def _identity_preprocess(d: Path, param: Any) -> Path:
+    def _identity_preprocess(d: Path) -> Path:
         return d
 
-    def _empty_payload(d: Path, param: Any) -> Dict[str, Any]:
+    def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
 
 
@@ -408,11 +406,10 @@ def __slice_node_factory(
     
 
 
-def build_slice_tree(prj_root:Path, analysis_param:Any)->List[SliceNode]:
+def build_slice_tree(prj_root:Path)->List[SliceNode]:
     level_specs = [__make_cond_spec(), __make_cell_spec()]
     nodes: List[SliceNode] = __build_tree_generic(
         root=prj_root,
-        analysis_param=analysis_param,
         level_specs=level_specs,
         node_factory=__slice_node_factory,
     )
