@@ -19,6 +19,14 @@ from abc import ABC
 # 汎用ツリーノード
 # ============================================================
 
+# クラス,役割,性質
+# HierNode,
+#            データそのもの (Instance),ツリー上に数百〜数千個作られる。メモリを軽く保つべき。
+# LevelSpec,
+#           構築のレシピ (Schema/Factory),"階層レベルの数だけ（cond, mouse, dayの3つなど）
+#           しか存在しない。「どうやって探すか」「どう読み込むか」というロジックを持つ。"
+
+
 @dataclass
 class HierNode:
     """
@@ -49,19 +57,11 @@ class HierNode:
             node = node.parent
         return None
 
-def _make_level_property(level: str):
-    """
-    Node に level 名に対応した property を生やすための factory。
+    def _get_ancestor_node(self, level: str) -> Optional["HierNode"]:
+            """共通ロジック: 指定したレベルの祖先を取得し、HierNode型かチェックして返す"""
+            n = self.ancestor(level)
+            return n if isinstance(n, HierNode) else None
 
-    例:
-        BehaviorNode.cond = _make_level_property("cond")
-    """
-    @property
-    def _prop(self: "HierNode") -> Optional["HierNode"]:
-        n = self.ancestor(level)
-        return n if isinstance(n, HierNode) else None
-
-    return _prop
 
 # ============================================================
 # LevelSpec: 各階層のルール（glob/filter/preprocess/load_payload）
@@ -254,11 +254,21 @@ class BehaviorNode(HierNode):
     マウス行動実験など、cond/mouse/day 階層を扱うときに使うノード。
     """
 
-# cond / mouse / day プロパティを DRY に定義
-for _lvl in ("cond", "mouse", "day"):
-    setattr(BehaviorNode, _lvl, _make_level_property(_lvl))
+# # cond / mouse / day プロパティを DRY に定義
+# for _lvl in ("cond", "mouse", "day"):
+#     setattr(BehaviorNode, _lvl, _make_level_property(_lvl))
+    @property
+    def cond(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("cond")
 
+    @property
+    def mouse(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("mouse")
 
+    @property
+    def day(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("day")
+    
 
 def __make_cond_spec() -> LevelSpec:
 
@@ -365,10 +375,16 @@ class SliceNode(HierNode):
     """
     cond/cell 階層を扱うときに使うノード。
     """
+    @property
+    def cond(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("cond")
 
-# cond / mouse / day プロパティを DRY に定義
-for _lvl in ("cond", "cell"):
-    setattr(SliceNode, _lvl, _make_level_property(_lvl))
+    @property
+    def cell(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("cell")
+
+
+
 
 
 def __make_cell_spec() -> LevelSpec:
