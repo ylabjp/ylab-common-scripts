@@ -36,15 +36,15 @@ class HierNode:
     - path   : 対応するパス
     - level  : "cond" / "mouse" / "day" など任意のレベル名
     - parent : 親ノード
-    - children: 子ノードのリスト
     - payload: exp_param など解析に必要なメタ情報を格納する自由な dict
+    - children: 子ノードのリスト
     """
     name: str
     path: Path
     level: str
     parent: Optional["HierNode"] = None
-    children: List["HierNode"] = field(default_factory=list)
     payload: Dict[str, Any] = field(default_factory=dict)
+    children: List["HierNode"] = field(default_factory=list)
 
     def ancestor(self, level: str) -> Optional["HierNode"]:
         """
@@ -94,7 +94,7 @@ N = TypeVar("N", bound=HierNode)
 def __build_tree_generic(
     root: Path,
     level_specs: List[LevelSpec],
-    node_factory: Callable[[str, Path, str, Optional[N], Dict[str, Any]], N],
+    node_class: HierNode,
 ) -> List[N]:
     """
     root 配下を level_specs にしたがって再帰的に走査し、
@@ -121,7 +121,7 @@ def __build_tree_generic(
             # payload を作成（exp_param など）
             payload = spec.load_payload(d2)
 
-            node = node_factory(d2.name, d2, spec.level, parent, payload)
+            node = node_class(d2.name, d2, spec.level, parent, payload)
             node.children = _build_level(node, d2, depth + 1)
             nodes.append(node)
 
@@ -300,7 +300,22 @@ def __make_mouse_spec() -> LevelSpec:
         load_payload=_empty_payload,
     )
 
-def __make_day_spec() -> LevelSpec:
+def __make_day_slice_spec() -> LevelSpec:
+    def _identity_preprocess(d: Path) -> Path:
+        return d
+
+    def _empty_payload(d: Path) -> Dict[str, Any]:
+        return {}
+
+    return LevelSpec(
+        level="day",
+        pattern="*",
+        filter_dir=__filter_dir_basic,
+        preprocess_dir=_identity_preprocess,
+        load_payload=_empty_payload,
+    )
+
+def __make_day_behavior_spec() -> LevelSpec:
     """
     day* ディレクトリを対象とし、
     - "_" が含まれないものはリネームして補正
@@ -338,28 +353,14 @@ def __make_day_spec() -> LevelSpec:
         load_payload=_load_day_payload,
     )
 
-def __behavior_node_factory(
-    name: str,
-    path: Path,
-    level: str,
-    parent: Optional[BehaviorNode],
-    payload: Dict[str, Any],
-) -> BehaviorNode:
-    return BehaviorNode(
-        name=name,
-        path=path,
-        level=level,
-        parent=parent,
-        payload=payload,
-    )
 
 def build_behavior_tree(prj_root:Path, analysis_param:Any)->List[BehaviorNode]:
-    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     nodes: List[BehaviorNode] = __build_tree_generic(
         root=prj_root,
         analysis_param=analysis_param,
         level_specs=level_specs,
-        node_factory=__behavior_node_factory,
+        node_class=BehaviorNode,
     )
 
     return nodes
@@ -384,6 +385,21 @@ class SlicePrjNode(HierNode):
         return self._get_ancestor_node("cell")
 
 
+class SliceRawNode(HierNode):
+    """
+    cond/cell 階層を扱うときに使うノード。
+    """
+    @property
+    def cond(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("cond")
+
+    @property
+    def day(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("day")
+    
+    @property
+    def cell(self) -> Optional["HierNode"]:
+        return self._get_ancestor_node("cell")
 
 
 
@@ -403,35 +419,27 @@ def __make_cell_spec() -> LevelSpec:
         load_payload=_empty_payload,
     )
 
-def __slice_node_factory(
-    name: str,
-    path: Path,
-    level: str,
-    parent: Optional[SlicePrjNode],
-    payload: Dict[str, Any],
-) -> SlicePrjNode:
-    return SlicePrjNode(
-        name=name,
-        path=path,
-        level=level,
-        parent=parent,
-        payload=payload,
-    )
 
 
-    
-
-
-def build_slice_tree(prj_root:Path)->List[SlicePrjNode]:
+def build_slice_prj_tree(prj_root:Path)->List[SlicePrjNode]:
     level_specs = [__make_cond_spec(), __make_cell_spec()]
     nodes: List[SlicePrjNode] = __build_tree_generic(
         root=prj_root,
         level_specs=level_specs,
-        node_factory=__slice_node_factory,
+        node_class=SlicePrjNode,
     )
 
     return nodes
 
+def build_slice_raw_tree(prj_root:Path)->List[SliceRawNode]:
+    level_specs = [__make_cond_spec(),__make_day_slice_spec(), __make_cell_spec()]
+    nodes: List[SliceRawNode] = __build_tree_generic(
+        root=prj_root,
+        level_specs=level_specs,
+        node_class=SliceRawNode,
+    )
+
+    return nodes
 # ============================================================
 # 7. 使用例（コメントアウト）
 # ============================================================

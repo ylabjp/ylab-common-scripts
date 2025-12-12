@@ -80,7 +80,7 @@ def test_ancestor_and_level_property(dummy_fs: Path):
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=__behavior_node_factory,
+        node_class=__behavior_node_factory,
     )
     # Locate one deep leaf: condA / mouse1 / day001_
     condA = next(r for r in roots if r.name == "condA")
@@ -105,7 +105,7 @@ def test_build_tree_generic_structure(dummy_fs: Path):
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=__behavior_node_factory,
+        node_class=__behavior_node_factory,
     )
     assert len(roots) == 2  # condA, condB
     condA = next(r for r in roots if r.name == "condA")
@@ -130,7 +130,7 @@ def test_generic_crawler_trace(dummy_fs: Path):
         root=dummy_fs,
         analysis_param=None,
         level_specs=level_specs,
-        node_factory=__behavior_node_factory,
+        node_class=__behavior_node_factory,
     )
 
     kernel = TraceKernel()
