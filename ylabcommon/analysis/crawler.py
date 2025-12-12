@@ -371,7 +371,7 @@ def build_behavior_tree(prj_root:Path, analysis_param:Any)->List[BehaviorNode]:
 #    実装は property factory で DRY に記述
 # ============================================================
 
-class SliceNode(HierNode):
+class SlicePrjNode(HierNode):
     """
     cond/cell 階層を扱うときに使うノード。
     """
@@ -407,10 +407,10 @@ def __slice_node_factory(
     name: str,
     path: Path,
     level: str,
-    parent: Optional[SliceNode],
+    parent: Optional[SlicePrjNode],
     payload: Dict[str, Any],
-) -> SliceNode:
-    return SliceNode(
+) -> SlicePrjNode:
+    return SlicePrjNode(
         name=name,
         path=path,
         level=level,
@@ -422,9 +422,9 @@ def __slice_node_factory(
     
 
 
-def build_slice_tree(prj_root:Path)->List[SliceNode]:
+def build_slice_tree(prj_root:Path)->List[SlicePrjNode]:
     level_specs = [__make_cond_spec(), __make_cell_spec()]
-    nodes: List[SliceNode] = __build_tree_generic(
+    nodes: List[SlicePrjNode] = __build_tree_generic(
         root=prj_root,
         level_specs=level_specs,
         node_factory=__slice_node_factory,
