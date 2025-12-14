@@ -236,6 +236,9 @@ class GenericCrawler:
 
 
 def __filter_dir_basic(d: Path) -> bool:
+    '''
+    directoryをfilterする基本ルール
+    '''
     name = d.name
     if not d.is_dir():
         return False
