@@ -236,9 +236,6 @@ class GenericCrawler:
 
 
 def __filter_dir_basic(d: Path) -> bool:
-    '''
-    directoryをfilterする基本ルール
-    '''
     name = d.name
     if not d.is_dir():
         return False
@@ -407,7 +404,16 @@ class SliceRawNode(HierNode):
 
 
 def __make_cell_spec() -> LevelSpec:
-    def _identity_preprocess(d: Path) -> Path:
+    def _preprocess_cell(d: Path) -> Path:
+        
+        sname_sub = d.name.split("_")
+        if len(sname_sub) < 3:
+            raise ValueError("Invalid directory name: %s" % sess_name +
+                                "\n Should be in the form of [XYT/XYZ/XYZ-T]_Cell[01]_[1]_[(optional)experiment condition]\ne.g. XYT_Cell01_01_ACSF")
+        image_type=sname_sub[0]
+        if image_type not in ["XYT", "XYZT", "XYZ-T"]:
+            raise ValueError("Image type error: "+image_type)
+
         return d
 
     def _empty_payload(d: Path) -> Dict[str, Any]:
@@ -418,7 +424,7 @@ def __make_cell_spec() -> LevelSpec:
         level="cell",
         pattern="*XY*",
         filter_dir=__filter_dir_basic,
-        preprocess_dir=_identity_preprocess,
+        preprocess_dir=_preprocess_cell,
         load_payload=_empty_payload,
     )
 
