@@ -401,9 +401,7 @@ class SliceRawNode(HierNode):
     def cell(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("cell")
 
-
-
-def __make_cell_spec() -> LevelSpec:
+def __make_raw_cell_spec() -> LevelSpec:
     def _preprocess_cell(d: Path) -> Path:
         
         sname_sub = d.name.split("_")
@@ -413,6 +411,25 @@ def __make_cell_spec() -> LevelSpec:
         image_type=sname_sub[0]
         if image_type not in ["XYT", "XYZT", "XYZ-T"]:
             raise ValueError("Image type error: "+image_type)
+
+        return d
+
+    def _empty_payload(d: Path) -> Dict[str, Any]:
+        return {}
+
+
+    return LevelSpec(
+        level="cell",
+        pattern="*XY*",
+        filter_dir=__filter_dir_basic,
+        preprocess_dir=_preprocess_cell,
+        load_payload=_empty_payload,
+    )
+
+
+def __make_cell_spec() -> LevelSpec:
+    def _preprocess_cell(d: Path) -> Path:
+        
 
         return d
 
@@ -441,7 +458,7 @@ def build_slice_prj_tree(prj_root:Path)->List[SlicePrjNode]:
     return nodes
 
 def build_slice_raw_tree(prj_root:Path)->List[SliceRawNode]:
-    level_specs = [__make_cond_spec(),__make_day_slice_spec(), __make_cell_spec()]
+    level_specs = [__make_cond_spec(),__make_day_slice_spec(), __make_raw_cell_spec()]
     nodes: List[SliceRawNode] = __build_tree_generic(
         root=prj_root,
         level_specs=level_specs,
