@@ -370,11 +370,10 @@ def __make_day_behavior_spec() -> LevelSpec:
     )
 
 
-def build_behavior_tree(prj_root: Path, analysis_param: Any) -> List[BehaviorNode]:
+def build_behavior_tree(prj_root: Path) -> List[BehaviorNode]:
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     nodes: List[BehaviorNode] = __build_tree_generic(
         root=prj_root,
-        analysis_param=analysis_param,
         level_specs=level_specs,
         node_class=BehaviorNode,
     )
