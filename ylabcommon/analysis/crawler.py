@@ -11,7 +11,7 @@ from typing import (
     Sequence,
     TypeVar,
 )
-from ylabcommon.models.parameters.general import  ArgModel
+from ylabcommon.models.parameters.general import ArgModel
 from abc import ABC
 
 
@@ -39,6 +39,7 @@ class HierNode:
     - payload: exp_param など解析に必要なメタ情報を格納する自由な dict
     - children: 子ノードのリスト
     """
+
     name: str
     path: Path
     level: str
@@ -58,14 +59,15 @@ class HierNode:
         return None
 
     def _get_ancestor_node(self, level: str) -> Optional["HierNode"]:
-            """共通ロジック: 指定したレベルの祖先を取得し、HierNode型かチェックして返す"""
-            n = self.ancestor(level)
-            return n if isinstance(n, HierNode) else None
+        """共通ロジック: 指定したレベルの祖先を取得し、HierNode型かチェックして返す"""
+        n = self.ancestor(level)
+        return n if isinstance(n, HierNode) else None
 
 
 # ============================================================
 # LevelSpec: 各階層のルール（glob/filter/preprocess/load_payload）
 # ============================================================
+
 
 @dataclass
 class LevelSpec:
@@ -78,6 +80,7 @@ class LevelSpec:
     - preprocess_dir: 採用前に rename などを行う関数
     - load_payload  : payload(dict) を生成する関数
     """
+
     level: str
     pattern: str
     filter_dir: Callable[[Path], bool]
@@ -90,6 +93,7 @@ class LevelSpec:
 # ============================================================
 
 N = TypeVar("N", bound=HierNode)
+
 
 def __build_tree_generic(
     root: Path,
@@ -134,6 +138,7 @@ def __build_tree_generic(
 # Node ベース Kernel / Crawler（レベル非依存）
 # ============================================================
 
+
 # TODO これを共通化＋解析種類ごとに継承して調整する
 @dataclass
 class CrawlContext:
@@ -141,11 +146,13 @@ class CrawlContext:
     解析全体で共通のコンテキスト。
     - analysis_param: CC_Analysis_Param など
     - project_dir   : プロジェクトルート
-    - arg     : 
+    - arg     :
     """
+
     analysis_param: Any
     project_dir: Path
-    arg: ArgModel 
+    arg: ArgModel
+
 
 class GenericKernel(ABC):
     """
@@ -188,6 +195,7 @@ class GenericKernel(ABC):
         """
         pass
 
+
 class GenericCrawler:
     """
     HierNode / BehaviorNode ツリーを走査し、GenericKernel を呼び出す汎用 Crawler。
@@ -201,7 +209,6 @@ class GenericCrawler:
         self.kernels = list(kernels)
         self.ctx = ctx
 
-
     def crawl_from_nodes(self, roots: Sequence[HierNode]) -> None:
         """
         すでに build_tree_generic 済みの roots（最上位ノード群）から解析を開始する。
@@ -212,13 +219,13 @@ class GenericCrawler:
 
         # 各 root を再帰的にたどる
         for root in roots:
-            self._walk_node( root)
+            self._walk_node(root)
 
         # プロジェクト終了
         for k in self.kernels:
             k.on_project_end(self.ctx, roots)
 
-    def _walk_node(self,node: HierNode) -> None:
+    def _walk_node(self, node: HierNode) -> None:
         # 各 Kernel に対して node フック & file フック
         for k in self.kernels:
             k.on_node(self.ctx, node)
@@ -232,7 +239,7 @@ class GenericCrawler:
 
         # 子ノードを再帰
         for child in node.children:
-            self._walk_node( child)
+            self._walk_node(child)
 
 
 def __filter_dir_basic(d: Path) -> bool:
@@ -243,20 +250,22 @@ def __filter_dir_basic(d: Path) -> bool:
         return False
     return True
 
+
 # ============================================================
 # BehaviorNode
 #    cond/mouse/day などへのショートカットを持つが、
 #    実装は property factory で DRY に記述
 # ============================================================
 
+
 class BehaviorNode(HierNode):
     """
     マウス行動実験など、cond/mouse/day 階層を扱うときに使うノード。
     """
 
-# # cond / mouse / day プロパティを DRY に定義
-# for _lvl in ("cond", "mouse", "day"):
-#     setattr(BehaviorNode, _lvl, _make_level_property(_lvl))
+    # # cond / mouse / day プロパティを DRY に定義
+    # for _lvl in ("cond", "mouse", "day"):
+    #     setattr(BehaviorNode, _lvl, _make_level_property(_lvl))
     @property
     def cond(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("cond")
@@ -268,7 +277,7 @@ class BehaviorNode(HierNode):
     @property
     def day(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("day")
-    
+
 
 def __make_cond_spec() -> LevelSpec:
 
@@ -277,6 +286,7 @@ def __make_cond_spec() -> LevelSpec:
 
     def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
+
     return LevelSpec(
         level="cond",
         pattern="cond*",
@@ -284,6 +294,7 @@ def __make_cond_spec() -> LevelSpec:
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
+
 
 def __make_mouse_spec() -> LevelSpec:
     def _identity_preprocess(d: Path) -> Path:
@@ -300,6 +311,7 @@ def __make_mouse_spec() -> LevelSpec:
         load_payload=_empty_payload,
     )
 
+
 def __make_day_slice_spec() -> LevelSpec:
     def _identity_preprocess(d: Path) -> Path:
         return d
@@ -314,6 +326,7 @@ def __make_day_slice_spec() -> LevelSpec:
         preprocess_dir=_identity_preprocess,
         load_payload=_empty_payload,
     )
+
 
 def __make_day_behavior_spec() -> LevelSpec:
     """
@@ -354,7 +367,7 @@ def __make_day_behavior_spec() -> LevelSpec:
     )
 
 
-def build_behavior_tree(prj_root:Path, analysis_param:Any)->List[BehaviorNode]:
+def build_behavior_tree(prj_root: Path, analysis_param: Any) -> List[BehaviorNode]:
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     nodes: List[BehaviorNode] = __build_tree_generic(
         root=prj_root,
@@ -372,10 +385,12 @@ def build_behavior_tree(prj_root:Path, analysis_param:Any)->List[BehaviorNode]:
 #    実装は property factory で DRY に記述
 # ============================================================
 
+
 class SlicePrjNode(HierNode):
     """
     cond/cell 階層を扱うときに使うノード。
     """
+
     @property
     def cond(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("cond")
@@ -389,6 +404,7 @@ class SliceRawNode(HierNode):
     """
     cond/cell 階層を扱うときに使うノード。
     """
+
     @property
     def cond(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("cond")
@@ -396,27 +412,29 @@ class SliceRawNode(HierNode):
     @property
     def day(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("day")
-    
+
     @property
     def cell(self) -> Optional["HierNode"]:
         return self._get_ancestor_node("cell")
 
+
 def __make_raw_cell_spec() -> LevelSpec:
     def _preprocess_cell(d: Path) -> Path:
-        
+
         sname_sub = d.name.split("_")
         if len(sname_sub) < 3:
-            raise ValueError("Invalid directory name: %s" % sess_name +
-                                "\n Should be in the form of [XYT/XYZ/XYZ-T]_Cell[01]_[1]_[(optional)experiment condition]\ne.g. XYT_Cell01_01_ACSF")
-        image_type=sname_sub[0]
+            raise ValueError(
+                "Invalid directory name: %s" % sess_name
+                + "\n Should be in the form of [XYT/XYZ/XYZ-T]_Cell[01]_[1]_[(optional)experiment condition]\ne.g. XYT_Cell01_01_ACSF"
+            )
+        image_type = sname_sub[0]
         if image_type not in ["XYT", "XYZT", "XYZ-T"]:
-            raise ValueError("Image type error: "+image_type)
+            raise ValueError("Image type error: " + image_type)
 
         return d
 
     def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
-
 
     return LevelSpec(
         level="cell",
@@ -429,13 +447,11 @@ def __make_raw_cell_spec() -> LevelSpec:
 
 def __make_cell_spec() -> LevelSpec:
     def _preprocess_cell(d: Path) -> Path:
-        
 
         return d
 
     def _empty_payload(d: Path) -> Dict[str, Any]:
         return {}
-
 
     return LevelSpec(
         level="cell",
@@ -446,8 +462,7 @@ def __make_cell_spec() -> LevelSpec:
     )
 
 
-
-def build_slice_prj_tree(prj_root:Path)->List[SlicePrjNode]:
+def build_slice_prj_tree(prj_root: Path) -> List[SlicePrjNode]:
     level_specs = [__make_cond_spec(), __make_cell_spec()]
     nodes: List[SlicePrjNode] = __build_tree_generic(
         root=prj_root,
@@ -457,8 +472,9 @@ def build_slice_prj_tree(prj_root:Path)->List[SlicePrjNode]:
 
     return nodes
 
-def build_slice_raw_tree(prj_root:Path)->List[SliceRawNode]:
-    level_specs = [__make_cond_spec(),__make_day_slice_spec(), __make_raw_cell_spec()]
+
+def build_slice_raw_tree(prj_root: Path) -> List[SliceRawNode]:
+    level_specs = [__make_cond_spec(), __make_day_slice_spec(), __make_raw_cell_spec()]
     nodes: List[SliceRawNode] = __build_tree_generic(
         root=prj_root,
         level_specs=level_specs,
@@ -466,6 +482,8 @@ def build_slice_raw_tree(prj_root:Path)->List[SliceRawNode]:
     )
 
     return nodes
+
+
 # ============================================================
 # 7. 使用例（コメントアウト）
 # ============================================================
@@ -527,4 +545,3 @@ def build_slice_raw_tree(prj_root:Path)->List[SliceRawNode]:
 # crawler.crawl_from_nodes(cond_nodes)
 #
 # ============================================================
-
