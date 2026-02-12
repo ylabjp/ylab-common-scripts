@@ -312,12 +312,13 @@ def __make_mouse_spec() -> LevelSpec:
     )
 
 
+def _empty_payload(d: Path) -> Dict[str, Any]:
+    return {}
+
+
 def __make_day_slice_spec() -> LevelSpec:
     def _identity_preprocess(d: Path) -> Path:
         return d
-
-    def _empty_payload(d: Path) -> Dict[str, Any]:
-        return {}
 
     return LevelSpec(
         level="day",
@@ -336,34 +337,36 @@ def __make_day_behavior_spec() -> LevelSpec:
     """
 
     def _preprocess_day(d: Path) -> Path:
-        if len(d.name.split("_")) < 2:
-            old = d
-            new = d.with_name(d.name + "_")
-            # CC_Analysis_Param を想定して log_warn などを呼べるなら呼ぶ
-            if hasattr(param, "log_warn"):
-                param.log_warn(f"Inappropriate day name: {old}")
-            old.rename(new)
-            if hasattr(param, "log_warn"):
-                param.log_warn(f"Renamed: {new}")
-            return new
+        # TODO これは必要か
+        # if len(d.name.split("_")) < 2:
+        #     old = d
+        #     new = d.with_name(d.name + "_")
+        #     # CC_Analysis_Param を想定して log_warn などを呼べるなら呼ぶ
+        #     if hasattr(param, "log_warn"):
+        #         param.log_warn(f"Inappropriate day name: {old}")
+        #     old.rename(new)
+        #     if hasattr(param, "log_warn"):
+        #         param.log_warn(f"Renamed: {new}")
+        #     return new
         return d
 
-    def _load_day_payload(d: Path) -> Dict[str, Any]:
-        exp_param = None
-        if hasattr(param, "get_exp_param"):
-            try:
-                exp_param = param.get_exp_param(str(d))
-            except Exception as e:
-                if hasattr(param, "log_exception"):
-                    param.log_exception(e)
-        return {"exp_param": exp_param}
+    # def _load_day_payload(d: Path) -> Dict[str, Any]:
+
+    #     exp_param = None
+    #     if hasattr(param, "get_exp_param"):
+    #         try:
+    #             exp_param = param.get_exp_param(str(d))
+    #         except Exception as e:
+    #             if hasattr(param, "log_exception"):
+    #                 param.log_exception(e)
+    #     return {"exp_param": exp_param}
 
     return LevelSpec(
         level="day",
         pattern="day*",
         filter_dir=__filter_dir_basic,
         preprocess_dir=_preprocess_day,
-        load_payload=_load_day_payload,
+        load_payload=_empty_payload,
     )
 
 
