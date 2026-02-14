@@ -189,6 +189,16 @@ class GenericKernel(ABC):
         """
         return ""
 
+    def check_overwrite(self,target_filename:str, node: HierNode,ctx: CrawlContext) -> bool:
+        """
+        on fileの前にチェックする
+        """
+        target_path = node.path / target_filename
+        if target_path.exists() and not ctx.arg.overwrite:
+            print(f"Already exists. Skip {target_path}")
+            return False
+        return True
+
     def on_file(self, ctx: CrawlContext, node: HierNode, file_path: Path) -> None:
         """
         retrieve_file_with_pattern() でマッチしたファイルごとに呼ばれるフック。
@@ -235,6 +245,8 @@ class GenericCrawler:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
                     # Kernel 側でやる or ここに書く
+                    if not k.check_overwrite(f.name, node, self.ctx):
+                        continue
                     k.on_file(self.ctx, node, f)
 
         # 子ノードを再帰
