@@ -249,7 +249,7 @@ class GenericCrawler:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
                     # Kernel 側でやる or ここに書く
-                    if not k.check_overwrite(f.name, node, self.ctx):
+                    if not k.check_overwrite( node, self.ctx):
                         continue
                     k.on_file(self.ctx, node, f)
 
