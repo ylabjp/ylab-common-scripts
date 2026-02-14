@@ -161,7 +161,8 @@ class GenericKernel(ABC):
     ※ここでは level 固有の on_cond / on_mouse / on_day などは定義しない。
       必要であれば on_node 内部で node.level を見て分岐する。
     """
-
+    def __init__(self, target_filename:str=None) -> None:
+        self.target_filename = target_filename
     # プロジェクト全体
     def on_project_start(self, ctx: CrawlContext, roots: Sequence[HierNode]) -> None:
         pass
@@ -189,11 +190,13 @@ class GenericKernel(ABC):
         """
         return ""
 
-    def check_overwrite(self,target_filename:str, node: HierNode,ctx: CrawlContext) -> bool:
+    def check_overwrite(self, node: HierNode,ctx: CrawlContext) -> bool:
         """
         on fileの前にチェックする
         """
-        target_path = node.path / target_filename
+        if self.target_filename is None:
+            return True
+        target_path = node.path / self.target_filename
         if target_path.exists() and not ctx.arg.overwrite:
             print(f"Already exists. Skip {target_path}")
             return False
@@ -215,7 +218,7 @@ class GenericCrawler:
         self,
         kernels: Sequence[GenericKernel],
         ctx: CrawlContext,
-        target_filename:str=None
+        
     ) -> None:
         self.kernels = list(kernels)
         self.ctx = ctx
@@ -246,9 +249,8 @@ class GenericCrawler:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
                     # Kernel 側でやる or ここに書く
-                    if self.target_filename is not None:
-                        if not k.check_overwrite(self.target_filename, node, self.ctx):
-                            continue
+                    if not k.check_overwrite(f.name, node, self.ctx):
+                        continue
                     k.on_file(self.ctx, node, f)
 
         # 子ノードを再帰
