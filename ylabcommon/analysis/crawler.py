@@ -215,6 +215,7 @@ class GenericCrawler:
         self,
         kernels: Sequence[GenericKernel],
         ctx: CrawlContext,
+        target_filename:str=None
     ) -> None:
         self.kernels = list(kernels)
         self.ctx = ctx
@@ -245,8 +246,9 @@ class GenericCrawler:
                 for f in sorted(node.path.glob(pattern)):
                     # プロジェクト固有のフィルタ（例: 'attach' 除外）があれば
                     # Kernel 側でやる or ここに書く
-                    if not k.check_overwrite(f.name, node, self.ctx):
-                        continue
+                    if self.target_filename is not None:
+                        if not k.check_overwrite(self.target_filename, node, self.ctx):
+                            continue
                     k.on_file(self.ctx, node, f)
 
         # 子ノードを再帰
