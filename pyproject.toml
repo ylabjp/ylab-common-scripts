@@ -1,6 +1,6 @@
 [project]
 name = "ylabcommon"
-version = "0.2.0"
+version = "0.2.1"
 description = "Integrated pipeline system for MRI data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
 readme = "README.md"
 requires-python = "===3.12.9"
