@@ -1,6 +1,6 @@
 [project]
 name = "ylabcommon"
-version = "0.2.0"
+version = "0.2.1"
 description = "Integrated pipeline system for MRI data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
 readme = "README.md"
 requires-python = "===3.12.9"
@@ -12,6 +12,11 @@ dependencies = [
     "pyyaml>=6.0.3",
     "scipy>=1.16.3",
     "seaborn>=0.13.2",
+    "gdown>=5.0.0",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+    "google-api-python-client",
 ]
 license = {text = "MIT"}
 
