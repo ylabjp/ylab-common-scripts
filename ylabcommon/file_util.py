@@ -15,6 +15,7 @@ from pathlib import Path
 from packaging import version
 import questionary
 import yaml
+from dotenv import load_dotenv
 
 def find_parents_for_dir(start_dir:Path,target:str)->Path:
     '''
@@ -40,11 +41,23 @@ def find_parents_for_dir(start_dir:Path,target:str)->Path:
         cur_dir = parent
     return None
 
+def load_lab_config(base_path:Path):
+    """
+    OSを判定し、適切な .env ファイルを自動でロードする。
+    base_path: .env ファイルが置かれているディレクトリ（デフォルトはカレントディレクトリ）
+    """
+    os_type = platform.system().lower()  # "windows" or "linux"
+    env_path=find_parents_for_dir(base_path,".env."+os_type)
+    if env_path is None:
+        raise ValueError("Cannot find .env."+os_type)
+    load_dotenv(dotenv_path=env_path)
+    # print(f"Loaded config for {os_type} from {env_path}")
+
 def init_base_drive(prefix: dict):
     '''
     prefix: {"Windows":"XXX","Linux":"XXX"}
     '''
-
+    
     pf = platform.system()
     # pfn = platform.node()
     if pf not in prefix.keys():
