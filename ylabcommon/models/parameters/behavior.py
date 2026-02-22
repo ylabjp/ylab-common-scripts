@@ -292,6 +292,15 @@ class FileNames:
         ANALYZED_INDIVIDUAL_H5 = "df_individual_analyzed.h5"
         ANALYZED_MERGED_H5 = "df_individual_analyzed_merged.h5"
         OUTPUT_FILE_DLC_RAW_H5 = "dlc_raw.h5"
+
+    class PersistencePrefix:
+        PREPROCCESSED_VIDEO = "dfpv_"  #
+        PREPROCCESSED_DIFFERENCE_DETECTION = "dfdd_"
+        PREPROCCESSED_CC = "dfpc_"
+        ANALYZED_INDIVIDUAL_H5 = "dfi_"
+        ANALYZED_MERGED_H5 = "dfm_"
+        OUTPUT_FILE_DLC_RAW_H5 = "dlcraw_"
+        
     class CONFIG:
         VIDEO_INFO_JSON = "video_info.json"
         PARAM_INDIVIDUAL_JSON = "param_individual.json"
