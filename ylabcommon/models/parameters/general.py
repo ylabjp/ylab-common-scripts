@@ -1,5 +1,15 @@
 import argparse
 from pydantic import BaseModel, Field
+from datetime import datetime
+
+class TRANSFER_STATUS:
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+class TransferLog(BaseModel):
+    transfer:str = Field(default=TRANSFER_STATUS.COMPLETE)    
+    transfer_timestamp:datetime = Field(default=datetime.now())
+    
 
 class ArgModel(BaseModel):
     overwrite: bool = Field(False)
@@ -16,4 +26,3 @@ def standard_arg_parser() -> ArgModel:
     args = parser.parse_args()
     # print(vars(args))
     return ArgModel(**vars(args))
-
