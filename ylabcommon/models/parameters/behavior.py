@@ -300,7 +300,7 @@ class FileNames:
         ANALYZED_INDIVIDUAL_H5 = "dfi_"
         ANALYZED_MERGED_H5 = "dfm_"
         OUTPUT_FILE_DLC_RAW_H5 = "dlcraw_"
-        
+
     class CONFIG:
         VIDEO_INFO_JSON = "video_info.json"
         PARAM_INDIVIDUAL_JSON = "param_individual.json"
@@ -309,7 +309,7 @@ class FileNames:
         PREPROCESS_VIDEO_REPORT_PDF = "df_preprocess_video_monitor.pdf"
         DLC_RAW_PDF = "dlc_raw_plot.pdf"
 
-def get_persistence_name(base:str,key:str):->str:
+def get_persistence_name(base:str,key:str)->str:
     """
     base: prefix of the file name
     key: key of the file name
