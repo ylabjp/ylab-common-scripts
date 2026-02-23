@@ -309,6 +309,14 @@ class FileNames:
         PREPROCESS_VIDEO_REPORT_PDF = "df_preprocess_video_monitor.pdf"
         DLC_RAW_PDF = "dlc_raw_plot.pdf"
 
+def get_persistence_name(base:str,key:str):->str:
+    """
+    base: prefix of the file name
+    key: key of the file name
+    return: file name
+    """
+    return base+"_"+key+".parquet"
+
 
 class DataKeys:
     DATA_KEY_TIMESERIES = "dataframe"
@@ -316,6 +324,7 @@ class DataKeys:
     DATA_KEY_EVENT_LIST = "event_list"
     DATA_KEY_TASK_SCHEDULED = "task_scheduled"
     DATA_KEY_BLOCK_TIME = "event_termination"
+
     PREPROCESS_CC_INDEX_COLUMNS = [
         "target",
         "signal_type",
@@ -324,9 +333,14 @@ class DataKeys:
         "time",
         "rel_time",
     ]
+
     ANALYSIS_INDIVIDUAL_INDEX_COLUMS = [
         "cond",
         "mouse",
         "day",
         "within_factor",
     ] + PREPROCESS_CC_INDEX_COLUMNS
+
+    class Index:
+        PREPROCESS_CC = PREPROCESS_CC_INDEX_COLUMNS
+        ANALYSIS_INDIVIDUAL = ANALYSIS_INDIVIDUAL_INDEX_COLUMS
