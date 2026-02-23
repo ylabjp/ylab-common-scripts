@@ -320,6 +320,7 @@ def get_persistence_name(base:str,key:str):->str:
 
 class DataKeys:
     # do not use "_" in the key name. use "-" instead.
+    # TODO delete "DATA_KEY"
     DATA_KEY_TIMESERIES = "dataframe"
     DATA_KEY_AGGREGATION = "aggregation"
     DATA_KEY_AGGREGATION_CC = "aggregation-cc"
@@ -327,7 +328,7 @@ class DataKeys:
     DATA_KEY_EVENT_LIST = "event-list"
     DATA_KEY_TASK_SCHEDULED = "task-scheduled"
     DATA_KEY_BLOCK_TIME = "event-termination"
-
+    FRAME2FILE ="frame2file"
     PREPROCESS_CC_INDEX_COLUMNS = [
         "target",
         "signal_type",
