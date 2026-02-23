@@ -315,7 +315,7 @@ def get_persistence_name(base:str,key:str)->str:
     key: key of the file name
     return: file name
     """
-    return base+"_"+key+".parquet"
+    return base+key+".parquet"
 
 
 class DataKeys:
