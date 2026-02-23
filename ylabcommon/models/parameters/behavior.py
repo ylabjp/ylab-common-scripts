@@ -136,7 +136,7 @@ class PreprocessingParam(BaseModel):
         if time_bin_in_s < 1:
             resample_str = "%dms" % int(time_bin_in_s * 1000)
         else:
-            resample_str = "%dS" % time_bin_in_s
+            resample_str = "%ds" % time_bin_in_s
         return resample_str
 
 
@@ -331,7 +331,7 @@ class DataKeys:
     DATA_KEY_TASK_SCHEDULED = "task-scheduled"
     DATA_KEY_BLOCK_TIME = "event-termination"
 
-    TIMESERIES = "dataframe"
+    TIMESERIES = "timeseries"
     AGGREGATION = "aggregation"
     AGGREGATION_CC = "aggregation-cc"
     AGGREGATION_VIDEO = "aggregation-video"
@@ -341,6 +341,7 @@ class DataKeys:
     EVENT_LIST_VIDEO = "event-list-video"
     TASK_SCHEDULED = "task-scheduled"
     BLOCK_TIME = "event-termination"
+    HISTOGRAM = "histogram"
     FRAME2FILE ="frame2file"
 
     # TODO delete 
