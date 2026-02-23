@@ -309,12 +309,14 @@ class FileNames:
         PREPROCESS_VIDEO_REPORT_PDF = "df_preprocess_video_monitor.pdf"
         DLC_RAW_PDF = "dlc_raw_plot.pdf"
 
-def get_persistence_name(base:str,key:str)->str:
+def get_persistence_name(base:str,key:str,temp:bool=False)->str:
     """
     base: prefix of the file name
     key: key of the file name
     return: file name
     """
+    if temp:
+        return base+key+"_temp.parquet"
     return base+key+".parquet"
 
 
