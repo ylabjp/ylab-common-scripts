@@ -165,7 +165,6 @@ class EventFileterItem(BaseModel):
     relation:str
 class EventConfig(BaseModel):
     target: str
-    type: str
     baseline_in_s: int = Field(gt=0)
     after_in_s: int = Field(gt=0)
     task_types: Optional[List[str]] = []
