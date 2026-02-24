@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Union, Any
 from typing import List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field,ConfigDict
 from pathlib import Path
 from ylabcommon.file_util import init_base_drive
 import json
@@ -149,6 +149,7 @@ class GroupAnalysisItemParam(BaseModel):
 
 
 class AggregationParamItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)    # typeの読み込みに必要。いずれtypeを書き換える
     '''
     common to video and cc
     '''
@@ -164,6 +165,7 @@ class EventFileterItem(BaseModel):
     target:str
     relation:str
 class EventConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)    # typeの読み込みに必要。いずれtypeを書き換える
     target: str
     baseline_in_s: int = Field(gt=0)
     after_in_s: int = Field(gt=0)
