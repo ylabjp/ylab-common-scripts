@@ -246,7 +246,8 @@ class BehaviorParam(BaseModel):
         if path.exists():
             with open(path) as f:
                 individual_param=json.load(f)
-        return self.model_copy(update=individual_param,deep=True)
+        return self.model_validate({**self.model_dump(), **individual_param})
+        # return self.model_copy(update=individual_param,deep=True)
 
     def save_individual_param(self,path:Path):
         '''
