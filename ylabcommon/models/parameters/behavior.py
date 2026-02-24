@@ -35,10 +35,10 @@ class VideoParam(BaseModel):
     #             ],
     '''
     arena_box: Optional[List[List[int]]] = Field(default=[[0,0],[100,100]])
-    arena_mm_per_pix: Optional[float] = None
-    arena_mm_per_pix_from_individual: Optional[bool] = False
+    arena_mm_per_pix: Optional[float] = 0.0
+    # arena_mm_per_pix_from_individual: Optional[bool] = False
     roi: Optional[Dict[str, List[List[int]]]] = {}
-    start_frame: Optional[int] = None
+    start_frame: Optional[int] = 0
 
 
 DLC_MODEL_VERSIONs = [2020, 2025, 2026]
