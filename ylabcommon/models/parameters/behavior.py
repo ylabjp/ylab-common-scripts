@@ -232,11 +232,16 @@ class BehaviorParam(BaseModel):
             )
         return dirbase
     def get_prj_dir(self)->Path:
+        return self.get_prj_drive() / self.prj_dir
+
+    def get_prj_drive(self)->Path:
         dirbase = self.__get_path("PRJ_ROOT")
-        return dirbase / self.prj_dir
+        return dirbase
+
     def get_raw_drive(self)->Path:
         dirbase = self.__get_path("RAW_ROOT")
         return dirbase
+
 
     def get_raw_dir(self)->List[Path]:
         res=[]
