@@ -76,8 +76,8 @@ def get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[st
     )
     if len(config_list)==0:
         raise ValueError("Critical error: config dir not found.")
-    config_base=config_list[0].parent
-
+    # config_base=config_list[0].parent
+    config_list.sort(key=lambda x: x.name)
     config_basename_dict={}
     for c in config_list:
         if c.name[0]=="_":
