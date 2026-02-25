@@ -108,11 +108,11 @@ def replace_yen_in_path_for_linux(fname: str):
     return fname.replace("\\", "/")
 
 class DLCParam(BaseModel):
-
+    config_path:str=""
     bodyparts_version: Optional[int] = 2020 # custom configを追加してそこでmodel情報から取得するようにする
     is_dynamic:Optional[bool] = True
     dlc_median_filter_kernel_in_pixel:Optional[int] = 11
-
+    
     def get_dlc_body_parts_all(self):
         return DLC_BODY_PARTS[self.bodyparts_version]
 
@@ -278,9 +278,10 @@ class VideoInfo(BaseModel):
     
     # 解析ステータス（"done" や "pending" など、特定の文字列のみ許可する場合）
     analysis_status: Optional[Literal["done", "pending", "error","analyzing"]] = None
-    
+
+
     # DLCの設定ファイルパス（実際にファイルが存在するかチェックしたい場合は FilePath 型も使えます）
-    # dlc_param: Optional[str] = None
+    dlc_param: Optional[str] = ""
 
     def get_video_full_path_list(self, basedir:Path) -> list:
         '''
