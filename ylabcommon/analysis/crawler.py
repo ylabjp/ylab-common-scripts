@@ -13,8 +13,8 @@ from typing import (
 )
 from ylabcommon.models.parameters.general import ArgModel
 from abc import ABC
-
-
+import pandas as pd
+from datetime import datetime
 # ============================================================
 # 汎用ツリーノード
 # ============================================================
@@ -222,6 +222,7 @@ class GenericCrawler:
     ) -> None:
         self.kernels = list(kernels)
         self.ctx = ctx
+        self.__log=[]
 
     def crawl_from_nodes(self, roots: Sequence[HierNode]) -> None:
         """
@@ -251,13 +252,33 @@ class GenericCrawler:
                     # Kernel 側でやる or ここに書く
                     if not k.check_overwrite( node, self.ctx):
                         continue
-                    k.on_file(self.ctx, node, f)
-
+                    try:
+                        k.on_file(self.ctx, node, f)
+                    except Exception as e:
+                        self.__log.append({
+                            "file":str(f),
+                            "result":"error",
+                            "detail":str(e)
+                            })
+                    else:
+                        self.__log.append({
+                            "file":str(f),
+                            "result":"success",
+                            "detail":"",
+                            "kernel":k.__class__.__name__
+                            })
         # 子ノードを再帰
         for child in node.children:
             self._walk_node(child)
-
-
+    def get_log(self):
+        return pd.DataFrame(self.__log)
+    def save_log(self):
+        log_dir=self.ctx.project_dir / "_logs"
+        log_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = log_dir / f"analysis_log_{timestamp}.csv"
+        self.get_log().to_csv(target,index=False)
+        
 def __filter_dir_basic(d: Path) -> bool:
     name = d.name
     if not d.is_dir():
