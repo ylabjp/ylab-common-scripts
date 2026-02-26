@@ -23,6 +23,12 @@ def standard_arg_parser() -> ArgModel:
         default=False,
         help='Overwrite existing analysis results'
     )
+    parser.add_argument(
+        "-s", "--subfolder", 
+        type=str,
+        help="config subfolder",
+        default=""
+    )
     args = parser.parse_args()
     # print(vars(args))
     return ArgModel(**vars(args))
