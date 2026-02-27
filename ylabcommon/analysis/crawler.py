@@ -255,6 +255,7 @@ class GenericCrawler:
                     try:
                         k.on_file(self.ctx, node, f)
                     except Exception as e:
+                        print(e)
                         self.__log.append({
                             "file":str(f),
                             "result":"error",
