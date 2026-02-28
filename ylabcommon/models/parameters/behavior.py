@@ -277,7 +277,7 @@ class VideoInfo(BaseModel):
     raw_video_list: List[str]
     
     # 解析ステータス（"done" や "pending" など、特定の文字列のみ許可する場合）
-    analysis_status: Optional[Literal["done", "pending", "error","analyzing"]] = None
+    analysis_status: Optional[Literal["done", "pending", "error","analyzing",""]] = ""
 
 
     # DLCの設定ファイルパス（実際にファイルが存在するかチェックしたい場合は FilePath 型も使えます）
