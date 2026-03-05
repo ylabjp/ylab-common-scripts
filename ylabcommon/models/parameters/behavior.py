@@ -386,3 +386,31 @@ class DataKeys:
         "day",
         "within_factor",
     ] + PREPROCESS_CC
+    class TaskSchedule:
+        BLOCK_TERMINATION_IN_MS = "block_termination_in_ms"
+        BLOCK_TERMINATION_ORIGIN = "block_termination_origin"
+        TRIAL_START = "trial_start"
+        DEFAULT_BLOCK_LENGTH_IN_MS = "default_block_length_in_ms"
+        ACTUAL_BLOCK_LENGTH_IN_MS = "actual_block_length_in_ms"
+        @classmethod
+        def get_index_columns(cls):
+            return [
+                cls.BLOCK_TERMINATION_IN_MS,
+                cls.BLOCK_TERMINATION_ORIGIN,
+                cls.TRIAL_START,
+                cls.DEFAULT_BLOCK_LENGTH_IN_MS,
+                cls.ACTUAL_BLOCK_LENGTH_IN_MS,
+            ]
+    class ExpMetaInfo:
+        CONDITION="cond"
+        MOUSE="mouse"
+        DAY="day"
+        WITHIN_FACTOR="within_factor"
+        @classmethod
+        def get_index_columns(cls):
+            return [
+                cls.CONDITION,
+                cls.MOUSE,
+                cls.DAY,
+                cls.WITHIN_FACTOR,
+            ]
