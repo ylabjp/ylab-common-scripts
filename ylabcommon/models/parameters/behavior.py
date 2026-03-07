@@ -5,7 +5,7 @@ from pathlib import Path
 from ylabcommon.file_util import init_base_drive
 import json
 import os
-
+import pandas as pd
 
 RoiItem = Union[list[int], dict[str, str]]
 
@@ -140,6 +140,13 @@ class PreprocessingParam(BaseModel):
         else:
             resample_str = "%ds" % time_bin_in_s
         return resample_str
+
+    def get_resample(self, is_before_dlc=False) -> pd.Timedelta:
+        if is_before_dlc:
+            time_bin_in_s = self.time_bin_in_s_before_dlc
+        else:
+            time_bin_in_s = self.time_bin_in_s
+        return pd.Timedelta(seconds=time_bin_in_s)
 
 
 class GroupAnalysisItemParam(BaseModel):
