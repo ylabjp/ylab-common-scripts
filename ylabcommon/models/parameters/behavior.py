@@ -368,7 +368,7 @@ class DataKeys:
         "task_type",
         "trial",
         "time",
-        "rel_time",
+        "rel_time_in_s",
     ]
 
     ANALYSIS_INDIVIDUAL_INDEX_COLUMS = [
@@ -385,7 +385,7 @@ class DataKeys:
         "task_type",
         "trial",
         "time",
-        "rel_time",
+        "rel_time_in_s",
     ]
         ANALYSIS_INDIVIDUAL = [
         "cond",
