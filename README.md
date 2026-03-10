@@ -1,5 +1,5 @@
-# Ddescribe the shared, common framework
-#ylab-common-scripts (ylabcommon)
+# Describe the shared, common framework
+  ylab-common-scripts (ylabcommon)
 
 ---
 
@@ -9,25 +9,25 @@ ylabcommon a shared utilities, hybrid classes for microscopy dataset reconstruct
 
 This framework provides share classes, codesi, and Microscope-specific loaders such as:
 
--- Thorlab microscopy pipeline
+- Thorlab microscopy pipeline
 
--- Keyence microscopy pipeline
+- Keyence microscopy pipeline
 
--- Reuse for others only in future
+- Reuse for others only in future
 
 ---
 
 ## The framework is built on top of BioIO and provides standardized tools for:**
 
--- image stacking
+- image stacking
 
--- metadata extraction
+- metadata extraction
 
--- dataset validation
+- dataset validation
 
--- OME output writing
+- OME output writing
 
--- dataset reporting
+- dataset reporting
 
 Repository Structure
 
@@ -35,17 +35,17 @@ Repository Structure
 
 ## Features:**
 
--- BioIO-based microscopy IO
+- BioIO-based microscopy IO
 
--- automatic stack reconstruction
+- automatic stack reconstruction
 
--- metadata standardization
+- metadata standardization
 
--- dataset validation
+- dataset validation
 
-== OME-TIFF writing
+- OME-TIFF writing
 
--- dataset summary reports
+- dataset summary reports
 
 ---
 
@@ -76,13 +76,13 @@ uv pip install -e .
 
 ---
 
-##  Dependency
+## Dependency Note
 
 This package is intended to be used as a dependency of microscope-specific pipelines.
 
 Example dependency:
 
-ylabcommon = { git = "https://github.com/ylabjp/ylab-common-scripts" } **NOTE** : Once 1st PR will merge, continue to  use this one
+ylabcommon = { git = "https://github.com/ylabjp/ylab-common-scripts" }
 
 During development/work locally use local path:
 
@@ -100,14 +100,13 @@ source env_common_fix.sh
 
 ---
 
-
 ## Future Work
 
--- extended validation tools
+- extended validation tools
 
--- improved metadata handling
+- improved metadata handling
 
--- additional report utilities
+- additional report utilities
 
 ---
 
