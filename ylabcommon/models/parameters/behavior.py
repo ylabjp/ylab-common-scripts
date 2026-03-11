@@ -261,7 +261,12 @@ class BehaviorParam(BaseModel):
         if path.exists():
             with open(path) as f:
                 individual_param=json.load(f)
-        return self.model_validate({**self.model_dump(), **individual_param})
+        # overwriteするscopeは決めておく
+        base=self.model_dump()
+        base["video_param"]["arena_box"]=individual_param["video_param"]["arena_box"]
+        base["video_param"]["roi"]=individual_param["video_param"]["roi"]
+        base["video_param"]["start_frame"]=individual_param["video_param"]["start_frame"]
+        return self.model_validate(base)
         # return self.model_copy(update=individual_param,deep=True)
 
     def save_individual_param(self,path:Path):
@@ -361,22 +366,6 @@ class DataKeys:
     HISTOGRAM = "histogram"
     FRAME2FILE ="frame2file"
 
-    # TODO delete 
-    PREPROCESS_CC_INDEX_COLUMNS = [
-        "target",
-        "signal_type",
-        "task_type",
-        "trial",
-        "time",
-        "rel_time_in_s",
-    ]
-
-    ANALYSIS_INDIVIDUAL_INDEX_COLUMS = [
-        "cond",
-        "mouse",
-        "day",
-        "within_factor",
-    ] + PREPROCESS_CC_INDEX_COLUMNS
 
     class Index:
         PREPROCESS_CC = [
@@ -387,12 +376,7 @@ class DataKeys:
         "time",
         "rel_time_in_s",
     ]
-        ANALYSIS_INDIVIDUAL = [
-        "cond",
-        "mouse",
-        "day",
-        "within_factor",
-    ] + PREPROCESS_CC
+
     class TaskSchedule:
         BLOCK_TERMINATION_IN_MS = "block_termination_in_ms"
         BLOCK_TERMINATION_ORIGIN = "block_termination_origin"
@@ -407,17 +391,4 @@ class DataKeys:
                 cls.TRIAL_START,
                 cls.DEFAULT_BLOCK_LENGTH_IN_MS,
                 cls.ACTUAL_BLOCK_LENGTH_IN_MS,
-            ]
-    class ExpMetaInfo:
-        CONDITION="cond"
-        MOUSE="mouse"
-        DAY="day"
-        WITHIN_FACTOR="within_factor"
-        @classmethod
-        def get_index_columns(cls):
-            return [
-                cls.CONDITION,
-                cls.MOUSE,
-                cls.DAY,
-                cls.WITHIN_FACTOR,
             ]
