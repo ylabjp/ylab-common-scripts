@@ -9,7 +9,7 @@ def sanitize(name: str):
     return name.replace("-", "_").replace(".", "p")
 
 
-def build_output_dir_name(microscope_name=None, output_dir=None, dataset_name=None, extra_txt=None):
+def build_output_dir_name(microscope_name=None, output_dir=None, dataset_name=None, change_output_dir_path=None, extra_txt=None):
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
  
@@ -23,9 +23,12 @@ def build_output_dir_name(microscope_name=None, output_dir=None, dataset_name=No
 
     # Top directory
     clean_parts = [sanitize(p) for p in dataset_dir.parts]
-
+    if change_output_dir_path: 
+        output_dir = Path(change_output_dir_path) / basedir_name
+        output_dir = output_dir.joinpath(*clean_parts)
+    else:
     # Output directory
-    output_dir = Path(basedir_name).joinpath(*clean_parts)
+        output_dir = Path(basedir_name).joinpath(*clean_parts)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
