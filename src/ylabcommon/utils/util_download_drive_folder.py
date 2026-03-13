@@ -15,6 +15,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 
@@ -47,7 +48,6 @@ def build_service_oauth(client_secret_path: Path, token_path: Path):
 # ---------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------
-
 def extract_folder_id(url: str) -> str:
     if "folders/" in url:
         return url.split("folders/")[1].split("?")[0]
@@ -75,7 +75,6 @@ def download_zip(service, file_id: str, out_path: Path):
 def extract_zip(zip_path: Path, extract_dir: Path):
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
-
 
 # ---------------------------------------------------------
 # MAIN ENTRY POINT
