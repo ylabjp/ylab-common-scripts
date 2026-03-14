@@ -12,6 +12,7 @@ import zipfile
 def extract_zip_and_find_tiffs(datase_ymal_file: str):
 
     dataset_dirs = []
+    top_dir = []
 
     with open(datase_ymal_file) as f:
         config = yaml.safe_load(f)
@@ -35,6 +36,8 @@ def extract_zip_and_find_tiffs(datase_ymal_file: str):
         # find directories containing TIFF files
         for tif in dataset_root.rglob("*.tif"):
             dataset_dirs.append(tif.parent)
+            top_path = (tif.parent).relative_to(extract_root)
+            top_dir.append(top_path)
 
     # remove duplicates
     dataset_dirs = sorted(set(dataset_dirs))
@@ -42,5 +45,8 @@ def extract_zip_and_find_tiffs(datase_ymal_file: str):
     # convert Path → string directories
     dataset_dirs = [str(p) for p in dataset_dirs]
 
-    return dataset_dirs
+    top_dir = sorted(set(top_dir))
+    top_dir = [str(p) for p in top_dir]
+
+    return dataset_dirs, top_dir
 

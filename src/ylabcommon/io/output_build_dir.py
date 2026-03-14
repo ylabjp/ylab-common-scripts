@@ -8,6 +8,10 @@ Handeling Outout directory name according to input tiff's directoy
 def sanitize(name: str):
     return name.replace("-", "_").replace(".", "p")
 
+def get_base_path(dataset_dir: str, input_root: str) -> Path:
+    dataset_dir = Path(dataset_dir)
+    input_root = Path(input_root)
+    return dataset_dir.relative_to(input_root)
 
 def build_output_dir_name(microscope_name=None, output_dir=None, dataset_name=None, change_output_dir_path=None, extra_txt=None):
 

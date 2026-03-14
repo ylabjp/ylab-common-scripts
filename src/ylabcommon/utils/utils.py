@@ -55,6 +55,13 @@ def style_print(text, style_key="header"):
     style = theme.get(style_key, theme["reset"])
     print(f"{style}{text}{theme['reset']}")
 
+def progress_bar(i, total, width=30):
+    progress = i / total
+    filled = int(width * progress)
+
+    bar = "#" * filled + "-" * (width - filled)
+
+    print(f"\r[{bar}] {i}/{total}", end="", flush=True)
 
 
 # Simple colored logs
