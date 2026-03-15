@@ -1,4 +1,6 @@
+# ------------------------------
 # Environments
+# ------------------------------
 .env
 .venv
 env/
@@ -7,10 +9,14 @@ ENV/
 env.bak/
 venv.bak/
 
+# ------------------------------
 # Byte-compiled / optimized / DLL files
+# ------------------------------
 __pycache__/
 
+# ------------------------------
 # Distribution / packaging
+# ------------------------------
 .Python
 build/
 develop-eggs/
@@ -29,8 +35,95 @@ wheels/
 *.egg
 MANIFEST
 
-
+# ------------------------------
+# pytest / test cache
+# ------------------------------
 .pytest_cache/
+tests/__pycache__/
 
-#Folder
+# ------------------------------
+# Coverage
+# ------------------------------
+.coverage
+htmlcov/
+coverage.xml
+
+# ------------------------------
+# Python cache / temp files
+# ------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.swp
+*.swo
+*.swn
+# Byte-compiled / optimized / DLL files
+*.so
+*.dll
+*.dylib
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# ------------------------------
+# Editors
+# ------------------------------
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm / JetBrains
+.idea/
+
+# macOS finder files
+.DS_Store
+
+# ------------------------------
+# uv cache
+# ------------------------------
+.uv/
+uv.lock
+
+# ------------------------------
+# Logs
+# ------------------------------
+*.log
+logs/
+
+# ------------------------------
+# Input/Output Data
+# ------------------------------
+#Ignore large TIFF files in your repo
+*.tif
+*.tiff
+
+# ------------------------------
+# Project specific ignores
+# ------------------------------
+# Temporary test images, scratch files, examples
+tmp/
+scratch/
+Output/
+Input/Output Data
+Thorlab_*/
+# ------------------------------
+#Ignore large TIFF files in your repo
+*.tif
+*.tiff
+
+# ------------------------------
+# Google Drive API credentials  
+# ------------------------------
+credentials/
+*.json
+*.pickle
+token.pickle
+credential/
+drive_work/
 drive_work/

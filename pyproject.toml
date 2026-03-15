@@ -3,14 +3,16 @@ name = "ylabcommon"
 version = "0.2.2"
 description = "Integrated pipeline system for MRI data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
 readme = "README.md"
-requires-python = "===3.12.9"
+#requires-python = "===3.12.9"
+requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.15.1",
     "matplotlib>=3.7.0",
     "pandas>=2.3.3",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.3",
-    "scipy>=1.16.3",
+    #"scipy>=1.16.3",
+    "scipy<=1.16.3",
     "seaborn>=0.13.2",
     "gdown>=5.0.0",
     "google-auth",
@@ -19,6 +21,21 @@ dependencies = [
     "google-api-python-client",
     "python-dotenv>=1.2.1",
     "questionary>=2.1.1",
+    "numpy",
+    "tifffile",
+    "lxml",
+    #"pandas",
+    #"matplotlib"
+    "requests",
+    "imagecodecs",
+    "bioio>=1.3.0",
+    "bioio-ome-tiff",
+    "tifffile",
+    "bioio-tifffile",
+    "bioio-ome-tiff",
+    "ome-types",
+    "xarray",
+    "dask[array]",
 ]
 license = {text = "MIT"}
 
@@ -28,11 +45,41 @@ dev = [
     "pytest>=8.3.5",
 ]
 
+#Need to check which one keep by Sho
+#[build-system]
+#requires = ["hatchling","setuptools>=61.0"]
+#build-backend = "setuptools.build_meta"
+
+#[tool.hatch.build.targets.wheel]
+#packages = [
+#    "src/ylabcommon",
+#]
+
 [build-system]
-requires = ["hatchling","setuptools>=61.0"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = [
-    "src/ylabcommon",
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["ylabcommon"]
+
+#[optional-dependencies]
+#dev = [
+#    "ipykernel>=6.29.5",
+#    #"pytest>=8.3.5",
+#    "pytest>=9.0.1",
+#    "pytest-mock"
+#]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "pytest-mock"
+]
+
+[project.optional-dependencies]
+zarr = [
+  "bioio-ome-zarr",
+  "ome-zarr",
+  "zarr",
 ]
