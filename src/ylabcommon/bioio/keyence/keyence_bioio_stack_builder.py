@@ -15,20 +15,90 @@ def file_pattern():
     )
     return pattern
 
+def parse_keyence_filename(filename):
+
+    name = Path(filename).name.replace(".tif", "")
+
+    parts = name.split("_")
+
+    xy = None
+    z = None
+    ch = None
+
+    for p in parts:
+
+        if p.startswith("XY"):
+            xy = int(p.replace("XY", ""))
+
+        elif p.startswith("Z"):
+            z = int(p.replace("Z", ""))
+
+        elif p.startswith("CH"):
+            ch = int(p.replace("CH", ""))
+
+        elif p.isdigit() and z is None:
+            z = int(p)
+            #print(f"Non-standard filename detected (missing Z label)")
+
+    if xy is None or z is None or ch is None:
+        raise RuntimeError(f"Cannot parse filename")
+
+    return {"xy": xy, "z": z, "ch": ch}
+
+def normalize_keyence_filename(filename):
+
+    name = Path(filename).name
+
+    # detect missing Z label
+    m = re.match(r"(.*XY\d+)_(\d+)_CH(\d+)\.tif$", name, re.IGNORECASE)
+
+    if m:
+        prefix = m.group(1)
+        z_val  = m.group(2)
+        ch_val = m.group(3)
+
+        new_name = f"{prefix}_Z{z_val}_CH{ch_val}.tif"
+    
+    return new_name, z_val
+
+    #return name
+
 def parse_keyence_name(name):
 
     #name = Path(path).name
     pattern = file_pattern()
+ 
+    #name = normalize_keyence_filename(name)   
     m = pattern.match(name)
-
+    z_val = 0
+    m_type = True
+    
     if m is None:
-        raise ValueError(f"Filename does not match Keyence pattern: {name}")
+        m_type = m
+        name, z_val = normalize_keyence_filename(name)
+        m = pattern.match(name)
+        print(f"[INFO] Non-standard filename detected: Assuming Z index → {name}")
 
+    #if m is None:
+        #raise ValueError(f"Filename does not match Keyence pattern: {name}")
     tile = int(m.group("xy"))
     z  = int(m.group("z"))
     ch = int(m.group("ch"))
+    """
+    if m:
+        tile = int(m.group("xy"))
+        z  = int(m.group("z"))
+        ch = int(m.group("ch"))
+     
+    else: 
+        parsed = parse_keyence_filename(name)
+        tile = parsed["xy"]
+        z  = parsed["z"]
+        ch = parsed["ch"]
+    #print(f"Non-standard Keyence filename detected")
+    """ 
 
-    return tile, z, ch
+    return tile, z, ch, z_val, m_type
 
 def get_channel_names(channels):
     
@@ -44,14 +114,21 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
     # index dataset
     # -----------------------------------
     sorted_files = sorted(tiff_files)
-
+    z_arry = []
     for f in sorted_files:
 
-        tile, z, ch = parse_keyence_name(f)
+        tile, z, ch, z_val, m_type = parse_keyence_name(f)
 
         grouped[tile][ch].append((z, f))
+        z_arry.append(z_val)
 
     tiles = {}
+
+    z_max_min = []
+    z_max_min.append(z_arry[0]) 
+    z_max_min.append(z_arry[-1]) 
+    z_max_min.append(m_type)
+    print(f"[DEBUG ZVALUES:], {z_max_min}")
 
     # -----------------------------------
     # stack each tile
@@ -98,13 +175,13 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
             f"Y={dims['Y']}, X={dims['X']})"
             ) 
     print(f"DEBUG: (XY, Z, C) Group Index")
-    for f in tiff_files[:10]:
-        print(f"    {parse_keyence_name(f)}    ")
+    #for f in tiff_files[:10]:
+        #print(f"    {parse_keyence_name(f)}    ")
    
     if len(tiles) == 1:
         data = next(iter(tiles.values()))
     else:
         data = tiles
 
-    return data, sorted_files, channels
+    return data, sorted_files, channels, z_max_min 
 

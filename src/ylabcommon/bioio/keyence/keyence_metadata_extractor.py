@@ -1,6 +1,6 @@
 import numpy as np
-from ylabcommon.bioio.keyence_metainfo import ImageMetadata
-from ylabcommon.bioio.metadata_extractor_base import MicroscopeMetadataExtractor
+from ylabcommon.bioio.keyence.keyence_metainfo import ImageMetadata
+from ylabcommon.bioio.core.metadata_extractor_base import MicroscopeMetadataExtractor
 
 """
 "X": int(self.image_positions[0]/self.nm_per_pixel_values),

@@ -1,5 +1,5 @@
 import xml.etree.ElementTree as ET
-from .base_params_adapter import BaseParamsAdapter
+from ylabcommon.bioio.core.base_params_adapter import BaseParamsAdapter
 
 class ThorlabParamsAdapter(BaseParamsAdapter):
     def __init__(self, xml_path: str):

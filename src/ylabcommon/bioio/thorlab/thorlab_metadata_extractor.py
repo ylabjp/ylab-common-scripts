@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime, timedelta
 import warnings
-from ylabcommon.bioio.metadata_extractor_base import MicroscopeMetadataExtractor
+from ylabcommon.bioio.core.metadata_extractor_base import MicroscopeMetadataExtractor
 
 
 @dataclass
