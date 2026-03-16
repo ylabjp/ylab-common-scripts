@@ -17,7 +17,7 @@ This framework provides share classes, codesi, and Microscope-specific loaders s
 
 ---
 
-## The framework is built on top of BioIO and provides standardized tools for:**
+## The framework is built on top of BioIO and provides standardized tools for:
 
 - image stacking
 
@@ -33,7 +33,7 @@ Repository Structure
 
 ---
 
-## Features:**
+## Features:
 
 - BioIO-based microscopy IO
 
@@ -85,6 +85,10 @@ Example dependency:
 ylabcommon = { git = "https://github.com/ylabjp/ylab-common-scripts" }
 
 During development/work locally use local path:
+
+:q
+
+
 
 ylabcommon = { path = "../YlabCommonScripts/ylab-common-scripts", editable = true }
 
