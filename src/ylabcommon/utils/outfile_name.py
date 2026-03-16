@@ -69,7 +69,7 @@ def is_mosaic(dims):
             return True
     return False
 
-def build_stack_filename(output_dir: Path, image_name, dims, ext=".tiff"):
+def build_stack_filename(output_dir: Path, image_name, dims, z_mx_min_re, ext=".tiff"):
 
     parts = [image_name]
 
@@ -92,6 +92,13 @@ def build_stack_filename(output_dir: Path, image_name, dims, ext=".tiff"):
     if "Z" in dims:
         parts.append(format_range("Z", dims["Z"]))
 
+    elif z_mx_min_re[-1] is None:
+        z_mx_min_re = [z for z in z_mx_min_re if z is not None]
+        z_mx_min_re = [int(v) for v in z_mx_min_re]
+        z_mx_min_re = sorted(set(z_mx_min_re))
+        
+        parts.append(format_range("Z", z_mx_min_re))
+        
     # detect mosaic automatically
     if is_mosaic(dims):
         parts.append("stitched") 
@@ -115,7 +122,7 @@ def build_output_name(output_dir: Path, tiff_files, Z_stack_val, T_stack_val):
         name = Path(f).name
 
         parts = name.replace(".tif","").replace(".tiff","").split("_")
-        print(f"DEBUG : {parts}")
+        #print(f"DEBUG : {parts}")
 
         channel = None
         stageX = None

@@ -4,7 +4,7 @@ import warnings
 
 from bioio import BioImage, DimensionNames
 #from .bioio_metadata import BioIOMetadataExtractor
-from .thorlab_metadata_extractor import ThorlabMetadataExtractor
+#from bioio.thorlab.thorlab_metadata_extractor import ThorlabMetadataExtractor
 
 class BioIOReader:
     """
@@ -173,14 +173,4 @@ class BioIOReader:
                 })
 
         return channels
-
-    # ---------------------------
-    # Unified metadata access
-    # ---------------------------
-    def get_metadata_all(self):
-
-        if not hasattr(self, "_metadata_obj"):
-            self._metadata_obj = ThorlabMetadataExtractor(self._img)
-
-        return self._metadata_obj
 
