@@ -110,6 +110,7 @@ logs/
 tmp/
 scratch/
 Output/
+Ptest_output/
 Input/Output Data
 Thorlab_*/
 # ------------------------------
