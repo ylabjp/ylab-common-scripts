@@ -124,6 +124,8 @@ Thorlab_*/
 credentials/
 *.json
 *.pickle
+test.validation.json 
+test.report.txt
 token.pickle
 credential/
 drive_work/

@@ -86,8 +86,6 @@ ylabcommon = { git = "https://github.com/ylabjp/ylab-common-scripts" }
 
 During development/work locally use local path:
 
-:q
-
 
 
 ylabcommon = { path = "../YlabCommonScripts/ylab-common-scripts", editable = true }
@@ -100,6 +98,34 @@ ylabcommon = { path = "../YlabCommonScripts/ylab-common-scripts", editable = tru
 
 source env_common_fix.sh
 
+```
+
+---
+
+## Run Unit/pytest
+
+ -**Unit tests (default)**
+
+```bash
+pytest \
+  --ignore src/ylabcommon/analysis/ \
+  --ignore=src/ylabcommon/utils       % Just ignore these folder
+```
+-**Local dataset validation**
+
+```bash
+uv run pytest tests/ -m integration\_bioio
+  --local-tiff-dir "Your local tiff's directory path"
+  --local-xml \
+```
+-**Google Drive dataset**
+
+```bash
+
+uv run pytest tests \
+  -v -m gdrive -s --gdrive-folder \
+  --gdrive-folder "URL" \
+  --gdrive-sa-json "/credentials.json"
 ```
 
 ---
