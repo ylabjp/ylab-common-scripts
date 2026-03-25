@@ -110,6 +110,7 @@ logs/
 tmp/
 scratch/
 Output/
+Ptest_output/
 Input/Output Data
 Thorlab_*/
 # ------------------------------
@@ -123,6 +124,8 @@ Thorlab_*/
 credentials/
 *.json
 *.pickle
+test.validation.json 
+test.report.txt
 token.pickle
 credential/
 drive_work/
