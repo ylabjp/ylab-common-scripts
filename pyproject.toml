@@ -1,7 +1,7 @@
 [project]
 name = "ylabcommon"
-version = "0.2.2"
-description = "Integrated pipeline system data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
+version = "0.2.3"
+description = "Integrated pipeline system for MRI data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
 readme = "README.md"
 #requires-python = "===3.12.9"
 requires-python = ">=3.10"
@@ -50,10 +50,10 @@ dev = [
 #requires = ["hatchling","setuptools>=61.0"]
 #build-backend = "setuptools.build_meta"
 
-#[tool.hatch.build.targets.wheel]
-#packages = [
-#    "src/ylabcommon",
-#]
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ylabcommon",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -61,7 +61,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["ylabcommon"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 #[optional-dependencies]
 #dev = [

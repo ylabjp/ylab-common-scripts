@@ -2,10 +2,9 @@ from typing import List, Optional, Dict, Union, Any
 from typing import List, Literal
 from pydantic import BaseModel, Field,ConfigDict
 from pathlib import Path
-from ylabcommon.file_util import init_base_drive
 import json
 import os
-
+import pandas as pd
 
 RoiItem = Union[list[int], dict[str, str]]
 
@@ -141,6 +140,13 @@ class PreprocessingParam(BaseModel):
             resample_str = "%ds" % time_bin_in_s
         return resample_str
 
+    def get_resample(self, is_before_dlc=False) -> pd.Timedelta:
+        if is_before_dlc:
+            time_bin_in_s = self.time_bin_in_s_before_dlc
+        else:
+            time_bin_in_s = self.time_bin_in_s
+        return pd.Timedelta(seconds=time_bin_in_s)
+
 
 class GroupAnalysisItemParam(BaseModel):
     param: str
@@ -254,7 +260,12 @@ class BehaviorParam(BaseModel):
         if path.exists():
             with open(path) as f:
                 individual_param=json.load(f)
-        return self.model_validate({**self.model_dump(), **individual_param})
+        # overwriteするscopeは決めておく
+        base=self.model_dump()
+        base["video_param"]["arena_box"]=individual_param["video_param"]["arena_box"]
+        base["video_param"]["roi"]=individual_param["video_param"]["roi"]
+        base["video_param"]["start_frame"]=individual_param["video_param"]["start_frame"]
+        return self.model_validate(base)
         # return self.model_copy(update=individual_param,deep=True)
 
     def save_individual_param(self,path:Path):
@@ -277,7 +288,7 @@ class VideoInfo(BaseModel):
     raw_video_list: List[str]
     
     # 解析ステータス（"done" や "pending" など、特定の文字列のみ許可する場合）
-    analysis_status: Optional[Literal["done", "pending", "error","analyzing"]] = None
+    analysis_status: Optional[Literal["done", "pending", "error","analyzing","fail"]] = ""
 
 
     # DLCの設定ファイルパス（実際にファイルが存在するかチェックしたい場合は FilePath 型も使えます）
@@ -354,22 +365,6 @@ class DataKeys:
     HISTOGRAM = "histogram"
     FRAME2FILE ="frame2file"
 
-    # TODO delete 
-    PREPROCESS_CC_INDEX_COLUMNS = [
-        "target",
-        "signal_type",
-        "task_type",
-        "trial",
-        "time",
-        "rel_time",
-    ]
-
-    ANALYSIS_INDIVIDUAL_INDEX_COLUMS = [
-        "cond",
-        "mouse",
-        "day",
-        "within_factor",
-    ] + PREPROCESS_CC_INDEX_COLUMNS
 
     class Index:
         PREPROCESS_CC = [
@@ -378,11 +373,21 @@ class DataKeys:
         "task_type",
         "trial",
         "time",
-        "rel_time",
+        "rel_time_in_s",
     ]
-        ANALYSIS_INDIVIDUAL = [
-        "cond",
-        "mouse",
-        "day",
-        "within_factor",
-    ] + PREPROCESS_CC
+
+    class TaskSchedule:
+        BLOCK_TERMINATION_IN_MS = "block_termination_in_ms"
+        BLOCK_TERMINATION_ORIGIN = "block_termination_origin"
+        TRIAL_START = "trial_start"
+        DEFAULT_BLOCK_LENGTH_IN_MS = "default_block_length_in_ms"
+        ACTUAL_BLOCK_LENGTH_IN_MS = "actual_block_length_in_ms"
+        @classmethod
+        def get_index_columns(cls):
+            return [
+                cls.BLOCK_TERMINATION_IN_MS,
+                cls.BLOCK_TERMINATION_ORIGIN,
+                cls.TRIAL_START,
+                cls.DEFAULT_BLOCK_LENGTH_IN_MS,
+                cls.ACTUAL_BLOCK_LENGTH_IN_MS,
+            ]
