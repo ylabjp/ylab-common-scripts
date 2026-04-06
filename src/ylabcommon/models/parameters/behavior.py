@@ -255,18 +255,25 @@ class BehaviorParam(BaseModel):
             res.append(self.get_raw_drive()/r)
         return res
 
+
     def generate_individual_param(self,path:Path):
-        individual_param={}
-        if path.exists():
-            with open(path) as f:
-                individual_param=json.load(f)
+        
+        if not path.exists():
+            return self
+
+        with open(path) as f:
+            individual_param=json.load(f)
+        
+        if "video_param" not in individual_param.keys():
+            return self
+
         # overwriteするscopeは決めておく
         base=self.model_dump()
-        base["video_param"]["arena_box"]=individual_param["video_param"]["arena_box"]
-        base["video_param"]["roi"]=individual_param["video_param"]["roi"]
-        base["video_param"]["start_frame"]=individual_param["video_param"]["start_frame"]
+        for k in ["arena_box","roi","start_frame"]:
+            if k in individual_param["video_param"].keys():
+                base["video_param"][k]=individual_param["video_param"][k]
+
         return self.model_validate(base)
-        # return self.model_copy(update=individual_param,deep=True)
 
     def save_individual_param(self,path:Path):
         '''
