@@ -28,7 +28,8 @@ class ThorlabParamsAdapter(BaseParamsAdapter):
         mode = "Z" if (z_enabled and size_z > 1) else "T"
    
         # Get Physical Calibrations: pixelSizeUM is usually in the LSM tag
-        pixel_x = float(lsm.get("pixelSizeUM", 1.0)) if lsm is not None else 1.0
+        pixel_x = float(lsm.get("pixelWidthUM", 1.0)) if lsm is not None else 1.0
+        pixel_y = float(lsm.get("pixelHeightUM", 1.0)) if lsm is not None else 1.0
 
         # stepSizeUM is in the ZStage tag
         pixel_z = abs(float(z_stage.get("stepSizeUM", 1.0))) if z_stage is not None else 1.0
@@ -43,9 +44,9 @@ class ThorlabParamsAdapter(BaseParamsAdapter):
             "SizeZ": size_z,
             "SizeT": size_t,
             "PixelSizeX": pixel_x,
+            "PixelSizeY": pixel_y,
             "PixelSizeZ": pixel_z,
             "ChannelNames": channel_names,
             "TimesTamp": timestamp,
             "ZStackEnabled": z_enabled
         }
-
