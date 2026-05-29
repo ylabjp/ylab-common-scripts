@@ -155,7 +155,66 @@ def standard_bar(ax: Axes, cond_label, color, y_data: pd.DataFrame):
         jitter=0.2  # 横幅を指定できる
     )
 
+def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: pd.DataFrame):
+    '''
+    Behaviorで実装した集計系に対応している
+    agg_data: mean, sem, vectorを含むDataFrameで、indexは条件の名前
+    '''
+    if agg_data is None:
+        ax.bar(
+            cond_label,
+            0,
+            yerr=[[0], [0]],
+            width=0.5,
+            color=color,
+            edgecolor=color,
+            ecolor=color,
+            align="center",
+            alpha=1,
+            zorder=-1,
+            capsize=2.5,
+            linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+            error_kw={
+                "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+                "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+            }
+        )
+        return
 
+    for i, c in enumerate(agg_data.index):  # agg_dataはmultiindexなので、最初のレベルのユニークな値を取得する
+
+        row = agg_data.loc[c]  # list形式なので変換する
+        sns.swarmplot(
+            x=[i]*len(row["vector"]),
+            y=row["vector"],
+            ax=ax,
+            # order=xlabel_list,
+            marker=".",
+            facecolor=darken_color(color[i], amount=0.4),
+            size=3.0,
+            zorder=10
+        )
+
+        # サイズが３のときにerror barの色指定でエラーを起こすため、分離して記述する必要がある。
+        ax.bar(
+            i,
+            row["mean"],
+            yerr=row["sem"],
+            width=0.5,
+            color=color[i],
+            edgecolor=color[i],
+            ecolor=color[i],
+            align="center",
+            alpha=1,
+            zorder=0,
+            capsize=2.5,
+            linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+            error_kw={
+                "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+                "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+            }
+        )
+        ax.set_xticklabels(cond_label)
 def generate_stat_text(data_for_stat):
     out = ""
     p_str = ""
