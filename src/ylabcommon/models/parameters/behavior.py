@@ -195,7 +195,13 @@ class PhotometryConfig(BaseModel):
     is_autofluo_subtraction: Optional[bool] = False
     median_filter_in_s: float
 
-    
+class AggregationCalcConfig(BaseModel):
+    """各プロット・計算の具体的な設定"""
+    x: List[str]
+    y: List[str]
+    calc: Literal["x-y", "x/y"]
+
+
 class BehaviorParam(BaseModel):
     """
     Root model
@@ -223,6 +229,8 @@ class BehaviorParam(BaseModel):
     )
     response_aggregation: Optional[Dict[str, Any]] = Field(default_factory=dict)
     photometry: Optional[List[PhotometryConfig]] = Field(default_factory=list)
+    aggregation_calc:  Optional[Dict[str, AggregationCalcConfig]]= Field(default_factory=dict)
+    
     def __get_path(self,target):
         base_val = os.getenv(target)
         if not base_val:
