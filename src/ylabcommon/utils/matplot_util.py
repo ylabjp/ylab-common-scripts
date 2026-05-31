@@ -159,6 +159,9 @@ def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: p
     '''
     Behaviorで実装した集計系に対応している
     agg_data: mean, sem, vectorを含むDataFrameで、indexは条件の名前
+    
+    pd.NAが含まれていたら描画をスキップする
+
     '''
     if agg_data is None:
         ax.bar(
@@ -196,24 +199,25 @@ def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: p
         )
 
         # サイズが３のときにerror barの色指定でエラーを起こすため、分離して記述する必要がある。
-        ax.bar(
-            i,
-            row["mean"],
-            yerr=row["sem"],
-            width=0.5,
-            color=color[i],
-            edgecolor=color[i],
-            ecolor=color[i],
-            align="center",
-            alpha=1,
-            zorder=0,
-            capsize=2.5,
-            linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
-            error_kw={
-                "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
-                "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
-            }
-        )
+        if not pd.isna(row["mean"]):
+            ax.bar(
+                i,
+                row["mean"],
+                yerr=row["sem"],
+                width=0.5,
+                color=color[i],
+                edgecolor=color[i],
+                ecolor=color[i],
+                align="center",
+                alpha=1,
+                zorder=0,
+                capsize=2.5,
+                linewidth=STANDARD_FIGURE_SIZE.LINE_WIDTH,
+                error_kw={
+                    "elinewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH,
+                    "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
+                }
+            )
         ax.set_xticklabels(cond_label)
 def generate_stat_text(data_for_stat):
     out = ""
