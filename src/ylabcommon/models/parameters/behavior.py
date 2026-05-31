@@ -232,7 +232,8 @@ class BehaviorParam(BaseModel):
     photometry: Optional[List[PhotometryConfig]] = Field(default_factory=list)
     # aggregation_calc:  Optional[Dict[str, AggregationCalcConfig]]= Field(default_factory=dict)
 
-    def __get_path(self,target):
+    @staticmethod
+    def get_path(target):
         base_val = os.getenv(target)
         if not base_val:
             raise EnvironmentError(
@@ -250,11 +251,11 @@ class BehaviorParam(BaseModel):
         return self.get_prj_drive() / self.prj_dir
 
     def get_prj_drive(self)->Path:
-        dirbase = self.__get_path("PRJ_ROOT")
+        dirbase = self.get_path("PRJ_ROOT")
         return dirbase
 
     def get_raw_drive(self)->Path:
-        dirbase = self.__get_path("RAW_ROOT")
+        dirbase = self.get_path("RAW_ROOT")
         return dirbase
 
 
