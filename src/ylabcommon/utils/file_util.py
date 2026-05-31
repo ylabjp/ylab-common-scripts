@@ -110,6 +110,7 @@ def _get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[s
 def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml") -> list:
     '''
     2段階でconfigファイルを管理する
+    file_typeで指定したファイルまたはconfig_で始まるディレクトリをリスト表示する。
     '''
     config_basename_dict=_get_config_list(base_path,config_dir_name,file_type)
 
