@@ -177,11 +177,12 @@ class EventConfig(BaseModel):
     target: str
     baseline_in_s: int = Field(gt=0)
     after_in_s: int = Field(gt=0)
+    is_exclusive:Optional[ bool  ] = True
+    rep_targets: Optional[List[int]] = []   # どのrepを対象にするか。空の場合は全てのrepが対象
     task_types: Optional[List[str]] = []
     task_type: Optional[str]=Field(default=None,alias="type")   
     scheduled_stimuli_keys: Optional[List[str]] = []
     response_targets: Optional[List[str]] = []
-    is_exclusive:Optional[ bool  ] = True
     event_filter: Optional[List[EventFileterItem]] = None
     start_in_hm: Optional[str] = None
     end_in_hm: Optional[List[int]] = None
