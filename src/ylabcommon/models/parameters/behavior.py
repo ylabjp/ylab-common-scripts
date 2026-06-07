@@ -179,8 +179,8 @@ class EventConfig(BaseModel):
     after_in_s: int = Field(gt=0)
     is_exclusive:Optional[ bool  ] = True
     rep_targets: Optional[List[int]] = []   # どのrepを対象にするか。空の場合は全てのrepが対象
-    task_types: Optional[List[str]] = []
-    task_type: Optional[str]=Field(default=None,alias="type")   
+    task_types: Optional[List[str]] = []    # task table上のtypeを指定。空の場合は全てのtypeが対象
+    task_type: Optional[str]=Field(default=None,alias="type") # ccのeventにおいて"type": "response_onset"などを指定する。紛らわしい。
     scheduled_stimuli_keys: Optional[List[str]] = []
     response_targets: Optional[List[str]] = []
     event_filter: Optional[List[EventFileterItem]] = None
