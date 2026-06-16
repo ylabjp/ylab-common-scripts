@@ -147,13 +147,19 @@ class PreprocessingParam(BaseModel):
             time_bin_in_s = self.time_bin_in_s
         return pd.Timedelta(seconds=time_bin_in_s)
 
+class TrialDiv(BaseModel):
+    div_num: List[int]
+    task_types: List[str]
+
 
 class GroupAnalysisItemParam(BaseModel):
-    param: str
+    '''
+    Behavioral paramの中で指定されるItem
+    '''
+    group_analysis_param: str
     cond_group: Optional[Dict[str, List[str]]] = None
     session_in_reverse_order: Optional[bool] = False
-    trial_div: Optional[Dict[str, Any]] = None
-    colors: Optional[Dict[str, Any]] = None
+    trial_div: Optional[TrialDiv] = None
 
 
 class AggregationParamItem(BaseModel):
