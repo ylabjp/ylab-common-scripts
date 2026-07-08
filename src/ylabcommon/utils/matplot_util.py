@@ -192,6 +192,9 @@ def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: p
             y=row["vector"],
             ax=ax,
             # order=xlabel_list,
+            # native_scale=Falseだと、seabornが呼び出しごとに出現したユニーク値を
+            # 0,1,2...と振り直すため、データのないcondで欠番が出るとbarの位置とずれる
+            native_scale=True,
             marker=".",
             facecolor=darken_color(color[i], amount=0.4),
             size=3.0,
