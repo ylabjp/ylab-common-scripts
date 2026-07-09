@@ -183,7 +183,11 @@ class EventConfig(BaseModel):
     target: str
     baseline_in_s: int = Field(gt=0)
     after_in_s: int = Field(gt=0)
-    is_exclusive:Optional[ bool  ] = True
+    event_use_on_collision: Optional[Literal["first", "last", "none"]] = "last"
+    # 同一event_targetの複数repのbaseline/after windowが時間的に重なった場合の解決方法。
+    # first: 先に発生したrepを優先し、重複区間は後発repで上書きしない
+    # last : 後に発生したrepを優先し、重複区間は後発repで上書きする(旧is_exclusiveなし相当の挙動)
+    # none : 重複区間はどちらのrepにも属さないものとして両方とも破棄する
     rep_targets: Optional[List[int]] = []   # どのrepを対象にするか。空の場合は全てのrepが対象
     task_types: Optional[List[str]] = []    # task table上のtypeを指定。空の場合は全てのtypeが対象
     task_type: Optional[str]=Field(default=None,alias="type") # ccのeventにおいて"type": "response_onset"などを指定する。紛らわしい。
