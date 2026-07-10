@@ -160,6 +160,9 @@ class GroupAnalysisItemParam(BaseModel):
     cond_group: Optional[Dict[str, List[str]]] = None
     session_in_reverse_order: Optional[bool] = False
     trial_div: Optional[TrialDiv] = None
+    # day単位/phase・session単位の集計切り分けを明示指定する。
+    # Noneなら従来通りday文字列にphase情報が含まれるかで自動判定する。
+    is_phase: Optional[bool] = None
 
 
 class AggregationParamItem(BaseModel):
