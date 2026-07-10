@@ -177,7 +177,7 @@ class AggregationParamItem(BaseModel):
 
 class EventFileterItem(BaseModel):
     target:str
-    relation:str
+    relation: Literal["include", "exclude"]
 class EventConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)    # typeの読み込みに必要。いずれtypeを書き換える
     target: str
