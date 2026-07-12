@@ -12,6 +12,7 @@ from typing import (
     TypeVar,
 )
 from ylabcommon.models.parameters.general import ArgModel
+from ylabcommon.utils.betterstack_log import analysis_context, log_error
 from abc import ABC
 import pandas as pd
 from datetime import datetime
@@ -253,9 +254,18 @@ class GenericCrawler:
                     if not k.check_overwrite( node, self.ctx):
                         continue
                     try:
-                        k.on_file(self.ctx, node, f)
+                        with analysis_context(
+                            stage=k.__class__.__name__, target_file=node.path
+                        ):
+                            k.on_file(self.ctx, node, f)
                     except Exception as e:
                         print(e)
+                        log_error(
+                            f"on_file failed: {f}",
+                            stage=k.__class__.__name__,
+                            target_file=f,
+                            error=e,
+                        )
                         self.__log.append({
                             "file":str(f),
                             "result":"error",
