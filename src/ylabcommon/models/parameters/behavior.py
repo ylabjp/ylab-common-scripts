@@ -43,85 +43,128 @@ class VideoParam(BaseModel):
 
 
 DLC_MODEL_VERSIONs = [2020, 2025, 2026]
+
+# head_center / body_center を計算するときに、どの body part をどちらの重心に
+# 平均するかを示す role タグ。
+# - HEAD: head_center の平均に含める
+# - BODY: body_center の平均に含める
+# - None: どちらの重心にも使わない (tail など独立に動く点)
+# NOTE: 新しいモデル(2026)には "centroid" が存在しない。centroid の有無に依存せず、
+#       role タグに従って計算するので、centroid が無いモデルでも問題なく動く。
+HEAD = "head"
+BODY = "body"
+
+# 各バージョンの body parts を (part_name, role) で定義する。
+# part_name の並び順は DLC モデルの出力順に一致させること
+# (detect_dlc_bodyparts_version は順序に依存しないが、可読性のため合わせておく)。
 DLC_BODY_PARTS = {
     2020: [
-        "left_ear",
-        "right_ear",
-        "snout",
-        "centroid",
-        "left_lateral",
-        "right_lateral",
-        "tail_base",
+        ("left_ear", HEAD),
+        ("right_ear", HEAD),
+        ("snout", HEAD),
+        ("centroid", BODY),
+        ("left_lateral", BODY),
+        ("right_lateral", BODY),
+        ("tail_base", BODY),
     ],
     2025: [
-        "snout",
-        "right_ear",
-        "left_ear",
-        "head_top",
-        "tail_base",
-        "rump_center",
-        "centroid",
-        "chest_center",
-        "tail_end",
-        "tail_dist",
-        "tail_prox",
+        ("snout", HEAD),
+        ("right_ear", HEAD),
+        ("left_ear", HEAD),
+        ("head_top", HEAD),
+        ("tail_base", BODY),
+        ("rump_center", BODY),
+        ("centroid", BODY),
+        ("chest_center", BODY),
+        ("tail_end", None),
+        ("tail_dist", None),
+        ("tail_prox", None),
     ],
     2026: [
-        "head_midpoint",
-        "tail_end",
-        "right_hip",
-        "right_midside",
-        "right_shoulder",
-        "left_hip",
-        "left_midside",
-        "left_shoulder",
-        "tail5",
-        "tail4",
-        "tail3",
-        "tail2",
-        "tail1",
-        "tail_base",
-        "mid_backend3",
-        "mid_backend2",
-        "mid_backend",
-        "mouse_center",
-        "mid_back",
-        "neck",
-        "right_ear_tip",
-        "left_ear_tip",
-        "right_ear",
-        "left_ear",
-        "right_eye",
-        "left_eye",
-        "nose",
+        ("head_midpoint", HEAD),
+        ("tail_end", None),
+        ("right_hip", BODY),
+        ("right_midside", BODY),
+        ("right_shoulder", BODY),
+        ("left_hip", BODY),
+        ("left_midside", BODY),
+        ("left_shoulder", BODY),
+        ("tail5", None),
+        ("tail4", None),
+        ("tail3", None),
+        ("tail2", None),
+        ("tail1", None),
+        ("tail_base", None),
+        ("mid_backend3", None),
+        ("mid_backend2", None),
+        ("mid_backend", BODY),
+        ("mouse_center", BODY),
+        ("mid_back", BODY),
+        ("neck", None),
+        ("right_ear_tip", None),
+        ("left_ear_tip", None),
+        ("right_ear", HEAD),
+        ("left_ear", HEAD),
+        ("right_eye", HEAD),
+        ("left_eye", HEAD),
+        ("nose", HEAD),
     ],
 }
-DLC_HEAD_CENTER = {2020: [0, 1, 2], 2025: [0, 1, 2, 3], 2026: [0, 22, 23, 24, 25, 26]}
-DLC_BODY_CENTER = {
-    2020: [3, 4, 5, 6],
-    2025: [4, 5, 6, 7],
-    2026: [3, 4, 5, 6, 7, 8, 16, 17, 18],
-}
+
+
+def get_dlc_body_part_names(version: int) -> List[str]:
+    """指定バージョンの全 body part 名を出力順で返す。"""
+    return [name for name, _role in DLC_BODY_PARTS[version]]
+
+
+def get_dlc_parts_for_region(version: int, region: str) -> List[str]:
+    """指定バージョンで、指定 region(HEAD/BODY) に属する body part 名を返す。"""
+    return [name for name, role in DLC_BODY_PARTS[version] if role == region]
+
+
+def detect_dlc_bodyparts_version(body_parts) -> int:
+    """
+    DLC 出力に含まれる body part の集合から、どの DLC モデルバージョンかを判定する。
+
+    body_parts: DLC の h5 に含まれる body part 名の iterable
+    return: 一致した DLC_BODY_PARTS のバージョン
+    raise: ValueError どのバージョンにも一致しない場合
+    """
+    observed = set(body_parts)
+    for version, parts in DLC_BODY_PARTS.items():
+        if set(name for name, _role in parts) == observed:
+            return version
+    raise ValueError(
+        "DLC body parts が既知のどのモデルバージョンにも一致しません。\n"
+        f"  検出された parts ({len(observed)}個): {sorted(observed)}\n"
+        f"  対応バージョン: {list(DLC_BODY_PARTS.keys())}\n"
+        "ylabcommon の DLC_BODY_PARTS にモデル定義を追加するか、"
+        "使用した DLC モデルを確認してください。"
+    )
 
 def replace_yen_in_path_for_linux(fname: str):
     return fname.replace("\\", "/")
 
 class DLCParam(BaseModel):
     config_path:str=""
-    bodyparts_version: Optional[int] = 2020 # custom configを追加してそこでmodel情報から取得するようにする
+    # bodyparts_version は DLC 出力の body parts から自動判定するのが基本
+    # (detect_dlc_bodyparts_version)。ここでの値はフォールバック/明示指定用。
+    bodyparts_version: Optional[int] = 2020
     is_dynamic:Optional[bool] = True
     dlc_median_filter_kernel_in_pixel:Optional[int] = 11
-    
-    def get_dlc_body_parts_all(self):
-        return DLC_BODY_PARTS[self.bodyparts_version]
 
-    def get_dlc_parts_for_head_center(self):
-        v = self.bodyparts_version
-        return [DLC_BODY_PARTS[v][i] for i in DLC_HEAD_CENTER[v]]
+    def get_dlc_body_parts_all(self, version: Optional[int] = None):
+        return get_dlc_body_part_names(version if version is not None else self.bodyparts_version)
 
-    def get_dlc_parts_for_body_center(self):
-        v = self.bodyparts_version
-        return [DLC_BODY_PARTS[v][i] for i in DLC_BODY_CENTER[v]]
+    def get_dlc_parts_for_head_center(self, version: Optional[int] = None):
+        return get_dlc_parts_for_region(
+            version if version is not None else self.bodyparts_version, HEAD
+        )
+
+    def get_dlc_parts_for_body_center(self, version: Optional[int] = None):
+        return get_dlc_parts_for_region(
+            version if version is not None else self.bodyparts_version, BODY
+        )
 
 
 
