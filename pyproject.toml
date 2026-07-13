@@ -8,7 +8,7 @@ requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.15.1",
     "matplotlib>=3.7.0",
-    "pandas>=2.3.3",
+    "pandas>=2.3.3,!=3.0.4", # 3.0.4 は access violation を起こすため除外。ライブラリは 3.10 も対象なので厳密固定せず、アプリ側で ==3.0.3 に固定する
     "pydantic>=2.0.0",
     "pyyaml>=6.0.3",
     #"scipy>=1.16.3",
