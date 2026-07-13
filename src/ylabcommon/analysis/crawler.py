@@ -12,7 +12,7 @@ from typing import (
     TypeVar,
 )
 from ylabcommon.models.parameters.general import ArgModel
-from ylabcommon.utils.betterstack_log import analysis_context, log_error
+from ylabcommon.utils.betterstack_log import analysis_context, log_error, log_info
 from abc import ABC
 import pandas as pd
 from datetime import datetime
@@ -301,6 +301,42 @@ class GenericCrawler:
                 kernel = (" [%s]" % f["kernel"]) if f["kernel"] else ""
                 print("  - %s%s  —  %s" % (f["file"], kernel, f["detail"]))
         print("=" * 70)
+
+        # 個々のエラーは on_file 内で都度 Better Stack へ送信済み。ここでは
+        # crawl 全体の集計 (何件中何件失敗したか + 失敗ファイル一覧) を1件の
+        # まとめログとして送り、ユーザ/開発者が Better Stack 上で「今回の実行で
+        # どこが失敗したか」を一目で確認できるようにする。
+        self._send_summary_to_betterstack(failures, total)
+
+    def _send_summary_to_betterstack(self, failures: List[dict], total: int) -> None:
+        project_dir = str(getattr(self.ctx, "project_dir", ""))
+        if not failures:
+            log_info(
+                "Crawl finished: %d file(s) processed, no errors" % total,
+                stage="crawl_summary",
+                project_dir=project_dir,
+                total=total,
+                failure_count=0,
+            )
+            return
+        # 失敗ファイル一覧はログ肥大化を避けるため先頭 50 件に丸める。
+        MAX_ITEMS = 50
+        failed_files = [
+            "%s%s — %s"
+            % (f["file"], (" [%s]" % f["kernel"]) if f["kernel"] else "", f["detail"])
+            for f in failures[:MAX_ITEMS]
+        ]
+        if len(failures) > MAX_ITEMS:
+            failed_files.append("... (%d more)" % (len(failures) - MAX_ITEMS))
+        log_error(
+            "Crawl finished with %d failure(s) out of %d file(s)"
+            % (len(failures), total),
+            stage="crawl_summary",
+            project_dir=project_dir,
+            total=total,
+            failure_count=len(failures),
+            failed_files="\n".join(failed_files),
+        )
 
     @property
     def has_failures(self) -> bool:

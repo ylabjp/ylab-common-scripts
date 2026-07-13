@@ -8,6 +8,10 @@ slice-controller) が本モジュールを直接 import して利用する。
 import するだけなら bioio/dask 等の重い依存は読み込まれず、軽量アプリでも
 ylabcommon を依存に加えて安全に利用できる。
 
+- すべてのログへ実行環境コンテキスト (ログインユーザ名 ``user`` / ホスト名
+  ``host``) を自動付与する。どのリポジトリからのエラーでも「誰が・どの端末で」
+  実行したかを Better Stack 上で特定できる。共有アカウント等では ``YLAB_USER``
+  環境変数で ``user`` を上書きできる。
 - ``BETTER_STACK_TOKEN`` が環境変数/.env に無ければ送信をスキップする
   (ローカル実行や CI を Better Stack 未設定でも壊さないため)。
 - 送信はデーモンスレッド + キュー経由で非同期に行い、呼び出し元をブロックしない。
@@ -19,8 +23,10 @@ ylabcommon を依存に加えて安全に利用できる。
 import atexit
 import contextlib
 import contextvars
+import getpass
 import json
 import os
+import platform
 import queue
 import sys
 import threading
@@ -34,6 +40,9 @@ TOKEN_ENV = "BETTER_STACK_TOKEN"
 KEY_ENV = "BETTER_STACK_KEY"
 HOST_ENV = "BETTER_STACK_HOST"
 DEFAULT_HOST = "https://in.logs.betterstack.com"
+# 共有アカウントなど getpass.getuser() が実態と合わない環境で、
+# ログ上のユーザ名を明示上書きするための環境変数。
+USER_ENV = "YLAB_USER"
 
 _ctx_var: contextvars.ContextVar[dict] = contextvars.ContextVar(
     "ylab_betterstack_ctx", default={}
@@ -46,6 +55,43 @@ _warned_missing_token = False
 _flushed = False
 _app_name: Optional[str] = None
 _initialized = False
+_runtime_ctx: Optional[dict] = None
+
+
+def _detect_user() -> str:
+    """OS のログインユーザ名を解決する (どのリポジトリのログにも共通で付与する)。
+
+    ``YLAB_USER`` 環境変数が最優先 (共有アカウント等の上書き用)。次に
+    ``getpass.getuser()``、それも失敗すれば USER/USERNAME 環境変数、
+    最終的に "unknown" を返す。ユーザ名解決でアプリを止めない。
+    """
+    override = os.environ.get(USER_ENV)
+    if override:
+        return override
+    try:
+        return getpass.getuser()
+    except Exception:
+        return (
+            os.environ.get("USER")
+            or os.environ.get("USERNAME")
+            or "unknown"
+        )
+
+
+def _runtime_context() -> dict:
+    """全ログへ自動付与する実行環境コンテキスト (ログインユーザ名・ホスト名)。
+
+    プロセス内で不変なので一度だけ解決してキャッシュする。個別ログの
+    ``log_context`` / fields から同名キーを渡せば上書きできる。
+    """
+    global _runtime_ctx
+    if _runtime_ctx is None:
+        try:
+            host = platform.node() or "unknown"
+        except Exception:
+            host = "unknown"
+        _runtime_ctx = {"user": _detect_user(), "host": host}
+    return _runtime_ctx
 
 
 @contextlib.contextmanager
@@ -219,6 +265,10 @@ def send(
         "message": message,
         "app": _app_name,
     }
+    # ログインユーザ名・ホスト名を全ログへ自動付与 (どのリポジトリからでも
+    # 「誰が実行したエラーか」を Better Stack 上で特定できるようにする)。
+    payload.update(_runtime_context())
+    # with ブロックの log_context / 明示 fields は user/host を上書きできる。
     payload.update(_ctx_var.get())
     for key, value in fields.items():
         if value is not None:
