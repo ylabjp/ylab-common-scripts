@@ -164,6 +164,21 @@ class GenericKernel(ABC):
     """
     def __init__(self, target_filename:str=None) -> None:
         self.target_filename = target_filename
+        # この kernel が処理して失敗したファイルの記録 (path, message)。
+        # on_file / on_node 内で例外を握りつぶす kernel は record_failure() で
+        # ここに積むことで、crawler の実行終了時サマリーに集約される。
+        self.failures: List[tuple] = []
+
+    def record_failure(self, path, error) -> None:
+        """
+        例外を内部で握りつぶす kernel が、その失敗を crawler の
+        終了時サマリーに集約させるために except 節で呼ぶ。
+
+        例外を crawler まで伝播させる kernel は呼ぶ必要はない
+        (crawler 側の on_file ラッパーが自動的に記録する)。
+        """
+        self.failures.append((Path(path), str(error)))
+
     # プロジェクト全体
     def on_project_start(self, ctx: CrawlContext, roots: Sequence[HierNode]) -> None:
         pass
@@ -240,6 +255,57 @@ class GenericCrawler:
         # プロジェクト終了
         for k in self.kernels:
             k.on_project_end(self.ctx, roots)
+
+        # 実行終了時サマリー: 失敗ファイルをまとめて報告する。
+        # ファイル単位の例外は握りつぶして継続するため、
+        # ここで集約しないと途中の失敗が見落とされやすい。
+        self._report_summary()
+
+    def collect_failures(self) -> List[dict]:
+        """
+        この crawl で失敗したファイルの一覧を返す。
+
+        2 系統の失敗を統合する:
+          (1) on_file から伝播した例外 (crawler の try/except が捕捉)
+          (2) kernel が record_failure() で明示的に記録した失敗
+              (on_file / on_node 内で例外を握りつぶした場合)
+        """
+        failures: List[dict] = []
+        for entry in self.__log:
+            if entry.get("result") == "error":
+                failures.append({
+                    "file": entry.get("file"),
+                    "detail": entry.get("detail", ""),
+                    "kernel": entry.get("kernel", ""),
+                })
+        for k in self.kernels:
+            for path, msg in getattr(k, "failures", []):
+                failures.append({
+                    "file": str(path),
+                    "detail": msg,
+                    "kernel": k.__class__.__name__,
+                })
+        return failures
+
+    def _report_summary(self) -> None:
+        failures = self.collect_failures()
+        self._last_failures = failures
+        total = len(self.__log)
+        print()
+        print("=" * 70)
+        if not failures:
+            print("[crawl summary] %d file(s) processed, no errors" % total)
+        else:
+            print("[crawl summary] %d file(s) failed:" % len(failures))
+            for f in failures:
+                kernel = (" [%s]" % f["kernel"]) if f["kernel"] else ""
+                print("  - %s%s  —  %s" % (f["file"], kernel, f["detail"]))
+        print("=" * 70)
+
+    @property
+    def has_failures(self) -> bool:
+        """直近の crawl_from_nodes() で失敗ファイルがあったか。"""
+        return len(getattr(self, "_last_failures", [])) > 0
 
     def _walk_node(self, node: HierNode) -> None:
         # 各 Kernel に対して node フック & file フック
