@@ -1,14 +1,16 @@
-"""Better Stack (Logs) への非同期ログ送信 (自己完結・標準ライブラリのみ)。
+"""Better Stack (Logs) への非同期ログ送信 (ylab 共通・標準ライブラリのみ)。
 
-ylab 共通の Better Stack ロギング基盤。canonical は ylab-common-scripts
-(``ylabcommon/utils/betterstack_log.py``) に置き、ylabcommon を依存に取り込めない
-軽量アプリ (behavior-controller / slice-controller 等) へは本ファイルを同一内容で
-vendor する。両者が食い違わないよう、変更は canonical 側で行い各リポジトリへ反映する。
+ylab 全リポジトリで共有する Better Stack ロギング基盤。解析パイプライン
+(slice-analysis / behavior-analysis) と実験制御アプリ (behavior-controller /
+slice-controller) が本モジュールを直接 import して利用する。
+
+外部依存を持たず標準ライブラリ (urllib) のみで送信するため、この 1 モジュールを
+import するだけなら bioio/dask 等の重い依存は読み込まれず、軽量アプリでも
+ylabcommon を依存に加えて安全に利用できる。
 
 - ``BETTER_STACK_TOKEN`` が環境変数/.env に無ければ送信をスキップする
   (ローカル実行や CI を Better Stack 未設定でも壊さないため)。
 - 送信はデーモンスレッド + キュー経由で非同期に行い、呼び出し元をブロックしない。
-- ``requests`` 等の外部依存を持たず標準ライブラリ (urllib) のみで送信する。
 - ``init_logging()`` で .env を読み込みトークンを解決する。
 - ``install_excepthook()`` で未捕捉例外を自動送信する (GUI/常駐アプリのクラッシュ検知)。
 - ``log_context()`` で with ブロック内のログへ任意のフィールドを自動付与できる。
