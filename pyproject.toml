@@ -3,12 +3,11 @@ name = "ylabcommon"
 version = "0.3.0"
 description = "Integrated pipeline system for MRI data analysis - Automated preprocessing, analysis tasks (DSI/VBM/FreeSurfer), and model training"
 readme = "README.md"
-#requires-python = "===3.12.9"
-requires-python = ">=3.10"
+requires-python = "===3.12.9"
 dependencies = [
     "h5py>=3.15.1",
     "matplotlib>=3.7.0",
-    "pandas>=2.3.3,!=3.0.4", # 3.0.4 は access violation を起こすため除外。ライブラリは 3.10 も対象なので厳密固定せず、アプリ側で ==3.0.3 に固定する
+    "pandas==3.0.3", # 3.0.4 は access violation を起こすため 3.0.3 に固定(修正版を待つ)
     "pydantic>=2.0.0",
     "pyyaml>=6.0.3",
     #"scipy>=1.16.3",
