@@ -40,6 +40,17 @@ class VideoParam(BaseModel):
     # arena_mm_per_pix_from_individual: Optional[bool] = False
     roi: Optional[Dict[str, List[RoiItem]]] = {}
     start_frame: Optional[int] = 0
+    # Recording fps used ONLY to synthesise an evenly-spaced time axis when NO
+    # *timestamp.npy exists at all (the fix_prj_video-timestamp.py salvage path). When
+    # timestamps exist they are the source of truth, and cv2's reported fps is unreliable
+    # for the custom recorder.
+    #
+    # This is NOT a project-wide constant: the recording fps can differ between
+    # experiments (and problem data with inconsistencies is exactly where salvage runs),
+    # so set it PER INDIVIDUAL in the day's param_individual.json (video_param.salvage_fps)
+    # rather than in the shared project config. Default None -> the salvage script falls
+    # back to its documented default with a warning.
+    salvage_fps: Optional[float] = None
 
 
 DLC_MODEL_VERSIONs = [2020, 2025, 2026]
@@ -339,7 +350,7 @@ class BehaviorParam(BaseModel):
 
         # overwriteするscopeは決めておく
         base=self.model_dump()
-        for k in ["arena_box","roi","start_frame"]:
+        for k in ["arena_box","roi","start_frame","salvage_fps"]:
             if k in individual_param["video_param"].keys():
                 base["video_param"][k]=individual_param["video_param"][k]
 
@@ -357,6 +368,7 @@ class BehaviorParam(BaseModel):
                     "arena_box": self.video_param.arena_box,
                     "roi": self.video_param.roi,
                     "start_frame": self.video_param.start_frame,
+                    "salvage_fps": self.video_param.salvage_fps,
                 },
             }, f, indent=4)
 
