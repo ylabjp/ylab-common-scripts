@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Union, Any
 from typing import List, Literal
-from pydantic import BaseModel, Field,ConfigDict
+from pydantic import BaseModel, Field,ConfigDict, field_validator
 from pathlib import Path
 import json
 import os
@@ -376,8 +376,20 @@ class VideoInfo(BaseModel):
     # 解析済みのビデオファイルパスのリスト
     raw_video_list: List[str]
     
-    # 解析ステータス（"done" や "pending" など、特定の文字列のみ許可する場合）
-    analysis_status: Optional[Literal["done", "pending", "error","analyzing","fail"]] = ""
+    # 解析ステータス（"done" や "pending" など、特定の文字列のみ許可する）
+    # 未設定は "pending" に正規化する。実データには "" / null の未設定表現が混在しており
+    # (旧既定値が "" だったため。raw2prj.py が明示的に "pending" を渡す回避策を入れているのも同じ理由)、
+    # そのまま読むと Literal に無い "" で ValidationError になっていた。
+    # 受理はしつつ、以降のコードが分岐する値を1つに揃えるため読込時に pending へ寄せる。
+    analysis_status: Optional[Literal["done", "pending", "error", "analyzing", "fail"]] = "pending"
+
+    @field_validator("analysis_status", mode="before")
+    @classmethod
+    def _unset_to_pending(cls, v):
+        """未設定 ("" / null) を "pending" に正規化する。"""
+        if v is None or v == "":
+            return "pending"
+        return v
 
 
     # DLCの設定ファイルパス（実際にファイルが存在するかチェックしたい場合は FilePath 型も使えます）
