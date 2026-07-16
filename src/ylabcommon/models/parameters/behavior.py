@@ -203,7 +203,11 @@ class PreprocessingParam(BaseModel):
 
 class TrialDiv(BaseModel):
     div_num: List[int]
-    task_types: List[str]
+    # DEPRECATED (2026-07): task_type単位の絞り込みは Event 指定時 (EventConfig.task_types) で
+    # 行う設計に統一した。集計時フィルタ (apply_trial_div の task_types 分岐) は削除済みのため、
+    # この項目はもう読まれない。後方互換で既存configの `task_types: []` を受理するために残すだけ。
+    # 新規configには書かないこと。
+    task_types: Optional[List[str]] = None
 
 
 class GroupAnalysisItemParam(BaseModel):
@@ -226,8 +230,13 @@ class AggregationParamItem(BaseModel):
     '''
     target: Optional[str] = ""      # TODO videoとccで異なる。統合する。
     targets:Optional[List[str]] = []
+    # DEPRECATED (2026-07): 旧 aggregation_cc 用。現在どのコードからも参照されない。
     task_type: Optional[str]=Field(default=None,alias="type")         # TODO videoとccで異なる。統合する。
     target_type: Optional[str]=""
+    # DEPRECATED (2026-07): 旧 aggregation_cc[name].task_types。task_type単位のイベント絞り込みは
+    # Event 指定 (event_target[name].task_types) へ移行済み。generate_cc_timeseries の
+    # aggregation_cc ループは targets/target_type のみを参照し、この項目は読まれない。
+    # 詳細と移行例は behavior-analysis/docs/analysis-spec.md「task_type の指定」節を参照。
     task_types: Optional[List[str]] = []
     range: Optional[List[int]] = None
     bin: Optional[int] = None
