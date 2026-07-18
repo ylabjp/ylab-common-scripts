@@ -202,7 +202,16 @@ class PreprocessingParam(BaseModel):
         return pd.Timedelta(seconds=time_bin_in_s)
 
 class TrialDiv(BaseModel):
-    div_num: List[int]
+    """
+    1 day / 1 session の trial をビン分割して tdiv 列を作り、day/session をさらに
+    tdiv 単位に分けて時系列表示するための設定 (models/aggregation.py::apply_trial_div)。
+
+    div_num:
+        int      -> 各 day/session の観測 trial 範囲を div_num 等分する (例: 3 で前半/中盤/後半)。
+        list[int]-> 明示的な trial 番号の境界 (bin edges)。例 [10, 13, 16, 19] は
+                    trials 10-13 / 13-16 / 16-19 の3ビン。境界の外側の trial は除外される。
+    """
+    div_num: Union[int, List[int]]
     # DEPRECATED (2026-07): task_type単位の絞り込みは Event 指定時 (EventConfig.task_types) で
     # 行う設計に統一した。集計時フィルタ (apply_trial_div の task_types 分岐) は削除済みのため、
     # この項目はもう読まれない。後方互換で既存configの `task_types: []` を受理するために残すだけ。
