@@ -29,6 +29,7 @@ __all__ = [
     "CCConfig",
     "PlanDay",
     "PlanMouse",
+    "ExperimentPeriod",
     "ExperimentPlan",
     "ScheduledConfig",
     "load_plan",
@@ -108,8 +109,8 @@ class PlanMouse(BaseModel):
     """マウス 1 個体分の名簿と、日ごとの実験台(operant chamber)割当。
 
     ``bench`` は day ラベル -> チャンバー名 (例 ``{"day01": "B10"}``) の辞書。
-    体重や start 時刻などの当日測定値は本モデルの必須項目には含めず、必要に応じて
-    ``extra`` に自由に保持する(スキーマ拡張時の後方互換のため許容)。
+    ``weight`` は day ラベル -> その日の体重 g (例 ``{"day01": 23.4}``) の辞書。
+    その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -120,13 +121,37 @@ class PlanMouse(BaseModel):
     sex: Optional[str] = None
     mouse_id: Optional[str] = None
     bench: Dict[str, str] = Field(default_factory=dict)
+    weight: Dict[str, float] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
-class ExperimentPlan(BaseModel):
-    """1 コホート(1 プロトコル実施)分の実験計画。
+class ExperimentPeriod(BaseModel):
+    """1 つの実験期間(Period)。1 つの計画ファイルに複数持てる。
 
-    controller-plan 以下の 1 つの YAML ファイルに対応する。
+    各 Period は独自の ``days``(日程)と ``mice``(名簿=実験台+体重)を持つ。
+    ``daily_time`` / ``cc_config`` を省略すると :class:`ExperimentPlan` 上位の
+    既定値が使われる。
+    """
+
+    name: str = ""
+    period: Optional[Period] = None
+    daily_time: Optional[DailyTime] = None
+    cc_config: Optional[CCConfig] = None
+    days: List[PlanDay] = Field(default_factory=list)
+    mice: List[PlanMouse] = Field(default_factory=list)
+
+    @property
+    def day_labels(self) -> List[str]:
+        return [d.label for d in self.days]
+
+
+class ExperimentPlan(BaseModel):
+    """1 プロトコル分の実験計画。1 ファイル = 複数の実験期間(Period)。
+
+    controller-expdata 以下の 1 つの YAML ファイルに対応する。``periods`` に
+    複数の :class:`ExperimentPeriod` を並べられる。``periods`` を持たない
+    (旧形式の) ファイルは、上位の ``period`` / ``days`` / ``mice`` を単一 Period
+    として後方互換で読み込む。
     """
 
     protocol: str = ""
@@ -135,6 +160,7 @@ class ExperimentPlan(BaseModel):
     period: Optional[Period] = None
     daily_time: Optional[DailyTime] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
+    periods: List[ExperimentPeriod] = Field(default_factory=list)
     days: List[PlanDay] = Field(default_factory=list)
     mice: List[PlanMouse] = Field(default_factory=list)
 
@@ -145,6 +171,28 @@ class ExperimentPlan(BaseModel):
     def resolve_photometry_param(self, day: PlanDay) -> Optional[str]:
         """day 個別指定があればそれを、無ければ cc_config の既定値を返す。"""
         return day.photometry_param or self.cc_config.photometry_param
+
+    def effective_periods(self) -> List["ExperimentPeriod"]:
+        """有効な Period リストを返す。
+
+        ``periods`` があればそれを返す。無ければ後方互換のため、上位の
+        ``period`` / ``days`` / ``mice`` から単一 Period を合成して返す
+        (どれも空なら空リスト)。
+        """
+        if self.periods:
+            return self.periods
+        if self.period is not None or self.days or self.mice:
+            return [
+                ExperimentPeriod(
+                    name="",
+                    period=self.period,
+                    daily_time=self.daily_time,
+                    cc_config=self.cc_config,
+                    days=self.days,
+                    mice=self.mice,
+                )
+            ]
+        return []
 
 
 class ScheduledConfig(BaseModel):
@@ -161,6 +209,7 @@ class ScheduledConfig(BaseModel):
     phase: str = ""
     protocol: str = ""
     plan_name: str = ""  # 由来した YAML ファイル名 (拡張子なし)
+    period_name: str = ""  # 由来した Period 名 (複数 Period のとき)
     config_dir: str = ""
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
@@ -169,9 +218,10 @@ class ScheduledConfig(BaseModel):
         """選択ダイアログ 1 行分の日本語表示文字列。"""
         task = self.task_param or "(task未指定)"
         phase = ("[" + self.phase + "] ") if self.phase else ""
+        origin = self.plan_name + (f":{self.period_name}" if self.period_name else "")
         return (
             f"【{self.rel_label_ja} {self.date.isoformat()}】 "
-            f"{phase}{self.config_dir} / {task}  «{self.plan_name}»"
+            f"{phase}{self.config_dir} / {task}  «{origin}»"
         )
 
 
@@ -184,10 +234,11 @@ def load_plan(path: Union[str, Path]) -> ExperimentPlan:
 
 
 def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
-    """実験計画を YAML として書き出す(None 項目は省略して読みやすく)。"""
+    """実験計画を YAML として書き出す(既定値/None 項目は省略して読みやすく)。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = plan.model_dump(mode="python", exclude_none=True)
+    # exclude_defaults: 空の periods / days / mice や未設定項目を書かず簡潔に保つ。
+    data = plan.model_dump(mode="python", exclude_defaults=True)
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(
             data,
@@ -249,28 +300,32 @@ def find_scheduled_configs(
     found: List[ScheduledConfig] = []
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
-        for day in plan.days:
-            if day.date is None:
-                continue
-            offset = (day.date - ref_date).days
-            if abs(offset) > window_days:
-                continue
-            rel_key, rel_label_ja = _rel_labels(offset)
-            found.append(
-                ScheduledConfig(
-                    offset=offset,
-                    rel_key=rel_key,
-                    rel_label_ja=rel_label_ja,
-                    date=day.date,
-                    day_label=day.label,
-                    phase=day.phase,
-                    protocol=plan.protocol,
-                    plan_name=plan_name,
-                    config_dir=plan.cc_config.config_dir,
-                    task_param=day.task_param,
-                    photometry_param=plan.resolve_photometry_param(day),
+        for period in plan.effective_periods():
+            cc = period.cc_config or plan.cc_config
+            for day in period.days:
+                if day.date is None:
+                    continue
+                offset = (day.date - ref_date).days
+                if abs(offset) > window_days:
+                    continue
+                rel_key, rel_label_ja = _rel_labels(offset)
+                found.append(
+                    ScheduledConfig(
+                        offset=offset,
+                        rel_key=rel_key,
+                        rel_label_ja=rel_label_ja,
+                        date=day.date,
+                        day_label=day.label,
+                        phase=day.phase,
+                        protocol=plan.protocol,
+                        plan_name=plan_name,
+                        period_name=period.name,
+                        config_dir=cc.config_dir if cc else "",
+                        task_param=day.task_param,
+                        photometry_param=day.photometry_param
+                        or (cc.photometry_param if cc else None),
+                    )
                 )
-            )
 
-    found.sort(key=lambda s: (s.offset, s.protocol, s.day_label))
+    found.sort(key=lambda s: (s.offset, s.protocol, s.period_name, s.day_label))
     return found
