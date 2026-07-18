@@ -155,10 +155,20 @@ class ExperimentPlan(BaseModel):
     それぞれ ``start`` と名簿を持ち、具体日付は start + offset で決まる。
     ``within_factors`` は within-subject 因子の候補リスト。Per-day で各個体・各日の
     :attr:`PlanMouse.within_factor` を選ぶときの選択肢になる。
+
+    給水(絶水)管理:
+    - ``water_restriction_ratio``: 目標体重の割合 (例 0.85 = 予測自由摂取体重の 85%)。
+      YAML(=プロトコル)単位で決める。
+    - ``daily_evaporation_ml``: 1 日あたりの水分蒸発量 (ml)。給水量の算出に加味する。
+    予測自由摂取体重は settings.yaml の標準体重に対し、day-2 の実測体重
+    (:attr:`PlanMouse.actual_bw_day_2` / :attr:`PlanMouse.age_day_2`) の比を掛けて
+    求める(算出は GUI 側。標準体重データが behavior-config にあるため)。
     """
 
     protocol: str = ""
     within_factors: List[str] = Field(default_factory=list)
+    water_restriction_ratio: Optional[float] = None
+    daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
     days: List[PlanDay] = Field(default_factory=list)
     periods: List[ExperimentPeriod] = Field(default_factory=list)
