@@ -35,6 +35,8 @@ def _sample_plan() -> ExperimentPlan:
     return ExperimentPlan(
         protocol="OFL_Holmes_ver251004",
         within_factors=["paired", "unpaired"],
+        water_restriction_ratio=0.85,
+        daily_evaporation_ml=1.2,
         cc_config=CCConfig(config_dir="config_OFL_2025", photometry_param="20Hz_470_405nm.json"),
         days=[
             PlanDay(label="day01", offset=0, phase="exposure", task_param="OAFC_shock_exposure.json"),
@@ -71,6 +73,8 @@ def test_round_trip():
         loaded = load_plan(p)
     assert loaded.protocol == "OFL_Holmes_ver251004"
     assert loaded.within_factors == ["paired", "unpaired"]
+    assert loaded.water_restriction_ratio == 0.85
+    assert loaded.daily_evaporation_ml == 1.2
     assert loaded.cc_config.config_dir == "config_OFL_2025"
     assert len(loaded.days) == 3
     assert loaded.days[1].offset == 1
