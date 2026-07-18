@@ -20,13 +20,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "PLAN_DIR_NAME",
     "PLAN_FILE_GLOB",
     "Period",
-    "DailyTime",
     "CCConfig",
     "PlanDay",
     "PlanMouse",
@@ -56,23 +55,6 @@ class Period(BaseModel):
 
     start: Optional[DateType] = None
     end: Optional[DateType] = None
-
-
-class DailyTime(BaseModel):
-    """1 日の実施時間帯 (例 08:00 ~ 13:30)。文字列 "HH:MM" で保持。"""
-
-    start: Optional[str] = None
-    end: Optional[str] = None
-
-    @field_validator("start", "end", mode="before")
-    @classmethod
-    def _coerce_time(cls, v):
-        # YAML 1.1 は "13:30" のような未クォートの時刻を 60 進数(13*60+30=810)の
-        # int として読み込んでしまう。save_plan は曖昧値をクォートするので通常は
-        # 文字列で来るが、手書きの未クォート値でも壊れないよう HH:MM に戻す。
-        if isinstance(v, int):
-            return f"{v // 60}:{v % 60:02d}"
-        return v
 
 
 class CCConfig(BaseModel):
@@ -119,6 +101,9 @@ class PlanMouse(BaseModel):
     ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
     day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
     (標準と同じ日は入れない)。
+    ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
+    辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
+    から選ぶ。標準は無く、指定した日だけ入れる。
     その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
     """
 
@@ -132,6 +117,7 @@ class PlanMouse(BaseModel):
     bench: Dict[str, str] = Field(default_factory=dict)
     weight: Dict[str, float] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)
+    within_factor: Dict[str, str] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
@@ -153,12 +139,12 @@ class ExperimentPlan(BaseModel):
 
     ``days`` は全 Period 共通の Schedule(各日は ``offset`` を持つ)。``periods`` は
     それぞれ ``start`` と名簿を持ち、具体日付は start + offset で決まる。
+    ``within_factors`` は within-subject 因子の候補リスト。Per-day で各個体・各日の
+    :attr:`PlanMouse.within_factor` を選ぶときの選択肢になる。
     """
 
     protocol: str = ""
-    schedule: str = ""
-    mouse_list: str = ""
-    daily_time: Optional[DailyTime] = None
+    within_factors: List[str] = Field(default_factory=list)
     cc_config: CCConfig = Field(default_factory=CCConfig)
     days: List[PlanDay] = Field(default_factory=list)
     periods: List[ExperimentPeriod] = Field(default_factory=list)

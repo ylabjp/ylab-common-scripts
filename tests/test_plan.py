@@ -18,7 +18,6 @@ if _SRC not in sys.path:
 
 from ylabcommon.models.plan import (  # noqa: E402
     CCConfig,
-    DailyTime,
     ExperimentPeriod,
     ExperimentPlan,
     Period,
@@ -35,9 +34,7 @@ def _sample_plan() -> ExperimentPlan:
     """新形式: Schedule は Plan 直下(offset)、Period は start + 名簿。"""
     return ExperimentPlan(
         protocol="OFL_Holmes_ver251004",
-        schedule="Schedule_2026",
-        mouse_list="Mouselist_PFCBehavior2025",
-        daily_time=DailyTime(start="08:00", end="13:30"),
+        within_factors=["paired", "unpaired"],
         cc_config=CCConfig(config_dir="config_OFL_2025", photometry_param="20Hz_470_405nm.json"),
         days=[
             PlanDay(label="day01", offset=0, phase="exposure", task_param="OAFC_shock_exposure.json"),
@@ -53,7 +50,8 @@ def _sample_plan() -> ExperimentPlan:
                     PlanMouse(prj="prj27-3-5", mouse_id="m1", sex="m",
                               bench={"day01": "B10", "day02": "B10", "day03": "B10"},
                               weight={"day01": 23.4},
-                              task_param={"day02": "special.json"}),
+                              task_param={"day02": "special.json"},
+                              within_factor={"day01": "paired"}),
                     PlanMouse(prj="prj27-3-5", mouse_id="m2", sex="f",
                               bench={"day01": "B10", "day02": "B12", "day03": "B12"}),
                 ],
@@ -69,7 +67,7 @@ def test_round_trip():
         save_plan(plan, p)
         loaded = load_plan(p)
     assert loaded.protocol == "OFL_Holmes_ver251004"
-    assert loaded.daily_time.end == "13:30"
+    assert loaded.within_factors == ["paired", "unpaired"]
     assert loaded.cc_config.config_dir == "config_OFL_2025"
     assert len(loaded.days) == 3
     assert loaded.days[1].offset == 1
@@ -82,6 +80,7 @@ def test_round_trip():
     assert p0.mice[0].bench["day02"] == "B10"
     assert p0.mice[0].weight["day01"] == 23.4
     assert p0.mice[0].task_param["day02"] == "special.json"
+    assert p0.mice[0].within_factor["day01"] == "paired"
 
 
 def test_none_and_defaults_omitted_in_yaml():
@@ -95,6 +94,10 @@ def test_none_and_defaults_omitted_in_yaml():
     assert "date:" not in text           # 具体日付は持たない(offset のみ)
     assert "\ndays:" in text and "\nperiods:" in text
     assert "\nmice:" not in text         # トップレベル mice は無い(period 内のみ)
+    assert "\nwithin_factors:" in text   # Plan 直下の候補リスト
+    assert "daily_time:" not in text     # 廃止済みフィールドは書き出さない
+    assert "mouse_list:" not in text
+    assert "\nschedule:" not in text
 
 
 def test_offset_date_resolution():
