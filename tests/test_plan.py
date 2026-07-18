@@ -54,7 +54,7 @@ def _sample_plan() -> ExperimentPlan:
                               birth_date="251201", termination="260430", fail=True,
                               age_day_2=54, actual_bw_day_2=22.1,
                               bench={"day01": "B10", "day02": "B10", "day03": "B10"},
-                              weight={"day01": 23.4},
+                              bw_before={"day01": 23.4}, bw_after={"day01": 24.1},
                               task_param={"day02": "special.json"},
                               within_factor={"day01": "paired"}),
                     PlanMouse(prj="prj27-3-5", mouse_id="m2", sex="f",
@@ -85,7 +85,8 @@ def test_round_trip():
     assert p0.period.start == date(2026, 4, 26)
     assert p0.mice[0].sex == "m"
     assert p0.mice[0].bench["day02"] == "B10"
-    assert p0.mice[0].weight["day01"] == 23.4
+    assert p0.mice[0].bw_before["day01"] == 23.4
+    assert p0.mice[0].bw_after["day01"] == 24.1
     assert p0.mice[0].task_param["day02"] == "special.json"
     assert p0.mice[0].within_factor["day01"] == "paired"
     # basic-info fields round-trip
