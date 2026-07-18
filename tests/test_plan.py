@@ -18,6 +18,7 @@ if _SRC not in sys.path:
 
 from ylabcommon.models.plan import (  # noqa: E402
     CCConfig,
+    ExperimentPeriod,
     ExperimentPlan,
     PlanDay,
     PlanMouse,
@@ -161,6 +162,118 @@ def test_multiple_plans_aggregated():
     assert len(today) == 2
     protocols = {s.protocol for s in today}
     assert protocols == {"OFL_Holmes_ver251004", "AnotherProtocol"}
+
+
+def _multi_period_plan() -> ExperimentPlan:
+    """複数 Period・日ごと体重つきの計画(新形式)。"""
+    return ExperimentPlan(
+        protocol="OFL_Holmes_ver251004",
+        mouse_list="Mouselist_PFCBehavior2025",
+        cc_config=CCConfig(config_dir="config_OFL_2025", photometry_param="20Hz_470_405nm.json"),
+        daily_time=DailyTime(start="08:00", end="13:30"),
+        periods=[
+            ExperimentPeriod(
+                name="cohort1",
+                period=Period(start=date(2026, 4, 26), end=date(2026, 4, 27)),
+                days=[
+                    PlanDay(label="day01", date=date(2026, 4, 26), phase="exposure",
+                            task_param="OAFC_shock_exposure.json"),
+                    PlanDay(label="day02", date=date(2026, 4, 27), phase="conditioning",
+                            task_param="cond.json"),
+                ],
+                mice=[
+                    PlanMouse(prj="prj27-3-5", mouse_id="m1",
+                              bench={"day01": "B10", "day02": "B12"},
+                              weight={"day01": 23.4, "day02": 23.1}),
+                ],
+            ),
+            ExperimentPeriod(
+                name="cohort2",
+                period=Period(start=date(2026, 6, 1), end=date(2026, 6, 1)),
+                cc_config=CCConfig(config_dir="config_OFL_2025", photometry_param="no_stim.json"),
+                days=[
+                    PlanDay(label="day01", date=date(2026, 6, 1), phase="test",
+                            task_param="test.json"),
+                ],
+                mice=[
+                    PlanMouse(prj="prj27-3-9", mouse_id="m9",
+                              bench={"day01": "B10"}, weight={"day01": 25.0}),
+                ],
+            ),
+        ],
+    )
+
+
+def test_multi_period_round_trip():
+    plan = _multi_period_plan()
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "multi.yaml")
+        save_plan(plan, p)
+        text = open(p, encoding="utf-8").read()
+        loaded = load_plan(p)
+    assert "periods:" in text
+    # 新形式では旧トップレベルの days/mice/period は書かれない
+    assert "\ndays:" not in text and "\nmice:" not in text and "\nperiod:" not in text
+    assert len(loaded.periods) == 2
+    assert loaded.periods[0].name == "cohort1"
+    assert loaded.periods[0].days[1].task_param == "cond.json"
+    assert loaded.periods[0].mice[0].bench["day02"] == "B12"
+    assert loaded.periods[0].mice[0].weight["day01"] == 23.4
+    # per-period cc_config の上書きが保持される
+    assert loaded.periods[1].cc_config.photometry_param == "no_stim.json"
+
+
+def test_legacy_plan_omits_periods_key():
+    # 旧形式(単一 Period)の保存には periods キーが出ない
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "legacy.yaml")
+        save_plan(_sample_plan(), p)
+        text = open(p, encoding="utf-8").read()
+    assert "periods:" not in text
+    assert "\ndays:" in text  # 旧トップレベル days は残る
+
+
+def test_weight_round_trip():
+    plan = _sample_plan()
+    plan.mice[0].weight = {"day01": 22.5, "day03": 22.9}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "w.yaml")
+        save_plan(plan, p)
+        loaded = load_plan(p)
+    assert loaded.mice[0].weight["day01"] == 22.5
+    assert loaded.mice[0].weight["day03"] == 22.9
+
+
+def test_backward_compat_effective_periods():
+    # 旧形式(トップレベル period/days/mice)-> 単一 Period に合成
+    eff = _sample_plan().effective_periods()
+    assert len(eff) == 1
+    assert eff[0].name == ""
+    assert len(eff[0].days) == 3
+    assert eff[0].mice[1].bench["day02"] == "B12"
+    # periods 明示時はそのまま返す
+    assert len(_multi_period_plan().effective_periods()) == 2
+    # 完全に空の計画 -> 空
+    assert ExperimentPlan().effective_periods() == []
+
+
+def test_find_scheduled_across_periods():
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(_multi_period_plan(), os.path.join(d, "multi.yaml"))
+        # cohort1 の day02 (2026-04-27) を基準日 -> 昨日 day01 / 今日 day02
+        found = find_scheduled_configs(d, ref_date=date(2026, 4, 27))
+    assert {s.offset for s in found} == {-1, 0}
+    today = [s for s in found if s.offset == 0][0]
+    assert today.period_name == "cohort1"
+    assert today.task_param == "cond.json"
+    assert today.config_dir == "config_OFL_2025"
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(_multi_period_plan(), os.path.join(d, "multi.yaml"))
+        found2 = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
+    assert len(found2) == 1
+    assert found2[0].period_name == "cohort2"
+    # per-period cc_config 上書きの photometry が反映
+    assert found2[0].photometry_param == "no_stim.json"
 
 
 def _run_standalone() -> int:
