@@ -110,6 +110,9 @@ class PlanMouse(BaseModel):
 
     ``bench`` は day ラベル -> チャンバー名 (例 ``{"day01": "B10"}``) の辞書。
     ``weight`` は day ラベル -> その日の体重 g (例 ``{"day01": 23.4}``) の辞書。
+    ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
+    day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
+    (標準と同じ日は入れない)。
     その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
     """
 
@@ -122,6 +125,7 @@ class PlanMouse(BaseModel):
     mouse_id: Optional[str] = None
     bench: Dict[str, str] = Field(default_factory=dict)
     weight: Dict[str, float] = Field(default_factory=dict)
+    task_param: Dict[str, str] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
