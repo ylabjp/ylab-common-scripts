@@ -289,6 +289,39 @@ def test_find_scheduled_across_periods():
     assert found2[0].photometry_param == "no_stim.json"
 
 
+def test_shared_schedule_offset_dates():
+    # Schedule を Plan 直下(全 Period 共通)に置き、Period は start だけ持つ。
+    # 具体日付は start + offset で決まる。
+    plan = ExperimentPlan(
+        protocol="P",
+        cc_config=CCConfig(config_dir="cfg"),
+        days=[
+            PlanDay(label="day01", offset=0, task_param="a.json"),
+            PlanDay(label="day02", offset=1, task_param="b.json"),
+        ],
+        periods=[
+            ExperimentPeriod(name="c1", period=Period(start=date(2026, 4, 26))),
+            ExperimentPeriod(name="c2", period=Period(start=date(2026, 6, 1))),
+        ],
+    )
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "sched.yaml")
+        save_plan(plan, p)
+        loaded = load_plan(p)
+    # Period 自身は days を持たない -> Plan 共通 days を使う
+    assert loaded.periods[0].days == []
+    assert [dd.label for dd in loaded.effective_days_for(loaded.periods[0])] == ["day01", "day02"]
+    assert loaded.days[1].offset == 1
+    # c1: day01(4/26)=昨日, day02(4/27)=今日。 c2(6月) は範囲外
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "sched.yaml"))
+        found = find_scheduled_configs(d, ref_date=date(2026, 4, 27))
+    assert {(s.period_name, s.offset) for s in found} == {("c1", -1), ("c1", 0)}
+    today = [s for s in found if s.offset == 0][0]
+    assert today.date == date(2026, 4, 27)
+    assert today.task_param == "b.json"
+
+
 def _run_standalone() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
