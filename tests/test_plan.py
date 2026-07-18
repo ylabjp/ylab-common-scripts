@@ -244,6 +244,19 @@ def test_weight_round_trip():
     assert loaded.mice[0].weight["day03"] == 22.9
 
 
+def test_per_mouse_task_param_round_trip():
+    plan = _sample_plan()
+    # day02 だけ 2 個体目が別 task を使う(標準を上書き)
+    plan.mice[1].task_param = {"day02": "special_conditioning.json"}
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "tp.yaml")
+        save_plan(plan, p)
+        loaded = load_plan(p)
+    assert loaded.mice[1].task_param["day02"] == "special_conditioning.json"
+    # 上書きの無い個体は空のまま
+    assert loaded.mice[0].task_param == {}
+
+
 def test_backward_compat_effective_periods():
     # 旧形式(トップレベル period/days/mice)-> 単一 Period に合成
     eff = _sample_plan().effective_periods()
