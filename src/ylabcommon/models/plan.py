@@ -105,15 +105,29 @@ class PlanMouse(BaseModel):
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
     その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
+
+    個体の基礎情報:
+    - ``ear_tag``: 耳パンチ識別 (R1/L1/... の組み合わせ)。候補は settings.yaml。
+    - ``mating_id``: 交配 ID (文字列)。
+    - ``birth_date`` / ``termination``: 生年月日 / 終了日 (共に ``YYMMDD`` 文字列)。
+      日齢は保存せず、GUI 側で termination(無ければ当日) - birth_date として算出する。
+    - ``fail``: 実験失敗フラグ。
+    - ``age_day_2`` / ``actual_bw_day_2``: day-2 時点の日齢 / 実測体重 (g)。
     """
 
     model_config = ConfigDict(extra="allow")
 
     prj: Optional[str] = None
     cond: Optional[str] = None
-    identification: Optional[str] = None
+    ear_tag: Optional[str] = None
     sex: Optional[str] = None
     mouse_id: Optional[str] = None
+    mating_id: Optional[str] = None
+    birth_date: Optional[str] = None       # YYMMDD
+    termination: Optional[str] = None      # YYMMDD
+    fail: bool = False
+    age_day_2: Optional[int] = None
+    actual_bw_day_2: Optional[float] = None
     bench: Dict[str, str] = Field(default_factory=dict)
     weight: Dict[str, float] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)

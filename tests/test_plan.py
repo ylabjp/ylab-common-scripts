@@ -48,6 +48,9 @@ def _sample_plan() -> ExperimentPlan:
                 period=Period(start=date(2026, 4, 26), end=date(2026, 5, 5)),
                 mice=[
                     PlanMouse(prj="prj27-3-5", mouse_id="m1", sex="m",
+                              ear_tag="R1L2", mating_id="mat-7",
+                              birth_date="251201", termination="260430", fail=True,
+                              age_day_2=54, actual_bw_day_2=22.1,
                               bench={"day01": "B10", "day02": "B10", "day03": "B10"},
                               weight={"day01": 23.4},
                               task_param={"day02": "special.json"},
@@ -81,6 +84,19 @@ def test_round_trip():
     assert p0.mice[0].weight["day01"] == 23.4
     assert p0.mice[0].task_param["day02"] == "special.json"
     assert p0.mice[0].within_factor["day01"] == "paired"
+    # basic-info fields round-trip
+    assert p0.mice[0].ear_tag == "R1L2"
+    assert p0.mice[0].mating_id == "mat-7"
+    assert p0.mice[0].birth_date == "251201"
+    assert p0.mice[0].termination == "260430"
+    assert p0.mice[0].fail is True
+    assert p0.mice[0].age_day_2 == 54
+    assert p0.mice[0].actual_bw_day_2 == 22.1
+    # age is derived, never a stored field
+    assert not hasattr(p0.mice[0], "age") or "age" not in p0.mice[0].model_fields
+    # defaults stay omitted for the second mouse
+    assert p0.mice[1].fail is False
+    assert p0.mice[1].ear_tag is None
 
 
 def test_none_and_defaults_omitted_in_yaml():
@@ -91,7 +107,7 @@ def test_none_and_defaults_omitted_in_yaml():
         text = open(p, encoding="utf-8").read()
     assert "null" not in text            # exclude_defaults + exclude_none
     assert "\\u" not in text             # 日本語などがエスケープされない(今回は無いが不変条件)
-    assert "date:" not in text           # 具体日付は持たない(offset のみ)
+    assert "\n  date:" not in text       # schedule の各 day は具体日付を持たない(offset のみ)
     assert "\ndays:" in text and "\nperiods:" in text
     assert "\nmice:" not in text         # トップレベル mice は無い(period 内のみ)
     assert "\nwithin_factors:" in text   # Plan 直下の候補リスト
