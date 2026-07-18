@@ -99,6 +99,8 @@ class PlanMouse(BaseModel):
     ``bench`` は day ラベル -> チャンバー名 (例 ``{"day01": "B10"}``) の辞書。
     ``bw_before`` / ``bw_after`` は day ラベル -> 給水前 / 給水後の体重 g の辞書
     (例 ``{"day01": 23.4}``)。給水管理では bw_before を当日体重として用いる。
+    ``water_adjust`` は day ラベル -> その日に実際に与えた水分量 ml の辞書
+    (実績値。BodyWeight.Water_adjust 由来)。GUI が算出する推奨給水量とは別に保持する。
     標準体重 std_bw は保存せず日齢と settings.yaml から算出する。
     ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
     day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
@@ -133,6 +135,7 @@ class PlanMouse(BaseModel):
     bench: Dict[str, str] = Field(default_factory=dict)
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
+    water_adjust: Dict[str, float] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
     note: Optional[str] = None
