@@ -91,14 +91,12 @@ class CCConfig(BaseModel):
 class PlanDay(BaseModel):
     """スケジュール 1 日分。CC 参照の中核。
 
-    Schedule は Period 非依存の上位概念(:class:`ExperimentPlan` の ``days``)なので、
-    実施日は原則 ``offset``(Period の開始日からの日数)で持ち、具体的な日付は
-    Period.Start + offset で算出する。``date`` は旧形式(具体日付を直接持つ)や
-    個別上書き用に残している。日付解決は ``date`` 優先、無ければ Start+offset。
+    Schedule は Period 非依存の上位概念(:class:`ExperimentPlan` の ``days``)。
+    実施日は ``offset``(Period 開始日からの日数)で持ち、具体的な日付は
+    Period.start + offset で算出する(:func:`resolve_day_date`)。
 
     - ``label``: day01 のような日ラベル。マウスの実験台割当のキーにもなる。
     - ``offset``: Period 開始日からの日数 (day01=0, day02=1, ...)。
-    - ``date``: 具体日付(旧形式/上書き)。指定時は offset より優先。
     - ``phase``: exposure / conditioning / test など。
     - ``task_param``: この日の標準 task パラメータ名 (config_dir/param_files_task/ 以下)。
       個体ごとの上書きは :class:`PlanMouse` の ``task_param`` を参照。
@@ -106,8 +104,7 @@ class PlanDay(BaseModel):
     """
 
     label: str = ""
-    offset: Optional[int] = None
-    date: Optional[DateType] = None
+    offset: int = 0
     phase: str = ""
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
@@ -139,43 +136,32 @@ class PlanMouse(BaseModel):
 
 
 class ExperimentPeriod(BaseModel):
-    """1 つの実験期間(Period)。1 つの計画ファイルに複数持てる。
+    """1 つの実験期間(Period)。1 ファイルに複数持てる。
 
-    各 Period は独自の ``days``(日程)と ``mice``(名簿=実験台+体重)を持つ。
-    ``daily_time`` / ``cc_config`` を省略すると :class:`ExperimentPlan` 上位の
-    既定値が使われる。
+    ``period.start`` と ``mice``(名簿)を持つ。Schedule(日程)は Plan 直下の
+    :attr:`ExperimentPlan.days` に 1 つ置いて全 Period で共有し、具体日付は
+    start + offset で決める。
     """
 
     name: str = ""
     period: Optional[Period] = None
-    daily_time: Optional[DailyTime] = None
-    cc_config: Optional[CCConfig] = None
-    days: List[PlanDay] = Field(default_factory=list)
     mice: List[PlanMouse] = Field(default_factory=list)
-
-    @property
-    def day_labels(self) -> List[str]:
-        return [d.label for d in self.days]
 
 
 class ExperimentPlan(BaseModel):
-    """1 プロトコル分の実験計画。1 ファイル = 複数の実験期間(Period)。
+    """1 プロトコル分の実験計画。controller-expdata 以下の 1 YAML に対応。
 
-    controller-expdata 以下の 1 つの YAML ファイルに対応する。``periods`` に
-    複数の :class:`ExperimentPeriod` を並べられる。``periods`` を持たない
-    (旧形式の) ファイルは、上位の ``period`` / ``days`` / ``mice`` を単一 Period
-    として後方互換で読み込む。
+    ``days`` は全 Period 共通の Schedule(各日は ``offset`` を持つ)。``periods`` は
+    それぞれ ``start`` と名簿を持ち、具体日付は start + offset で決まる。
     """
 
     protocol: str = ""
     schedule: str = ""
     mouse_list: str = ""
-    period: Optional[Period] = None
     daily_time: Optional[DailyTime] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
-    periods: List[ExperimentPeriod] = Field(default_factory=list)
     days: List[PlanDay] = Field(default_factory=list)
-    mice: List[PlanMouse] = Field(default_factory=list)
+    periods: List[ExperimentPeriod] = Field(default_factory=list)
 
     @property
     def day_labels(self) -> List[str]:
@@ -184,37 +170,6 @@ class ExperimentPlan(BaseModel):
     def resolve_photometry_param(self, day: PlanDay) -> Optional[str]:
         """day 個別指定があればそれを、無ければ cc_config の既定値を返す。"""
         return day.photometry_param or self.cc_config.photometry_param
-
-    def effective_periods(self) -> List["ExperimentPeriod"]:
-        """有効な Period リストを返す。
-
-        ``periods`` があればそれを返す。無ければ後方互換のため、上位の
-        ``period`` / ``days`` / ``mice`` から単一 Period を合成して返す
-        (どれも空なら空リスト)。
-        """
-        if self.periods:
-            return self.periods
-        if self.period is not None or self.days or self.mice:
-            return [
-                ExperimentPeriod(
-                    name="",
-                    period=self.period,
-                    daily_time=self.daily_time,
-                    cc_config=self.cc_config,
-                    days=self.days,
-                    mice=self.mice,
-                )
-            ]
-        return []
-
-    def effective_days_for(self, period: "ExperimentPeriod") -> List[PlanDay]:
-        """その Period に適用する Schedule(日程)を返す。
-
-        Period 自身が ``days`` を持てばそれを、無ければ Plan 共通(上位)の
-        ``days`` (Schedule) を使う。新形式では Schedule は Plan 直下に 1 つ置き、
-        各 Period は ``start`` だけで具体日付を決める。
-        """
-        return period.days if period.days else self.days
 
 
 class ScheduledConfig(BaseModel):
@@ -306,17 +261,11 @@ def _rel_labels(offset: int) -> Tuple[str, str]:
 def resolve_day_date(
     period: "ExperimentPeriod", day: PlanDay
 ) -> Optional[DateType]:
-    """Period と PlanDay から具体的な日付を求める。
-
-    ``date`` があればそれを優先(旧形式/上書き)、無ければ Period.Start + ``offset``。
-    どちらも決まらなければ None。
-    """
-    if day.date is not None:
-        return day.date
+    """具体日付 = Period.start + day.offset。start 未設定なら None。"""
     start = period.period.start if period.period else None
-    if start is not None and day.offset is not None:
-        return start + timedelta(days=day.offset)
-    return None
+    if start is None:
+        return None
+    return start + timedelta(days=day.offset)
 
 
 def find_scheduled_configs(
@@ -338,9 +287,9 @@ def find_scheduled_configs(
     found: List[ScheduledConfig] = []
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
-        for period in plan.effective_periods():
-            cc = period.cc_config or plan.cc_config
-            for day in plan.effective_days_for(period):
+        cc = plan.cc_config
+        for period in plan.periods:
+            for day in plan.days:
                 d = resolve_day_date(period, day)
                 if d is None:
                     continue
@@ -359,10 +308,9 @@ def find_scheduled_configs(
                         protocol=plan.protocol,
                         plan_name=plan_name,
                         period_name=period.name,
-                        config_dir=cc.config_dir if cc else "",
+                        config_dir=cc.config_dir,
                         task_param=day.task_param,
-                        photometry_param=day.photometry_param
-                        or (cc.photometry_param if cc else None),
+                        photometry_param=day.photometry_param or cc.photometry_param,
                     )
                 )
 
