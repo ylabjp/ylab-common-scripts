@@ -108,6 +108,8 @@ class PlanMouse(BaseModel):
     ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
+    ``user`` は day ラベル -> その個体・その日の実験実施者(例 ``{"day01": "Etani"}``)
+    の辞書。候補は settings.yaml の ``users`` リスト。指定した日だけ入れる。
     その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
 
     個体の基礎情報:
@@ -138,6 +140,7 @@ class PlanMouse(BaseModel):
     water_adjust: Dict[str, float] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
+    user: Dict[str, str] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
