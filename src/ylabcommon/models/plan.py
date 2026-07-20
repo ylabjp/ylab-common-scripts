@@ -38,6 +38,8 @@ __all__ = [
     "load_plans",
     "resolve_day_date",
     "find_scheduled_configs",
+    "ScheduledMouse",
+    "find_scheduled_mice",
 ]
 
 # behavior-config 直下の予定ディレクトリ名。CC controller / GUI 双方が参照する。
@@ -104,7 +106,9 @@ class PlanMouse(BaseModel):
     標準体重 std_bw は保存せず日齢と settings.yaml から算出する。
     ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
     day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
-    (標準と同じ日は入れない)。
+    (標準と同じ日は入れない)。``photometry_param`` も同様に day ラベル -> その個体・
+    その日に使う photometry パラメータ名の辞書で、day / plan 既定を個体単位で上書き
+    したい日だけ入れる(:func:`find_scheduled_mice` が個体別 → day → plan の順で解決)。
     ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
@@ -139,6 +143,7 @@ class PlanMouse(BaseModel):
     bw_after: Dict[str, float] = Field(default_factory=dict)
     water_adjust: Dict[str, float] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)
+    photometry_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
     user: Dict[str, str] = Field(default_factory=dict)
     note: Optional[str] = None
@@ -218,6 +223,49 @@ class ScheduledConfig(BaseModel):
         return (
             f"【{self.rel_label_ja} {self.date.isoformat()}】 "
             f"{phase}{self.config_dir} / {task}  «{origin}»"
+        )
+
+
+class ScheduledMouse(BaseModel):
+    """特定基準日に予定された「個体 × 実験台(slot)」1 件。
+
+    CC controller / video recorder が「今日のマウス / Slot を選ぶ」ための情報。
+    config(``config_dir`` / ``task_param`` / ``photometry_param``)に加えて、個体メタ
+    (``prj`` / ``cond`` / ``mouse_id`` / ``within_factor`` / ``slot`` 等)を持つ。
+    ``task_param`` / ``photometry_param`` は **個体別上書き → day → plan 既定**の順で
+    解決済みの実効値。
+    """
+
+    offset: int
+    rel_key: str
+    rel_label_ja: str
+    date: DateType
+    day_label: str = ""
+    phase: str = ""
+    protocol: str = ""        # ≒ paradigm
+    plan_name: str = ""       # 由来した YAML ファイル名 (拡張子なし)
+    period_name: str = ""
+    config_dir: str = ""
+    task_param: Optional[str] = None
+    photometry_param: Optional[str] = None
+    # 個体 (mouse) メタ
+    slot: str = ""            # その day の実験台 (experimental_slot / bench)
+    mouse_id: str = ""
+    prj: str = ""
+    cond: str = ""
+    sex: str = ""
+    ear_tag: str = ""
+    within_factor: str = ""   # その day の水準
+
+    def display_label(self) -> str:
+        """選択リスト 1 行分の日本語表示文字列。"""
+        who = self.mouse_id or "(no id)"
+        slot = f"[{self.slot}] " if self.slot else ""
+        cond = f"/{self.cond}" if self.cond else ""
+        task = self.task_param or "(task未指定)"
+        return (
+            f"【{self.rel_label_ja} {self.date.isoformat()}】 {slot}{who} "
+            f"{self.prj}{cond} — {self.config_dir} / {task}"
         )
 
 
@@ -334,4 +382,69 @@ def find_scheduled_configs(
                 )
 
     found.sort(key=lambda s: (s.offset, s.protocol, s.period_name, s.day_label))
+    return found
+
+
+def find_scheduled_mice(
+    plan_dir: Union[str, Path],
+    ref_date: Optional[DateType] = None,
+    window_days: int = 1,
+) -> List[ScheduledMouse]:
+    """基準日の前後 ``window_days`` 日に予定された「個体 × 実験台」を列挙する。
+
+    :func:`find_scheduled_configs` の個体版。CC controller / video recorder が
+    「今日のマウス / Slot を選ぶ」ために使う。1 個体 × 1 予定日 = 1 :class:`ScheduledMouse`。
+    ``task_param`` / ``photometry_param`` は個体別上書き → day → plan 既定の順で解決する。
+
+    ``window_days=0`` なら当日のみ。戻り値は offset(昇順)→ slot → prj → mouse_id 順。
+    """
+    if ref_date is None:
+        ref_date = DateType.today()
+
+    found: List[ScheduledMouse] = []
+    for path, plan in load_plans(plan_dir):
+        plan_name = path.stem
+        cc = plan.cc_config
+        for period in plan.periods:
+            for day in plan.days:
+                d = resolve_day_date(period, day)
+                if d is None:
+                    continue
+                offset = (d - ref_date).days
+                if abs(offset) > window_days:
+                    continue
+                rel_key, rel_label_ja = _rel_labels(offset)
+                label = day.label
+                for m in period.mice:
+                    task = (m.task_param.get(label) if label else None) or day.task_param
+                    photo = (
+                        (m.photometry_param.get(label) if label else None)
+                        or day.photometry_param
+                        or cc.photometry_param
+                    )
+                    found.append(
+                        ScheduledMouse(
+                            offset=offset,
+                            rel_key=rel_key,
+                            rel_label_ja=rel_label_ja,
+                            date=d,
+                            day_label=label,
+                            phase=day.phase,
+                            protocol=plan.protocol,
+                            plan_name=plan_name,
+                            period_name=period.name,
+                            config_dir=cc.config_dir,
+                            task_param=task,
+                            photometry_param=photo,
+                            slot=(m.bench.get(label, "") if label else ""),
+                            mouse_id=m.mouse_id or "",
+                            prj=m.prj or "",
+                            cond=m.cond or "",
+                            sex=m.sex or "",
+                            ear_tag=m.ear_tag or "",
+                            within_factor=(m.within_factor.get(label, "") if label else ""),
+                        )
+                    )
+
+    found.sort(key=lambda s: (s.offset, s.slot, s.prj, s.mouse_id))
     return found
