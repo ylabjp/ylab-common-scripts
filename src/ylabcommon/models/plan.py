@@ -43,7 +43,9 @@ __all__ = [
 ]
 
 # behavior-config 直下の予定ディレクトリ名。CC controller / GUI 双方が参照する。
-PLAN_DIR_NAME = "controller-plan"
+# 計画ファイルは controller-expdata/<フォルダ>/ 以下(旧 controller-plan から移設)。
+# iter_plan_files は rglob で再帰探索するのでサブフォルダ配下も拾う。
+PLAN_DIR_NAME = "controller-expdata"
 # 予定ディレクトリ内で計画ファイルとして扱う glob パターン。
 PLAN_FILE_GLOB = "*.yaml"
 
