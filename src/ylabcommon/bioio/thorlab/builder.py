@@ -247,6 +247,18 @@ class ThorlabBioioBuilder:
             compression_level=self.compression_level,
         )
 
+        # Attach channel names when they line up with the image's C axis. If the
+        # stack collapsed channels into another axis (len != size_c), write without
+        # names rather than let the OME writer raise on the mismatch.
+        channel_names = None
+        names = getattr(self.image_meta, "channel_names_index", None)
+        size_c = self.image_meta.size_c
+        if names and size_c and len(names) == size_c:
+            channel_names = list(names)
+        elif names:
+            print(f"[Builder] {len(names)} channel name(s) but image has C={size_c}; "
+                  "writing without channel names.")
+
         # self.stacked_data is a lazy dask array (TCZYX). Hand it to the writer so
         # the pixels are read from disk exactly once and streamed straight into the
         # OME-TIFF (a single HDD->HDD pass). save_zarr=False: writing OME-Zarr too
@@ -254,7 +266,7 @@ class ThorlabBioioBuilder:
         writer.write(
             self.stacked_data,
             dim_order=self.image_meta.dim_order,
-            channel_names=None,
+            channel_names=channel_names,
             #physical_pixel_sizes=phys_sizes,
             physical_pixel_sizes=self.image_meta.pixel_size,
             save_zarr=False,
