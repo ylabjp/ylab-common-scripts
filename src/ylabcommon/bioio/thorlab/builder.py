@@ -46,15 +46,20 @@ class ThorlabBioioBuilder:
 
         self.stacked_data=None
         self.image_meta=None
+        self._params_cache=None
 
     # -------------------------------------------------
     # TIFF DISCOVERY + STACK
     # -------------------------------------------------
 
     def _get_params(self):
-        params_adapter = ThorlabParamsAdapter(self.xml_file)
-        get_thorlabs_params = params_adapter.extract()
-        return get_thorlabs_params
+        # Parse Experiment.xml once and reuse; the adapter was previously invoked
+        # separately in _discover_and_stack and _load_with_bioio, re-parsing the
+        # same file each time.
+        if self._params_cache is None:
+            params_adapter = ThorlabParamsAdapter(self.xml_file)
+            self._params_cache = params_adapter.extract()
+        return self._params_cache
 
     def _discover_and_stack(self):
 
@@ -74,8 +79,10 @@ class ThorlabBioioBuilder:
         total_depth_um = stacked_data.Z.max().values
         print(f"Total volume depth: {total_depth_um} microns")
 
-        data_to_process = stacked_data.data
-        return data_to_process, tiff_files
+        # Return the LAZY (dask-backed) stack. Do NOT call .data here — that would
+        # materialize the entire volume in RAM. Pixels are read exactly once,
+        # streamed to disk, at write time.
+        return stacked_data, tiff_files
 
     # -------------------------------------------------
     # BioIO Processing Reader
@@ -87,7 +94,8 @@ class ThorlabBioioBuilder:
 
         reader = BioIOReader(stacked_data)
 
-        data = reader.read()
+        # Metadata only — do NOT call reader.read()/.data here; that would decode
+        # the whole volume. All values below come from headers/params.
         params = self._get_params()
         #params = get_thorlabs_params(self.xml_file)
         dx = params.get("PixelSizeX", 1.0)
@@ -106,11 +114,12 @@ class ThorlabBioioBuilder:
         image_meta = extractor.extract()
         image_meta.dim_order = "TCZYX"
 
-        print(f"Data shape: {data.shape}")
+        print(f"Data shape: {reader.get_shape()}")
         print(f"Dimension order from reader: {reader.get_dim_order()}")
         print(f"Shape from image meta: {image_meta.shape}")
 
-        return data, image_meta, hybrid_channel_name 
+        # Pass the lazy stack straight through — still unread.
+        return stacked_data, image_meta, hybrid_channel_name
 
     # -------------------------------------------------
     # XML Validation
@@ -225,18 +234,28 @@ class ThorlabBioioBuilder:
 
         print("[Builder] Writing OME output...")
 
+        if self.stacked_data is None or self.image_meta is None:
+            print("[Builder] Nothing to write (no stacked data; dry run?). Skipping.")
+            return
+
         writer = BioIOWriter(
             output_path,
             compression=self.compression,
             compression_level=self.compression_level,
         )
 
+        # self.stacked_data is a lazy, dask-backed xarray. Hand the underlying
+        # dask array to the writer so the pixels are read from disk exactly once
+        # and streamed straight into the OME-TIFF (a single HDD->HDD pass).
+        # save_zarr=False: writing OME-Zarr too would compute the stack a second
+        # time and re-read every source TIFF.
         writer.write(
-            self.stacked_data,
+            self.stacked_data.data,
             dim_order=self.image_meta.dim_order,
             channel_names=None,
             #physical_pixel_sizes=phys_sizes,
             physical_pixel_sizes=self.image_meta.pixel_size,
+            save_zarr=False,
         )
     # -------------------------------------------------
     # Validation report

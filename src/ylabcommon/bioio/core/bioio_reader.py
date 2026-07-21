@@ -1,6 +1,12 @@
 from __future__ import annotations
+from pathlib import Path
 import numpy as np
 import warnings
+
+try:
+    import xarray as xr
+except Exception:  # pragma: no cover - xarray is a hard dep in practice
+    xr = None
 
 from bioio import BioImage, DimensionNames
 #from .bioio_metadata import BioIOMetadataExtractor
@@ -39,22 +45,37 @@ class BioIOReader:
     def __init__(self, image_data):
         """
          image_data can be:
-          - numpy array (already TCZYX)
-         - file path (str or Path)
+          - a lazy xarray.DataArray (dask-backed, already TCZYX) — preferred
+          - a dask or numpy array (already TCZYX)
+          - a file path (str or Path)
+          - an existing BioImage
         """
 
         self.image_data = image_data
         try:
-            # If numpy array → explicitly define dimension order
-            if isinstance(image_data, np.ndarray):
+            if isinstance(image_data, BioImage):
+                self._img = image_data
+
+            # Already-normalized lazy stack: wrap the underlying (dask) array so
+            # laziness is preserved. Accessing `.data` on a dask-backed DataArray
+            # returns the dask array WITHOUT reading any pixels.
+            elif xr is not None and isinstance(image_data, xr.DataArray):
+                self._img = BioImage(image_data.data, dims="".join(map(str, image_data.dims)))
+
+            # numpy array → explicitly define dimension order
+            elif isinstance(image_data, np.ndarray):
                 self._img = BioImage(image_data, dims="TCZYX")
 
-            # If file path → let BioIO detect normally
-            else:
+            # file path → let BioIO detect normally
+            elif isinstance(image_data, (str, Path)):
                 self._img = BioImage(str(image_data))
-        
+
+            # dask array / other array-like already in TCZYX order
+            else:
+                self._img = BioImage(image_data, dims="TCZYX")
+
         except Exception as e:
-            raise RuntimeError(f"[BioIOReader] Cannot initialize BioImage: {e}") 
+            raise RuntimeError(f"[BioIOReader] Cannot initialize BioImage: {e}")
 
     def read(self):
         return self.get_data()  

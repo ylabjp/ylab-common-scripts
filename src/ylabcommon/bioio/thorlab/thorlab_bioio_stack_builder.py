@@ -38,44 +38,42 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
 
     print(f"DEBUG: XML says Target {mode} is {target_total}")
 
-    all_chunks = []
-    filtered_files = sorted([f for f in tiff_files if os.path.getsize(f) > 100 * 1024])
+    # Size filter (a stat() on each file, NOT a pixel read). ``tiff_files`` is
+    # already sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
+    filtered_files = sorted(f for f in tiff_files if os.path.getsize(f) > min_kb * 1024)
 
     multi_page_list = []
     single_page_list = []
 
-    # Categorize all files first
+    # Categorize files by their dimensions ONLY. normalize_to_tczyx now returns a
+    # lazy (dask-backed) view, so this loop reads TIFF headers/metadata, not the
+    # pixel arrays — even files we later discard cost no decode.
     for f in filtered_files:
         img = BioImage(f, reader=TiffReader)
         data = normalize_to_tczyx(img)
-    
+
         if data.sizes[mode] > 1:
             multi_page_list.append(data)
             print(f"DEBUG: Identified Multi-page file: {os.path.basename(f)} ({data.sizes[mode]} slices)")
         else:
             single_page_list.append(data)
 
-    # DECISION: Use the big file OR the individual planes (Never both)
+    # DECISION: Use the big multi-page file OR the individual planes (never both).
     if multi_page_list:
-        # Sort by number of slices and take the biggest one
+        # The largest multi-page file already IS the full stack along `mode`.
+        # Use it directly — the previous code sliced it into single-plane chunks
+        # and immediately xr.concat'd them back together, a pure no-op.
         multi_page_list.sort(key=lambda d: d.sizes[mode], reverse=True)
-        best_data = multi_page_list[0]
-    
-        print(f"DEBUG: Priority Path -> Using 1 multi-page file with {best_data.sizes[mode]} slices.")
-        for i in range(best_data.sizes[mode]):
-            all_chunks.append(best_data.isel({mode: slice(i, i+1)}))
+        stacked = multi_page_list[0]
+        print(f"DEBUG: Priority Path -> Using 1 multi-page file with {stacked.sizes[mode]} slices.")
     else:
-        single_page_list.sort(key=lambda x: str(x)) # Simple sort
-        
+        single_page_list.sort(key=lambda x: str(x))  # stable order (already filename-sorted)
         print(f"DEBUG: Standard Path -> Collecting {len(single_page_list)} individual planes.")
-        all_chunks = single_page_list
+        stacked = xr.concat(single_page_list, dim=mode)
 
-    print(f"DEBUG: Final unique chunk count: {len(all_chunks)}")
+    print(f"DEBUG: Final {mode} size: {stacked.sizes[mode]}")
 
-    # Final Stack
-    stacked = xr.concat(all_chunks, dim=mode)
-
-    # ATTACH CALIBRATED COORDINATES
+    # ATTACH CALIBRATED COORDINATES (metadata only; stays lazy)
 
     dx = params.get("PixelSizeX", 1.0)
     dy = params.get("PixelSizeY", dx)      # Usually X and Y are the same
@@ -84,10 +82,10 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
 
     # This turns index [0, 1, 2...] into physical units [0um, 1.2um, 2.4um...]
     stacked = stacked.assign_coords({
-        "X": [i * dx for i in range(stacked.sizes["X"])],
-        "Y": [i * dy for i in range(stacked.sizes["Y"])],
-        "Z": [i * dz for i in range(stacked.sizes["Z"])],
-        "T": [i * dt for i in range(stacked.sizes["T"])]
+        "X": np.arange(stacked.sizes["X"]) * dx,
+        "Y": np.arange(stacked.sizes["Y"]) * dy,
+        "Z": np.arange(stacked.sizes["Z"]) * dz,
+        "T": np.arange(stacked.sizes["T"]) * dt,
     })
     # These are used by OME-TIFF writers to set the header correctly
     stacked.attrs["units"] = "micrometers"

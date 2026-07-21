@@ -6,9 +6,14 @@ from bioio import BioImage
 # Normalize ANY BioImage to TCZYX xarray
 # ---------------------------------------------------------
 def normalize_to_tczyx(img: BioImage) -> xr.DataArray:
-    """Standardizes any input to a 5D TCZYX xarray without conflicting coords."""
+    """Standardizes any input to a 5D TCZYX xarray without conflicting coords.
 
-    data = img.xarray_data
+    Uses ``xarray_dask_data`` (the LAZY, dask-backed accessor) rather than
+    ``xarray_data`` (which eagerly decodes the whole image into RAM). Pixel data
+    is therefore not read here; it is only materialized once, at write time.
+    """
+
+    data = img.xarray_dask_data
     target_dims = ["T", "C", "Z", "Y", "X"]
 
     for d in target_dims:
