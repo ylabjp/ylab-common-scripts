@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Tuple
+from collections import defaultdict
 import os
 import xarray as xr
 import numpy as np
@@ -35,6 +36,22 @@ def get_channel_names_index(xml_path):
     except (ET.ParseError, OSError, TypeError, ValueError):
         return ["Channel 0"]
 
+def _thorlabs_channel_key(path):
+    """Channel identifier parsed from a Thorlabs TIFF filename.
+
+    Thorlabs raw files look like ``ChanA_00001_00002_00003_00004.tif`` — the
+    channel token (``ChanA`` / ``ChanB`` / ... or ``CH1``) is what distinguishes
+    channels. Returns that token, or the whole stem if none is found (so all files
+    collapse into a single channel). Mirrors the convention used by
+    ``outfile_name.build_output_name`` and ``file_selection``.
+    """
+    stem = Path(path).stem
+    for tok in stem.split("_"):
+        if "Chan" in tok or "CH" in tok:
+            return tok
+    return stem
+
+
 def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_thorlabs_params, min_kb: int = 100):
     params = get_thorlabs_params
     print("PARMS : ", params)
@@ -46,40 +63,45 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # Axis index of the stacking dimension within TCZYX.
     axis = {"T": 0, "C": 1, "Z": 2, "Y": 3, "X": 4}[mode]
 
-    # Size filter (a stat() on each file, NOT a pixel read). ``tiff_files`` is
-    # already sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
+    # Size filter (a stat() per file, NOT a pixel read). ``tiff_files`` is already
+    # sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
     filtered_files = sorted(f for f in tiff_files if os.path.getsize(f) > min_kb * 1024)
 
-    multi_page_list = []   # (n_slices, dask_array)
-    single_page_list = []  # dask_array
-
-    # Categorize files by their dimensions ONLY. bioio's get_image_dask_data
-    # expands/reorders axes to TCZYX for us and stays lazy, so this loop reads
-    # TIFF headers/metadata, not pixel arrays — files we later discard cost no
-    # decode, and no custom TCZYX normalization is needed.
+    # Group files by channel so channels land on the C axis instead of being
+    # collapsed into Z/T. Within a channel the (filename-sorted) order is the plane
+    # order — Thorlabs zero-pads the numeric Z/T fields, so lexical order is correct.
+    by_channel = defaultdict(list)
     for f in filtered_files:
-        img = BioImage(f, reader=TiffReader)
-        arr = img.get_image_dask_data("TCZYX")
-        n_slices = arr.shape[axis]
+        by_channel[_thorlabs_channel_key(f)].append(f)
 
-        if n_slices > 1:
-            multi_page_list.append((n_slices, arr))
-            print(f"DEBUG: Identified Multi-page file: {os.path.basename(f)} ({n_slices} slices)")
+    channel_stacks = []
+    for ch in sorted(by_channel):
+        # Read each file for this channel lazily as a 5D TCZYX dask array; bioio
+        # expands/reorders axes for us (no custom TCZYX normalization needed).
+        arrs = [BioImage(f, reader=TiffReader).get_image_dask_data("TCZYX")
+                for f in by_channel[ch]]
+
+        # Prefer a single multi-page file (mode axis already > 1) if the channel
+        # has one; otherwise concatenate the individual planes along the mode axis.
+        multi = [a for a in arrs if a.shape[axis] > 1]
+        if multi:
+            ch_stack = max(multi, key=lambda a: a.shape[axis])
+            print(f"DEBUG: Channel {ch}: multi-page file with {ch_stack.shape[axis]} {mode} slices")
         else:
-            single_page_list.append(arr)
+            ch_stack = arrs[0] if len(arrs) == 1 else da.concatenate(arrs, axis=axis)
+            print(f"DEBUG: Channel {ch}: {len(arrs)} plane(s) stacked along {mode}")
 
-    # DECISION: Use the big multi-page file OR the individual planes (never both).
-    if multi_page_list:
-        # The largest multi-page file already IS the full stack along `mode`.
-        multi_page_list.sort(key=lambda t: t[0], reverse=True)
-        stacked = multi_page_list[0][1]
-        print(f"DEBUG: Priority Path -> Using 1 multi-page file with {stacked.shape[axis]} slices.")
+        channel_stacks.append(ch_stack)
+
+    # Stack channels along C (axis 1). A single channel still yields a full 5D
+    # TCZYX array.
+    if len(channel_stacks) == 1:
+        stacked = channel_stacks[0]
     else:
-        # single_page_list is already in filename order (filtered_files is sorted).
-        print(f"DEBUG: Standard Path -> Collecting {len(single_page_list)} individual planes.")
-        stacked = da.concatenate(single_page_list, axis=axis)
+        stacked = da.concatenate(channel_stacks, axis=1)
 
-    print(f"DEBUG: Final {mode} size: {stacked.shape[axis]}")
+    t, c, zz, yy, xx = stacked.shape
+    print(f"DEBUG: Final stack (TCZYX) = ({t}, {c}, {zz}, {yy}, {xx})")
 
     # Physical calibration is written from the XML params at save time via the
     # OME-TIFF writer's `physical_pixel_sizes`; no xarray coordinates are needed
