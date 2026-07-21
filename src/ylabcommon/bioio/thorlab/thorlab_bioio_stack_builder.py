@@ -10,6 +10,7 @@ from bioio_tifffile import Reader as TiffReader
 #from bioio.readers import Reader as TiffReader
 from bioio import BioImage
 from ylabcommon.utils.normalize_bioImage import normalize_to_tczyx
+from ylabcommon.utils.outfile_name import extract_dimensions, is_mosaic
 
 
 # ---------------------------------------------------------
@@ -66,6 +67,24 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # Size filter (a stat() per file, NOT a pixel read). ``tiff_files`` is already
     # sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
     filtered_files = sorted(f for f in tiff_files if os.path.getsize(f) > min_kb * 1024)
+
+    # Mosaic (multiple XY stage positions) is NOT supported here: each tile would
+    # be collapsed into Z/T. Detect it from the filenames and fail loudly rather
+    # than produce a silently wrong stack.
+    try:
+        _, _dims = extract_dimensions(filtered_files)
+        _is_mosaic = is_mosaic(_dims)
+    except Exception:
+        _dims, _is_mosaic = {}, False
+    if _is_mosaic:
+        raise RuntimeError(
+            "Multiple XY stage positions (mosaic) detected — not supported by "
+            "stack_thorlab_with_bioio_calibrated (tiles would collapse into Z/T). "
+            f"XY={sorted(_dims.get('XY', [])) or None}, "
+            f"X={sorted(_dims.get('X', [])) or None}, "
+            f"Y={sorted(_dims.get('Y', [])) or None}. "
+            "Process one stage position at a time, or stitch the tiles first."
+        )
 
     # Group files by channel so channels land on the C axis instead of being
     # collapsed into Z/T. Within a channel the (filename-sorted) order is the plane
