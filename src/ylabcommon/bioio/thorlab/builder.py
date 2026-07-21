@@ -76,11 +76,13 @@ class ThorlabBioioBuilder:
         get_thorlabs_params = self._get_params()
         stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(tiff_files, self.xml_file, get_thorlabs_params)
 
-        total_depth_um = stacked_data.Z.max().values
-        print(f"Total volume depth: {total_depth_um} microns")
+        # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
+        # params + slice count, not from the pixels.
+        nz = stacked_data.shape[2]
+        dz = get_thorlabs_params.get("PixelSizeZ", 1.0)
+        print(f"Total volume depth: {dz * max(nz - 1, 0)} microns")
 
-        # Return the LAZY (dask-backed) stack. Do NOT call .data here — that would
-        # materialize the entire volume in RAM. Pixels are read exactly once,
+        # Return the LAZY (dask-backed) stack. Pixels are read exactly once,
         # streamed to disk, at write time.
         return stacked_data, tiff_files
 
@@ -196,20 +198,21 @@ class ThorlabBioioBuilder:
                xml_meta["SizeZ"] == image_meta.size_z,
                f"xml={xml_meta['SizeZ']} image={image_meta.size_z}")
 
-            # Pixel calibration
-            if xml_meta.get("pixel_size") and image_meta.pixel_size:
-                # index 2 is X in your (Z, Y, X) tuple
-                diff = abs(xml_meta["PixelSizeX"] - image_meta.pixel_size[2])
+            # Pixel calibration (X). image_meta.pixel_size is the (Z, Y, X) tuple,
+            # so index 2 is X.
+            if xml_meta.get("PixelSizeX") and image_meta.pixel_size:
+                diff_x = abs(xml_meta["PixelSizeX"] - image_meta.pixel_size[2])
                 record("PixelSizeX", diff_x < 1e-4, f"Δ={diff_x:.6f}")
 
-                #Volume/Time Depth Validation
-                if xml_meta.get("ZStackEnabled") and xml_meta.get("PixelSizeZ"):
-                    diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
-                    record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
-            else:
-                record("SizeT", 
-                xml_meta["SizeT"] == image_meta.size_t, 
-                f"xml={xml_meta['SizeT']} img={image_meta.size_t}")
+            # Pixel calibration (Z), when a Z step size is available.
+            if xml_meta.get("PixelSizeZ") and image_meta.pixel_size:
+                diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
+                record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
+
+            # Time depth
+            record("SizeT",
+                   xml_meta.get("SizeT") == image_meta.size_t,
+                   f"xml={xml_meta.get('SizeT')} img={image_meta.size_t}")
 
             #Channel Count
             xml_chan_count = len(xml_meta.get("Channels", []))
@@ -244,13 +247,12 @@ class ThorlabBioioBuilder:
             compression_level=self.compression_level,
         )
 
-        # self.stacked_data is a lazy, dask-backed xarray. Hand the underlying
-        # dask array to the writer so the pixels are read from disk exactly once
-        # and streamed straight into the OME-TIFF (a single HDD->HDD pass).
-        # save_zarr=False: writing OME-Zarr too would compute the stack a second
-        # time and re-read every source TIFF.
+        # self.stacked_data is a lazy dask array (TCZYX). Hand it to the writer so
+        # the pixels are read from disk exactly once and streamed straight into the
+        # OME-TIFF (a single HDD->HDD pass). save_zarr=False: writing OME-Zarr too
+        # would compute the stack a second time and re-read every source TIFF.
         writer.write(
-            self.stacked_data.data,
+            self.stacked_data,
             dim_order=self.image_meta.dim_order,
             channel_names=None,
             #physical_pixel_sizes=phys_sizes,

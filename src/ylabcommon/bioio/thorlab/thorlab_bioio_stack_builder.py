@@ -3,6 +3,7 @@ from typing import List, Tuple
 import os
 import xarray as xr
 import numpy as np
+import dask.array as da
 import xml.etree.ElementTree as ET
 from bioio_tifffile import Reader as TiffReader
 #from bioio.readers import Reader as TiffReader
@@ -17,17 +18,21 @@ from ylabcommon.utils.normalize_bioImage import normalize_to_tczyx
 #Ensures that the final file in software like Fiji/ImageJ/Analysis, 
 # ---------------------------------------------------------
 
-def get_channel_names_index(xml_dict):
+def get_channel_names_index(xml_path):
+    """Return the Thorlabs channel (wavelength) names from an Experiment.xml.
+
+    Accepts a path to Experiment.xml. Each ``<Wavelength name="...">`` under
+    ``<Wavelengths>`` becomes one channel name. Falls back to ``["Channel 0"]``
+    if the file cannot be parsed.
+
+    (Previously this expected an xmltodict-style dict but was called with a Path,
+    so the subscript access always raised and it silently returned the fallback.)
+    """
     try:
-        # Thorlabs usually nests this under Experiment -> Wavelengths
-        wavelengths = xml_dict['ThorImageExperiment']['Wavelengths']['Wavelength']
-        
-        # If there's only one wavelength, xmltodict might return a dict instead of a list
-        if isinstance(wavelengths, dict):
-            wavelengths = [wavelengths]
-            
-        return [w.get('@name', f"Channel {i}") for i, w in enumerate(wavelengths)]
-    except (KeyError, TypeError):
+        root = ET.parse(str(xml_path)).getroot()
+        names = [w.get("name") for w in root.findall(".//Wavelength") if w.get("name")]
+        return names if names else ["Channel 0"]
+    except (ET.ParseError, OSError, TypeError, ValueError):
         return ["Channel 0"]
 
 def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_thorlabs_params, min_kb: int = 100):
@@ -38,64 +43,53 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
 
     print(f"DEBUG: XML says Target {mode} is {target_total}")
 
+    # Axis index of the stacking dimension within TCZYX.
+    axis = {"T": 0, "C": 1, "Z": 2, "Y": 3, "X": 4}[mode]
+
     # Size filter (a stat() on each file, NOT a pixel read). ``tiff_files`` is
     # already sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
     filtered_files = sorted(f for f in tiff_files if os.path.getsize(f) > min_kb * 1024)
 
-    multi_page_list = []
-    single_page_list = []
+    multi_page_list = []   # (n_slices, dask_array)
+    single_page_list = []  # dask_array
 
-    # Categorize files by their dimensions ONLY. normalize_to_tczyx now returns a
-    # lazy (dask-backed) view, so this loop reads TIFF headers/metadata, not the
-    # pixel arrays — even files we later discard cost no decode.
+    # Categorize files by their dimensions ONLY. bioio's get_image_dask_data
+    # expands/reorders axes to TCZYX for us and stays lazy, so this loop reads
+    # TIFF headers/metadata, not pixel arrays — files we later discard cost no
+    # decode, and no custom TCZYX normalization is needed.
     for f in filtered_files:
         img = BioImage(f, reader=TiffReader)
-        data = normalize_to_tczyx(img)
+        arr = img.get_image_dask_data("TCZYX")
+        n_slices = arr.shape[axis]
 
-        if data.sizes[mode] > 1:
-            multi_page_list.append(data)
-            print(f"DEBUG: Identified Multi-page file: {os.path.basename(f)} ({data.sizes[mode]} slices)")
+        if n_slices > 1:
+            multi_page_list.append((n_slices, arr))
+            print(f"DEBUG: Identified Multi-page file: {os.path.basename(f)} ({n_slices} slices)")
         else:
-            single_page_list.append(data)
+            single_page_list.append(arr)
 
     # DECISION: Use the big multi-page file OR the individual planes (never both).
     if multi_page_list:
         # The largest multi-page file already IS the full stack along `mode`.
-        # Use it directly — the previous code sliced it into single-plane chunks
-        # and immediately xr.concat'd them back together, a pure no-op.
-        multi_page_list.sort(key=lambda d: d.sizes[mode], reverse=True)
-        stacked = multi_page_list[0]
-        print(f"DEBUG: Priority Path -> Using 1 multi-page file with {stacked.sizes[mode]} slices.")
+        multi_page_list.sort(key=lambda t: t[0], reverse=True)
+        stacked = multi_page_list[0][1]
+        print(f"DEBUG: Priority Path -> Using 1 multi-page file with {stacked.shape[axis]} slices.")
     else:
-        single_page_list.sort(key=lambda x: str(x))  # stable order (already filename-sorted)
+        # single_page_list is already in filename order (filtered_files is sorted).
         print(f"DEBUG: Standard Path -> Collecting {len(single_page_list)} individual planes.")
-        stacked = xr.concat(single_page_list, dim=mode)
+        stacked = da.concatenate(single_page_list, axis=axis)
 
-    print(f"DEBUG: Final {mode} size: {stacked.sizes[mode]}")
+    print(f"DEBUG: Final {mode} size: {stacked.shape[axis]}")
 
-    # ATTACH CALIBRATED COORDINATES (metadata only; stays lazy)
-
+    # Physical calibration is written from the XML params at save time via the
+    # OME-TIFF writer's `physical_pixel_sizes`; no xarray coordinates are needed
+    # (they were never read back into the output).
     dx = params.get("PixelSizeX", 1.0)
-    dy = params.get("PixelSizeY", dx)      # Usually X and Y are the same
+    dy = params.get("PixelSizeY", dx)
     dz = params.get("PixelSizeZ", 1.0)
-    dt = params.get("TimelapseInterval", 1.0)
+    print(f"[Coordinates] Pixel size (Z, Y, X) um = ({dz}, {dy}, {dx})")
 
-    # This turns index [0, 1, 2...] into physical units [0um, 1.2um, 2.4um...]
-    stacked = stacked.assign_coords({
-        "X": np.arange(stacked.sizes["X"]) * dx,
-        "Y": np.arange(stacked.sizes["Y"]) * dy,
-        "Z": np.arange(stacked.sizes["Z"]) * dz,
-        "T": np.arange(stacked.sizes["T"]) * dt,
-    })
-    # These are used by OME-TIFF writers to set the header correctly
-    stacked.attrs["units"] = "micrometers"
-    stacked.attrs["time_units"] = "seconds"
-
-    # Add a summary attribute for easy debugging
-    stacked.attrs["pixel_size_xyz"] = (dz, dy, dx)
-
-    print(f"[Coordinates] Applied spatial scaling: X/Y={dx}um, Z={dz}um")
-    return stacked, filtered_files 
+    return stacked, filtered_files
 
 # ---------------------------------------------------------
 # Nuclear stacking using BioIO ONLY
