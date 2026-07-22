@@ -180,12 +180,15 @@ class DLCParam(BaseModel):
 
 
 class PreprocessingParam(BaseModel):
-    time_bin_in_s_before_dlc: Optional[float] = None
+    # onset 等の情報を取得する video 系の内部処理で使う細かい resample 幅(s)。
+    # 最終出力(cc/video)の resample は time_bin_in_s、内部処理用の細かい bin は
+    # time_bin_in_s_for_video_processing を get_resample(for_video_processing=True) で参照する。
+    time_bin_in_s_for_video_processing: Optional[float] = None
     time_bin_in_s: Optional[float] = None
     model_targets: Optional[List[str]] = []
-    def get_resample_str(self, is_before_dlc=False) -> str:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample_str(self, for_video_processing=False) -> str:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         if time_bin_in_s < 1:
@@ -194,9 +197,9 @@ class PreprocessingParam(BaseModel):
             resample_str = "%ds" % time_bin_in_s
         return resample_str
 
-    def get_resample(self, is_before_dlc=False) -> pd.Timedelta:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample(self, for_video_processing=False) -> pd.Timedelta:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         return pd.Timedelta(seconds=time_bin_in_s)
