@@ -233,6 +233,11 @@ class GroupAnalysisItemParam(BaseModel):
     # day単位/phase・session単位の集計切り分けを明示指定する。
     # Noneなら従来通りday文字列にphase情報が含まれるかで自動判定する。
     is_phase: Optional[bool] = None
+    # PSTH(連続値グラフ)の時間ビンを t=0 を境界として bin_merge 個ずつまとめ、各群の平均で
+    # 粗く(なめらかに)表示する調整用パラメータ。t=0 は必ず境界(onset後の先頭)になり、
+    # onset前/後のビンは同じ群に混ざらない。個体ごと(群平均の前)にまとめるため mean/sem/count は
+    # 統計的に正しく計算される。None または 1 で無効(従来通り)。2 以上で有効。
+    bin_merge: Optional[int] = None
 
 
 class AggregationParamItem(BaseModel):
