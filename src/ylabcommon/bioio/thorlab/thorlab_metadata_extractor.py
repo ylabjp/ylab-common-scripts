@@ -76,14 +76,10 @@ class ThorlabMetadataExtractor(MicroscopeMetadataExtractor):
             pixel_size = None
         '''
 
-        if hasattr(self._img, "xarray_data"):
-            # If it's a BioImage object
-            pixel_size = self._img.xarray_data.attrs.get("pixel_size_xyz")
-        elif hasattr(self._img, "attrs"):
-            # If it's already an Xarray DataArray
-            pixel_size = self._img.attrs.get("pixel_size_xyz")
-        else:
-            pixel_size = None
+        # Physical pixel size comes from the calibrated Thorlabs params (metadata).
+        # IMPORTANT: do NOT read self._img.xarray_data here — that is bioio's EAGER
+        # accessor and would decode the ENTIRE volume into RAM just to fetch an
+        # attribute that is immediately overwritten below.
         pixel_size = self._pixel_size if self._pixel_size else (1.0, 1.0, 1.0)
         print(f"DEBUG EXTRACTOR: Using fixed pixel size: {pixel_size}")
         '''
