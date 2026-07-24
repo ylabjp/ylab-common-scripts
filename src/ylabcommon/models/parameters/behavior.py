@@ -180,12 +180,15 @@ class DLCParam(BaseModel):
 
 
 class PreprocessingParam(BaseModel):
-    time_bin_in_s_before_dlc: Optional[float] = None
+    # onset 等の情報を取得する video 系の内部処理で使う細かい resample 幅(s)。
+    # 最終出力(cc/video)の resample は time_bin_in_s、内部処理用の細かい bin は
+    # time_bin_in_s_for_video_processing を get_resample(for_video_processing=True) で参照する。
+    time_bin_in_s_for_video_processing: Optional[float] = None
     time_bin_in_s: Optional[float] = None
     model_targets: Optional[List[str]] = []
-    def get_resample_str(self, is_before_dlc=False) -> str:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample_str(self, for_video_processing=False) -> str:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         if time_bin_in_s < 1:
@@ -194,16 +197,29 @@ class PreprocessingParam(BaseModel):
             resample_str = "%ds" % time_bin_in_s
         return resample_str
 
-    def get_resample(self, is_before_dlc=False) -> pd.Timedelta:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample(self, for_video_processing=False) -> pd.Timedelta:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         return pd.Timedelta(seconds=time_bin_in_s)
 
 class TrialDiv(BaseModel):
-    div_num: List[int]
-    task_types: List[str]
+    """
+    1 day / 1 session の trial をビン分割して tdiv 列を作り、day/session をさらに
+    tdiv 単位に分けて時系列表示するための設定 (models/aggregation.py::apply_trial_div)。
+
+    div_num:
+        int      -> 各 day/session の観測 trial 範囲を div_num 等分する (例: 3 で前半/中盤/後半)。
+        list[int]-> 明示的な trial 番号の境界 (bin edges)。例 [10, 13, 16, 19] は
+                    trials 10-13 / 13-16 / 16-19 の3ビン。境界の外側の trial は除外される。
+    """
+    div_num: Union[int, List[int]]
+    # DEPRECATED (2026-07): task_type単位の絞り込みは Event 指定時 (EventConfig.task_types) で
+    # 行う設計に統一した。集計時フィルタ (apply_trial_div の task_types 分岐) は削除済みのため、
+    # この項目はもう読まれない。後方互換で既存configの `task_types: []` を受理するために残すだけ。
+    # 新規configには書かないこと。
+    task_types: Optional[List[str]] = None
 
 
 class GroupAnalysisItemParam(BaseModel):
@@ -217,6 +233,11 @@ class GroupAnalysisItemParam(BaseModel):
     # day単位/phase・session単位の集計切り分けを明示指定する。
     # Noneなら従来通りday文字列にphase情報が含まれるかで自動判定する。
     is_phase: Optional[bool] = None
+    # PSTH(連続値グラフ)の時間ビンを t=0 を境界として bin_merge 個ずつまとめ、各群の平均で
+    # 粗く(なめらかに)表示する調整用パラメータ。t=0 は必ず境界(onset後の先頭)になり、
+    # onset前/後のビンは同じ群に混ざらない。個体ごと(群平均の前)にまとめるため mean/sem/count は
+    # 統計的に正しく計算される。None または 1 で無効(従来通り)。2 以上で有効。
+    bin_merge: Optional[int] = None
 
 
 class AggregationParamItem(BaseModel):
@@ -226,8 +247,13 @@ class AggregationParamItem(BaseModel):
     '''
     target: Optional[str] = ""      # TODO videoとccで異なる。統合する。
     targets:Optional[List[str]] = []
+    # DEPRECATED (2026-07): 旧 aggregation_cc 用。現在どのコードからも参照されない。
     task_type: Optional[str]=Field(default=None,alias="type")         # TODO videoとccで異なる。統合する。
     target_type: Optional[str]=""
+    # DEPRECATED (2026-07): 旧 aggregation_cc[name].task_types。task_type単位のイベント絞り込みは
+    # Event 指定 (event_target[name].task_types) へ移行済み。generate_cc_timeseries の
+    # aggregation_cc ループは targets/target_type のみを参照し、この項目は読まれない。
+    # 詳細と移行例は behavior-analysis/docs/analysis-spec.md「task_type の指定」節を参照。
     task_types: Optional[List[str]] = []
     range: Optional[List[int]] = None
     bin: Optional[int] = None

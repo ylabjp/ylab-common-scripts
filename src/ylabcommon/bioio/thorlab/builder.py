@@ -81,15 +81,20 @@ class ThorlabBioioBuilder:
 
         self.stacked_data=None
         self.image_meta=None
+        self._params_cache=None
 
     # -------------------------------------------------
     # TIFF DISCOVERY + STACK
     # -------------------------------------------------
 
     def _get_params(self):
-        params_adapter = ThorlabParamsAdapter(self.xml_file)
-        get_thorlabs_params = params_adapter.extract()
-        return get_thorlabs_params
+        # Parse Experiment.xml once and reuse; the adapter was previously invoked
+        # separately in _discover_and_stack and _load_with_bioio, re-parsing the
+        # same file each time.
+        if self._params_cache is None:
+            params_adapter = ThorlabParamsAdapter(self.xml_file)
+            self._params_cache = params_adapter.extract()
+        return self._params_cache
 
     def _discover_and_stack(self):
 
@@ -106,11 +111,15 @@ class ThorlabBioioBuilder:
         get_thorlabs_params = self._get_params()
         stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(tiff_files, self.xml_file, get_thorlabs_params)
 
-        total_depth_um = stacked_data.Z.max().values
-        print(f"Total volume depth: {total_depth_um} microns")
+        # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
+        # params + slice count, not from the pixels.
+        nz = stacked_data.shape[2]
+        dz = get_thorlabs_params.get("PixelSizeZ", 1.0)
+        print(f"Total volume depth: {dz * max(nz - 1, 0)} microns")
 
-        data_to_process = stacked_data.data
-        return data_to_process, tiff_files
+        # Return the LAZY (dask-backed) stack. Pixels are read exactly once,
+        # streamed to disk, at write time.
+        return stacked_data, tiff_files
 
     # -------------------------------------------------
     # BioIO Processing Reader
@@ -122,7 +131,8 @@ class ThorlabBioioBuilder:
 
         reader = BioIOReader(stacked_data)
 
-        data = reader.read()
+        # Metadata only — do NOT call reader.read()/.data here; that would decode
+        # the whole volume. All values below come from headers/params.
         params = self._get_params()
         #params = get_thorlabs_params(self.xml_file)
         dx = params.get("PixelSizeX", 1.0)
@@ -141,11 +151,12 @@ class ThorlabBioioBuilder:
         image_meta = extractor.extract()
         image_meta.dim_order = "TCZYX"
 
-        print(f"Data shape: {data.shape}")
+        print(f"Data shape: {reader.get_shape()}")
         print(f"Dimension order from reader: {reader.get_dim_order()}")
         print(f"Shape from image meta: {image_meta.shape}")
 
-        return data, image_meta, hybrid_channel_name 
+        # Pass the lazy stack straight through — still unread.
+        return stacked_data, image_meta, hybrid_channel_name
 
     # -------------------------------------------------
     # XML Validation
@@ -222,19 +233,20 @@ class ThorlabBioioBuilder:
                xml_meta["SizeZ"] == image_meta.size_z,
                f"xml={xml_meta['SizeZ']} image={image_meta.size_z}")
 
-            # Pixel calibration (存在する場合のみ)
-            if xml_meta.get("pixel_size") and image_meta.pixel_size:
-                # index 2 is X in your (Z, Y, X) tuple
+            # Pixel calibration (X). image_meta.pixel_size is the (Z, Y, X) tuple,
+            # so index 2 is X.
+            if xml_meta.get("PixelSizeX") and image_meta.pixel_size:
                 diff_x = abs(xml_meta["PixelSizeX"] - image_meta.pixel_size[2])
                 record("PixelSizeX", diff_x < 1e-4, f"Δ={diff_x:.6f}")
 
-                #Volume/Time Depth Validation
-                if xml_meta.get("ZStackEnabled") and xml_meta.get("PixelSizeZ"):
-                    diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
-                    record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
+            # Pixel calibration (Z), when a Z step size is available.
+            if xml_meta.get("PixelSizeZ") and image_meta.pixel_size:
+                diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
+                record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
 
             # SizeT: タイムラプス取得が途中終了して XML 指定より少ない T は許容(Warning + OK)し、
             # 多い場合のみ構造不一致として NG にする(詳細は _check_size_t_tolerant を参照)。
+            # (origin/main の厳密一致チェックを、短いTを許容する版に置き換える)
             ok_t, warn_t, detail_t = _check_size_t_tolerant(
                 xml_meta.get("SizeT"), image_meta.size_t
             )
@@ -265,18 +277,39 @@ class ThorlabBioioBuilder:
 
         print("[Builder] Writing OME output...")
 
+        if self.stacked_data is None or self.image_meta is None:
+            print("[Builder] Nothing to write (no stacked data; dry run?). Skipping.")
+            return
+
         writer = BioIOWriter(
             output_path,
             compression=self.compression,
             compression_level=self.compression_level,
         )
 
+        # Attach channel names when they line up with the image's C axis. If the
+        # stack collapsed channels into another axis (len != size_c), write without
+        # names rather than let the OME writer raise on the mismatch.
+        channel_names = None
+        names = getattr(self.image_meta, "channel_names_index", None)
+        size_c = self.image_meta.size_c
+        if names and size_c and len(names) == size_c:
+            channel_names = list(names)
+        elif names:
+            print(f"[Builder] {len(names)} channel name(s) but image has C={size_c}; "
+                  "writing without channel names.")
+
+        # self.stacked_data is a lazy dask array (TCZYX). Hand it to the writer so
+        # the pixels are read from disk exactly once and streamed straight into the
+        # OME-TIFF (a single HDD->HDD pass). save_zarr=False: writing OME-Zarr too
+        # would compute the stack a second time and re-read every source TIFF.
         writer.write(
             self.stacked_data,
             dim_order=self.image_meta.dim_order,
-            channel_names=None,
+            channel_names=channel_names,
             #physical_pixel_sizes=phys_sizes,
             physical_pixel_sizes=self.image_meta.pixel_size,
+            save_zarr=False,
         )
     # -------------------------------------------------
     # Validation report
