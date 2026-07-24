@@ -180,12 +180,15 @@ class DLCParam(BaseModel):
 
 
 class PreprocessingParam(BaseModel):
-    time_bin_in_s_before_dlc: Optional[float] = None
+    # onset 等の情報を取得する video 系の内部処理で使う細かい resample 幅(s)。
+    # 最終出力(cc/video)の resample は time_bin_in_s、内部処理用の細かい bin は
+    # time_bin_in_s_for_video_processing を get_resample(for_video_processing=True) で参照する。
+    time_bin_in_s_for_video_processing: Optional[float] = None
     time_bin_in_s: Optional[float] = None
     model_targets: Optional[List[str]] = []
-    def get_resample_str(self, is_before_dlc=False) -> str:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample_str(self, for_video_processing=False) -> str:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         if time_bin_in_s < 1:
@@ -194,9 +197,9 @@ class PreprocessingParam(BaseModel):
             resample_str = "%ds" % time_bin_in_s
         return resample_str
 
-    def get_resample(self, is_before_dlc=False) -> pd.Timedelta:
-        if is_before_dlc:
-            time_bin_in_s = self.time_bin_in_s_before_dlc
+    def get_resample(self, for_video_processing=False) -> pd.Timedelta:
+        if for_video_processing:
+            time_bin_in_s = self.time_bin_in_s_for_video_processing
         else:
             time_bin_in_s = self.time_bin_in_s
         return pd.Timedelta(seconds=time_bin_in_s)
@@ -230,6 +233,11 @@ class GroupAnalysisItemParam(BaseModel):
     # day単位/phase・session単位の集計切り分けを明示指定する。
     # Noneなら従来通りday文字列にphase情報が含まれるかで自動判定する。
     is_phase: Optional[bool] = None
+    # PSTH(連続値グラフ)の時間ビンを t=0 を境界として bin_merge 個ずつまとめ、各群の平均で
+    # 粗く(なめらかに)表示する調整用パラメータ。t=0 は必ず境界(onset後の先頭)になり、
+    # onset前/後のビンは同じ群に混ざらない。個体ごと(群平均の前)にまとめるため mean/sem/count は
+    # 統計的に正しく計算される。None または 1 で無効(従来通り)。2 以上で有効。
+    bin_merge: Optional[int] = None
 
 
 class AggregationParamItem(BaseModel):

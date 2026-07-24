@@ -2,10 +2,9 @@ from collections import defaultdict
 from pathlib import Path
 import os
 import re
-import xarray as xr
+import dask.array as da
 from bioio import BioImage
 from bioio_tifffile import Reader as TiffReader
-from ylabcommon.utils.normalize_bioImage import normalize_to_tczyx
 
 
 def file_pattern():
@@ -148,15 +147,18 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
 
                 img = BioImage(f, reader=TiffReader)
 
-                data = normalize_to_tczyx(img)
+                # bioio expands/reorders to TCZYX lazily; no custom normalize needed.
+                arr = img.get_image_dask_data("TCZYX")
 
-                planes.append(data)
+                planes.append(arr)
 
-            z_stack = xr.concat(planes, dim="Z")
+            # each plane is (T,C,Z,Y,X) with Z=1 -> concat along Z (axis 2)
+            z_stack = da.concatenate(planes, axis=2)
 
             channel_stacks.append(z_stack)
 
-        stacked = xr.concat(channel_stacks, dim="C")
+        # one stack per channel -> concat along C (axis 1)
+        stacked = da.concatenate(channel_stacks, axis=1)
 
         tiles[tile] = stacked
 
@@ -169,11 +171,11 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
         print(f"DEBUG: Z order:, {[z for z, _ in z_files]}")
         print(f"DEBUG: {stacked.dtype}")
         if stacked is not None:
-            dims = stacked.sizes
+            t, c, zz, yy, xx = stacked.shape
             print("Stack Complete: (TCZYX) : "
-            f"(T={dims['T']}, C={dims['C']}, Z={dims['Z']}, "
-            f"Y={dims['Y']}, X={dims['X']})"
-            ) 
+            f"(T={t}, C={c}, Z={zz}, "
+            f"Y={yy}, X={xx})"
+            )
     print(f"DEBUG: (XY, Z, C) Group Index")
     #for f in tiff_files[:10]:
         #print(f"    {parse_keyence_name(f)}    ")

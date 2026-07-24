@@ -25,6 +25,7 @@ from ylabcommon.models.plan import (  # noqa: E402
     PlanMouse,
     default_sessions,
     find_scheduled_configs,
+    find_scheduled_mice,
     format_day_code,
     load_plan,
     resolve_day_date,
@@ -54,13 +55,14 @@ def _sample_plan() -> ExperimentPlan:
                 period=Period(start=date(2026, 4, 26), end=date(2026, 5, 5)),
                 mice=[
                     PlanMouse(prj="prj27-3-5", mouse_id="m1", sex="m",
-                              ear_tag="R1L2", mating_id="mat-7",
+                              ear_tag="R1L2", mating_id="mat-7", cond="DEM-Cumin",
                               birth_date="251201", termination="260430", fail=True,
                               age_day_2=54, actual_bw_day_2=22.1,
                               bench={"day1": "B10", "day2": "B10", "day3": "B10"},
                               bw_before={"day1": 23.4}, bw_after={"day1": 24.1},
                               water_adjust={"day1": 1.7},
                               task_param={"day2": "special.json"},
+                              photometry_param={"day2": "mouse_405_override.json"},
                               within_factor={"day1": "paired"}),
                     PlanMouse(prj="prj27-3-5", mouse_id="m2", sex="f",
                               bench={"day1": "B10", "day2": "B12", "day3": "B12"}),
@@ -236,6 +238,61 @@ def test_multiple_periods_share_schedule():
     assert {s.period_name for s in found} == {"cohort2"}
     today = [s for s in found if s.offset == 0][0]
     assert today.day_label == "day1" and today.date == date(2026, 6, 1)
+
+
+def test_per_mouse_photometry_round_trip():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.yaml")
+        save_plan(_sample_plan(), p)
+        loaded = load_plan(p)
+    assert loaded.periods[0].mice[0].photometry_param["day2"] == "mouse_405_override.json"
+    # a mouse with no override keeps an empty dict (default omitted in YAML)
+    assert loaded.periods[0].mice[1].photometry_param == {}
+
+
+def test_find_scheduled_mice_resolves_overrides():
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(_sample_plan(), os.path.join(d, "OFL_Holmes_2026.yaml"))
+        found = find_scheduled_mice(d, ref_date=date(2026, 4, 27))
+    assert len(found) == 6                        # 3 days x 2 mice
+    today = [s for s in found if s.offset == 0]
+    by_id = {s.mouse_id: s for s in today}
+    assert set(by_id) == {"m1", "m2"}
+    # m1: per-mouse task & photometry overrides win; slot from bench; cond carried
+    assert by_id["m1"].day_label == "day2"
+    assert by_id["m1"].day_code == "day02-phase01S02"   # day2 = phase "1" の 2 回目
+    assert by_id["m1"].session == 2
+    assert by_id["m1"].task_param == "special.json"
+    assert by_id["m1"].photometry_param == "mouse_405_override.json"
+    assert by_id["m1"].slot == "B10"
+    assert by_id["m1"].cond == "DEM-Cumin"
+    assert by_id["m1"].prj == "prj27-3-5"
+    assert by_id["m1"].config_dir == "config_OFL_2025"
+    # m2: falls back to the day-standard task and the plan-default photometry
+    assert by_id["m2"].task_param == "cond.json"
+    assert by_id["m2"].photometry_param == "20Hz_470_405nm.json"
+    assert by_id["m2"].slot == "B12"
+    assert by_id["m2"].sex == "f"
+    # day3 photometry override (day-level) reaches both mice
+    day3 = {s.mouse_id: s for s in found if s.offset == 1}
+    assert day3["m1"].photometry_param == "no_stim.json"
+    assert day3["m2"].photometry_param == "no_stim.json"
+    lbl = by_id["m1"].display_label()
+    assert "[B10]" in lbl and "m1" in lbl
+
+
+def test_find_scheduled_mice_window0_and_sort():
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(_sample_plan(), os.path.join(d, "OFL_Holmes_2026.yaml"))
+        only_today = find_scheduled_mice(d, ref_date=date(2026, 4, 26), window_days=0)
+    assert [s.day_label for s in only_today] == ["day1", "day1"]   # day1 only
+    assert all(s.slot == "B10" for s in only_today)
+    assert {s.task_param for s in only_today} == {"OAFC_shock_exposure.json"}  # day standard
+    assert {s.photometry_param for s in only_today} == {"20Hz_470_405nm.json"}  # plan default
+    m1 = [s for s in only_today if s.mouse_id == "m1"][0]
+    assert m1.within_factor == "paired"
+    # sort key (offset, slot, prj, mouse_id): same slot/prj -> m1 before m2
+    assert [s.mouse_id for s in only_today] == ["m1", "m2"]
 
 
 def _run_standalone() -> int:

@@ -34,7 +34,7 @@ class ThorlabParamsAdapter(BaseParamsAdapter):
         # stepSizeUM is in the ZStage tag
         pixel_z = abs(float(z_stage.get("stepSizeUM", 1.0))) if z_stage is not None else 1.0
 
-        channel_names = [w.get("name") for w in wavelengths.findall("Wavelength")] if wavelengths is not None else ["Force: ChanA"],
+        channel_names = [w.get("name") for w in wavelengths.findall("Wavelength")] if wavelengths is not None else ["Force: ChanA"]
         timestamp = date_node.get("date").replace('/', '').replace(' ', '_').replace(':', '') if date_node is not None else "0000"
 
         return {

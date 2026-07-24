@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional, Sequence
+from math import prod
 import numpy as np
 from bioio import PhysicalPixelSizes
+
+try:
+    import dask.array as _da
+except Exception:  # pragma: no cover - dask is a hard dep of bioio in practice
+    _da = None
 
 try:
     from bioio_ome_tiff.writers import OmeTiffWriter
@@ -114,7 +120,22 @@ class BioIOWriter:
         physical_pixel_sizes: Optional[tuple[float, float, float]],
     ) -> None:
         out_file = self.output_path.with_suffix(".ome.tif")
-        print(f"DEBUG WRITER: values actually sent to OmeTiffWriter: {physical_pixel_sizes}")
+        print(f"DEBUG WRITER: values actually sent to writer: {physical_pixel_sizes}")
+
+        # bioio's OmeTiffWriter.save() computes dask arrays fully into RAM
+        # ("assumes it fits in memory"), which OOMs on large volumes (e.g. a
+        # 62000x1024x1024 uint16 stack = 121 GiB). For a large lazy (dask) array,
+        # stream it to disk plane-by-plane instead so peak memory stays bounded.
+        # Small arrays keep the proven OmeTiffWriter path.
+        nbytes = prod(data.shape) * np.dtype(data.dtype).itemsize
+        if _da is not None and isinstance(data, _da.Array) and nbytes > 2 * 1024**3:
+            self._write_ometiff_streaming(
+                data,
+                out_file,
+                channel_names=channel_names,
+                physical_pixel_sizes=physical_pixel_sizes,
+            )
+            return
 
         pps = None
         if physical_pixel_sizes is not None:
@@ -137,6 +158,77 @@ class BioIOWriter:
         )
 
         print(f"[BioIOWriter] OME-TIFF written → {out_file}")
+
+    # ------------------------------------------------------------------
+    # Streaming OME-TIFF writer (bounded memory, for large dask arrays)
+    # ------------------------------------------------------------------
+
+    def _write_ometiff_streaming(
+        self,
+        data,
+        out_file: Path,
+        *,
+        channel_names: Optional[Sequence[str]],
+        physical_pixel_sizes: Optional[tuple[float, float, float]],
+    ) -> None:
+        """Stream a large TCZYX dask array to OME-TIFF without materializing it.
+
+        Planes are computed in bounded Z-blocks (~256 MB) and written one Y/X page
+        at a time via tifffile, so peak memory stays ~one block instead of the
+        whole volume. Assumes TCZYX order and that the source dask array is chunked
+        finely enough (per plane/scene) that reading a block does not pull the
+        entire volume — a monolithic single-chunk source cannot be streamed.
+        """
+        import tifffile
+
+        T, C, Z, Y, X = (int(n) for n in data.shape)
+        dtype = np.dtype(data.dtype)
+        nbytes = prod((T, C, Z, Y, X)) * dtype.itemsize
+        bigtiff = nbytes > 3_900_000_000  # standard TIFF caps out near 4 GB
+
+        metadata = {"axes": "TCZYX"}
+        if physical_pixel_sizes is not None:
+            pz, py, px = physical_pixel_sizes
+            if px:
+                metadata["PhysicalSizeX"] = float(px)
+                metadata["PhysicalSizeXUnit"] = "µm"
+            if py:
+                metadata["PhysicalSizeY"] = float(py)
+                metadata["PhysicalSizeYUnit"] = "µm"
+            if pz:
+                metadata["PhysicalSizeZ"] = float(pz)
+                metadata["PhysicalSizeZUnit"] = "µm"
+        if channel_names:
+            metadata["Channel"] = {"Name": list(channel_names)}
+
+        plane_bytes = max(Y * X * dtype.itemsize, 1)
+        block = max(1, (256 * 1024**2) // plane_bytes)  # ~256 MB worth of Z planes
+
+        def planes():
+            for t in range(T):
+                for c in range(C):
+                    for z0 in range(0, Z, block):
+                        z1 = min(z0 + block, Z)
+                        chunk = np.asarray(data[t, c, z0:z1])  # (z1-z0, Y, X), bounded
+                        for k in range(z1 - z0):
+                            yield chunk[k]
+
+        print(f"[BioIOWriter] Streaming OME-TIFF "
+              f"(T={T},C={C},Z={Z},Y={Y},X={X}, {dtype}, ~{nbytes / 1024**3:.1f} GiB, "
+              f"bigtiff={bigtiff}, zblock={block}) → {out_file}")
+
+        with tifffile.TiffWriter(out_file, bigtiff=bigtiff, ome=True) as tif:
+            tif.write(
+                planes(),
+                shape=(T, C, Z, Y, X),
+                dtype=dtype,
+                photometric="minisblack",
+                metadata=metadata,
+                compression=self.compression,
+                compressionargs={"level": self.compression_level},
+            )
+
+        print(f"[BioIOWriter] OME-TIFF (streamed) written → {out_file}")
 
     # ------------------------------------------------------------------
     # OME-Zarr writer
