@@ -43,10 +43,12 @@ def _sample_plan() -> ExperimentPlan:
         within_factors=["paired", "unpaired"],
         water_restriction_ratio=0.85,
         daily_evaporation_ml=1.2,
-        cc_config=CCConfig(config_dir="config_OFL_2025", photometry_param="20Hz_470_405nm.json"),
+        cc_config=CCConfig(config_dir="config_OFL_2025"),
         days=[
-            PlanDay(day=1, phase="1", task_param="OAFC_shock_exposure.json"),
-            PlanDay(day=2, phase="1", task_param="cond.json"),
+            PlanDay(day=1, phase="1", task_param="OAFC_shock_exposure.json",
+                    photometry_param="20Hz_470_405nm.json"),
+            PlanDay(day=2, phase="1", task_param="cond.json",
+                    photometry_param="20Hz_470_405nm.json"),
             PlanDay(day=3, phase="2", task_param="test.json", photometry_param="no_stim.json"),
         ],
         periods=[
@@ -165,8 +167,8 @@ def test_format_day_code_and_default_sessions():
 
 def test_photometry_resolution():
     plan = _sample_plan()
-    assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # 既定
-    assert plan.resolve_photometry_param(plan.days[2]) == "no_stim.json"          # day 個別
+    assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # day 標準
+    assert plan.resolve_photometry_param(plan.days[2]) == "no_stim.json"          # day 標準(別値)
 
 
 def test_find_today_yesterday_tomorrow():
@@ -186,8 +188,8 @@ def test_find_today_yesterday_tomorrow():
     # session の既定は同一 phase の累積: day2 は phase "1" の 2 回目 -> S02
     assert by_offset[0].session == 2
     assert by_offset[0].day_code == "day02-phase01S02"
-    assert by_offset[1].photometry_param == "no_stim.json"        # day3 個別
-    assert by_offset[-1].photometry_param == "20Hz_470_405nm.json"  # day1 既定
+    assert by_offset[1].photometry_param == "no_stim.json"        # day3 標準
+    assert by_offset[-1].photometry_param == "20Hz_470_405nm.json"  # day1 標準
     assert "今日" in by_offset[0].display_label()
     assert "day02-phase01S02" in by_offset[0].display_label()
     assert "config_OFL_2025" in by_offset[0].display_label()
@@ -268,7 +270,7 @@ def test_find_scheduled_mice_resolves_overrides():
     assert by_id["m1"].cond == "DEM-Cumin"
     assert by_id["m1"].prj == "prj27-3-5"
     assert by_id["m1"].config_dir == "config_OFL_2025"
-    # m2: falls back to the day-standard task and the plan-default photometry
+    # m2: falls back to the day-standard task and the day-standard photometry
     assert by_id["m2"].task_param == "cond.json"
     assert by_id["m2"].photometry_param == "20Hz_470_405nm.json"
     assert by_id["m2"].slot == "B12"
@@ -288,7 +290,7 @@ def test_find_scheduled_mice_window0_and_sort():
     assert [s.day_label for s in only_today] == ["day1", "day1"]   # day1 only
     assert all(s.slot == "B10" for s in only_today)
     assert {s.task_param for s in only_today} == {"OAFC_shock_exposure.json"}  # day standard
-    assert {s.photometry_param for s in only_today} == {"20Hz_470_405nm.json"}  # plan default
+    assert {s.photometry_param for s in only_today} == {"20Hz_470_405nm.json"}  # day standard
     m1 = [s for s in only_today if s.mouse_id == "m1"][0]
     assert m1.within_factor == "paired"
     # sort key (offset, slot, prj, mouse_id): same slot/prj -> m1 before m2
