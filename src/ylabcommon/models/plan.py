@@ -80,12 +80,12 @@ class CCConfig(BaseModel):
 
     - ``config_dir``: behavior-config/controller-cc 以下の config フォルダ名
       (例 ``config_OFL_2025``)。
-    - ``photometry_param``: 既定の photometry パラメータファイル名。各 day で
-      上書きできる。
+
+    photometry パラメータは plan 既定を持たず、各 day で task_param と並べて
+    :attr:`PlanDay.photometry_param` に個別指定する。
     """
 
     config_dir: str = ""
-    photometry_param: Optional[str] = None
 
 
 class PlanDay(BaseModel):
@@ -104,7 +104,8 @@ class PlanDay(BaseModel):
       が同一 phase の累積(出現順)を既定として補完する。
     - ``task_param``: この日の標準 task パラメータ名 (config_dir/param_files_task/ 以下)。
       個体ごとの上書きは :class:`PlanMouse` の ``task_param`` を参照。
-    - ``photometry_param``: 既定 (:class:`CCConfig`) を上書きしたい場合のみ指定。
+    - ``photometry_param``: この日の標準 photometry パラメータ名 (task_param と並列)。
+      個体ごとの上書きは :class:`PlanMouse` の ``photometry_param`` を参照。
 
     後方互換: 旧形式の ``{label, offset}`` を読み込むと ``day = offset + 1``
     (offset 省略時は 0 -> day 1)に変換する。
@@ -154,8 +155,8 @@ class PlanMouse(BaseModel):
     ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
     day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
     (標準と同じ日は入れない)。``photometry_param`` も同様に day ラベル -> その個体・
-    その日に使う photometry パラメータ名の辞書で、day / plan 既定を個体単位で上書き
-    したい日だけ入れる(:func:`find_scheduled_mice` が個体別 → day → plan の順で解決)。
+    その日に使う photometry パラメータ名の辞書で、day 標準を個体単位で上書き
+    したい日だけ入れる(:func:`find_scheduled_mice` が個体別 → day の順で解決)。
     ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
@@ -243,8 +244,8 @@ class ExperimentPlan(BaseModel):
         return [d.label for d in self.days]
 
     def resolve_photometry_param(self, day: PlanDay) -> Optional[str]:
-        """day 個別指定があればそれを、無ければ cc_config の既定値を返す。"""
-        return day.photometry_param or self.cc_config.photometry_param
+        """その day の photometry パラメータ (plan 既定は廃止)。"""
+        return day.photometry_param
 
 
 class ScheduledConfig(BaseModel):
@@ -284,7 +285,7 @@ class ScheduledMouse(BaseModel):
     CC controller / video recorder が「今日のマウス / Slot を選ぶ」ための情報。
     config(``config_dir`` / ``task_param`` / ``photometry_param``)に加えて、個体メタ
     (``prj`` / ``cond`` / ``mouse_id`` / ``within_factor`` / ``slot`` 等)を持つ。
-    ``task_param`` / ``photometry_param`` は **個体別上書き → day → plan 既定**の順で
+    ``task_param`` / ``photometry_param`` は **個体別上書き → day**の順で
     解決済みの実効値。
     """
 
@@ -471,7 +472,7 @@ def find_scheduled_configs(
                         period_name=period.name,
                         config_dir=cc.config_dir,
                         task_param=day.task_param,
-                        photometry_param=day.photometry_param or cc.photometry_param,
+                        photometry_param=day.photometry_param,
                     )
                 )
 
@@ -488,7 +489,7 @@ def find_scheduled_mice(
 
     :func:`find_scheduled_configs` の個体版。CC controller / video recorder が
     「今日のマウス / Slot を選ぶ」ために使う。1 個体 × 1 予定日 = 1 :class:`ScheduledMouse`。
-    ``task_param`` / ``photometry_param`` は個体別上書き → day → plan 既定の順で解決する。
+    ``task_param`` / ``photometry_param`` は個体別上書き → day の順で解決する。
 
     ``window_days=0`` なら当日のみ。戻り値は offset(昇順)→ slot → prj → mouse_id 順。
     """
@@ -517,7 +518,6 @@ def find_scheduled_mice(
                     photo = (
                         (m.photometry_param.get(label) if label else None)
                         or day.photometry_param
-                        or cc.photometry_param
                     )
                     found.append(
                         ScheduledMouse(
