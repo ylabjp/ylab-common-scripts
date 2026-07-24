@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import json
+import warnings
 from datetime import datetime, UTC, timezone
 
 from ylabcommon.utils.file_selection import collect_valid_tiffs
@@ -16,6 +17,40 @@ from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import stack_thorlab_w
 from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
 
 ## Main script for loading the files
+
+
+def _check_size_t_tolerant(xml_size_t, image_size_t):
+    """XML が宣言する SizeT と実データの T(時点数)を比較する。
+
+    タイムラプス取得は途中で停止されることがあり、その場合 XML の指定より少ない時点数
+    しか保存されない。この「短い T」は構造の破綻ではなく取得の打ち切りなので許容する
+    (Warning を出して OK 扱い)。一方、実データの T が XML より多い場合は XML と構造が
+    一致しない異常なので NG とする。
+
+    Args:
+        xml_size_t: XML(Experiment.xml)が示す時点数。None なら検証しない。
+        image_size_t: 実際に読み込めた時点数。
+
+    Returns:
+        tuple[bool, str | None, str]:
+            (ok, warning_message, detail)
+            ok: 検証を通す(True)か否か。短いTなら True。
+            warning_message: 短いTのとき出す警告文(なければ None)。
+            detail: レポート用の内訳文字列。
+    """
+    if xml_size_t is None or image_size_t is None:
+        return True, None, f"xml={xml_size_t} img={image_size_t} (skipped)"
+    if image_size_t == xml_size_t:
+        return True, None, f"xml={xml_size_t} img={image_size_t}"
+    if image_size_t < xml_size_t:
+        msg = (
+            f"[thorlab] 取得された時点数 T={image_size_t} が XML 指定の SizeT={xml_size_t} より"
+            f"少ないです。タイムラプス取得が途中で終了した可能性があります。"
+            f"短い T を許容し、実データの T={image_size_t} で続行します。"
+        )
+        return True, msg, f"xml={xml_size_t} img={image_size_t} (short T tolerated)"
+    # 実データの方が多い = XML と構造が一致しない
+    return False, None, f"xml={xml_size_t} img={image_size_t} (more timepoints than XML)"
 
 
 class ThorlabBioioBuilder:
@@ -209,10 +244,15 @@ class ThorlabBioioBuilder:
                 diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
                 record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
 
-            # Time depth
-            record("SizeT",
-                   xml_meta.get("SizeT") == image_meta.size_t,
-                   f"xml={xml_meta.get('SizeT')} img={image_meta.size_t}")
+            # SizeT: タイムラプス取得が途中終了して XML 指定より少ない T は許容(Warning + OK)し、
+            # 多い場合のみ構造不一致として NG にする(詳細は _check_size_t_tolerant を参照)。
+            # (origin/main の厳密一致チェックを、短いTを許容する版に置き換える)
+            ok_t, warn_t, detail_t = _check_size_t_tolerant(
+                xml_meta.get("SizeT"), image_meta.size_t
+            )
+            if warn_t:
+                warnings.warn(warn_t, stacklevel=2)
+            record("SizeT", ok_t, detail_t)
 
             #Channel Count
             xml_chan_count = len(xml_meta.get("Channels", []))
