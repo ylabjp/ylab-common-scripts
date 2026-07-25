@@ -235,6 +235,13 @@ class GroupAnalysisItemParam(BaseModel):
     # onset前/後のビンは同じ群に混ざらない。個体ごと(群平均の前)にまとめるため mean/sem/count は
     # 統計的に正しく計算される。None または 1 で無効(従来通り)。2 以上で有効。
     bin_merge: Optional[int] = None
+    # discrete(イベント)チャネルについて、既定の per-trial stat(PSTH の窓内積分 = 1トライアル
+    # あたり応答数)に加えて「PSTH 非依存の窓内総イベント数」(トライアル数で割らない生カウント和)を
+    # stat に追加出力する。(event, "target_count"/"baseline_count"/"subtract_count") として出力され、
+    # plot_selection_stat の key では [[event, target_count], [discrete, ...]] のように選べる。
+    # div は per-trial div と同値(比でトライアル数が相殺)なので出さない。総数はトライアル数に比例する
+    # ため per-trial 指標とは一致しない(意図的)。既定 False。
+    include_event_totals: Optional[bool] = False
 
 
 class AggregationParamItem(BaseModel):
