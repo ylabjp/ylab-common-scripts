@@ -23,6 +23,9 @@ class STANDARD_FIGURE_SIZE:
     FONT_SIZE_M = 6
     FONT_SIZE_S = 5  # Legend, pval
     BAR_WIDTH = 0.5
+    # 図全体で統一する単一値(散らばった独自指定をやめ、統一感を出すため)。
+    MARKER_SIZE = 3   # dot / scatter / plot marker のサイズ(swarm の size= 含む)
+    ALPHA = 0.3       # 半透明の共通値(SEM 帯・淡色線・グリッド等すべて)
 
 
 marker_type_group = [
