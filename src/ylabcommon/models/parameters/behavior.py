@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Union, Any
 from typing import List, Literal
-from pydantic import BaseModel, Field,ConfigDict, field_validator
+from pydantic import BaseModel, Field,ConfigDict, field_validator, model_validator
 from pathlib import Path
 import json
 import os
@@ -307,6 +307,41 @@ class AggregationCalcConfig(BaseModel):
     calc: Literal["x-y", "x/y"]
 
 
+class PreprocessingScope(BaseModel):
+    """このプロジェクトで実際に実行する preprocessing ステージの宣言(`st` の進捗判定専用)。
+
+    3キーとも明示必須。キー -> analysis_meta.yaml のステージ名 (実行する CLI):
+        cc                   -> preprocess_cc                   (`pc`)
+        dlc                  -> preprocess_dlc_merge            (`pv` 前半)
+        detection_difference -> preprocess_detection_difference (`pvdd`)
+
+    `preprocess_video` (`pv` 後半) は宣言キーではない。dlc / detection_difference の
+    マージ結果なので (dlc or detection_difference) から自動導出する。両方 false だと
+    DataModelVideo.generate_from_preprocessed_files が空を返して出力自体が作られない。
+
+    【重要】この項目は進捗レポートの集計対象を決めるだけで、解析結果にも
+    analysis_meta.yaml の config_hash にも一切影響しない。どの DataModel の
+    CONFIG_FIELDS にも入れてはならない(入れると既存出力が一斉に STALE(config) になる)。
+    """
+
+    # `detection_diff` 等のキー綴り間違いを黙って無視して既定値のまま集計しないため。
+    model_config = ConfigDict(extra="forbid")
+
+    cc: bool
+    dlc: bool
+    detection_difference: bool
+
+    @model_validator(mode="after")
+    def _at_least_one_stage(self):
+        if not (self.cc or self.dlc or self.detection_difference):
+            raise ValueError(
+                "preprocessing_scope: cc / dlc / detection_difference が全て false です。"
+                "少なくとも1つを true にしてください"
+                "(全 false では判定対象ステージが無くなり、全 day が NOT STARTED になります)。"
+            )
+        return self
+
+
 class BehaviorParam(BaseModel):
     """
     Root model
@@ -318,6 +353,12 @@ class BehaviorParam(BaseModel):
     preprocessing: Optional[PreprocessingParam] = Field(
         default_factory=PreprocessingParam
     )
+    # このプロジェクトで実際に実行する preprocessing ステージの宣言(`st` の進捗集計対象)。
+    # None = 未宣言 -> status 側の既定を適用し、レポート冒頭に「未宣言」の警告を出す。
+    # 【重要】PreprocessingParam の中に入れたり、どこかの CONFIG_FIELDS に足したりしないこと。
+    # top-level なら全ステージの config_hash が不変。preprocessing 配下に入れると
+    # preprocess_video と individual_analysis のハッシュが変わり既存出力が STALE(config) になる。
+    preprocessing_scope: Optional[PreprocessingScope] = None
     video_param: Optional[VideoParam] = Field(default_factory=VideoParam)
 
     group_analyses: Optional[Dict[str, GroupAnalysisItemParam]] = Field(
