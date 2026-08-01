@@ -448,6 +448,13 @@ class BehaviorParam(BaseModel):
                 },
             }, f, indent=4)
 
+#: "analyzing" のまま何時間経ったら「放置された残骸」と見なすか。
+#: DLC の1フォルダ(= 1 day 分の動画)は長くても数時間で終わるので、これを超えて
+#: 出力も status も動かないなら、掴んだPCが落ちた/中断されたと判断してよい。
+#: 短くしすぎると走行中の解析を別PCが奪って二重解析になる。
+ANALYZING_STALE_HOURS = 12.0
+
+
 def _hostname() -> str:
     """実行PC名。betterstack_log の ``host`` と同じ出典(platform.node())にそろえる。"""
     try:
@@ -497,6 +504,40 @@ class VideoInfo(BaseModel):
         self.analysis_status = "analyzing"
         self.analysis_host = _hostname()
         self.analysis_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def analysis_age_in_hours(self, fallback_mtime: Optional[float] = None) -> Optional[float]:
+        """"analyzing" を書いてからの経過時間。分からなければ None。
+
+        fallback_mtime: analysis_started_at が無い(この項目より前に書かれた)場合に使う
+            video_info.json の st_mtime。status を変えた時にファイルを書いているので、
+            旧データでも「いつ analyzing になったか」の近似になる。
+        """
+        started = None
+        if self.analysis_started_at:
+            try:
+                started = datetime.fromisoformat(self.analysis_started_at)
+            except ValueError:
+                started = None
+        if started is None and fallback_mtime is not None:
+            started = datetime.fromtimestamp(fallback_mtime).astimezone()
+        if started is None:
+            return None
+        now = datetime.now(started.tzinfo) if started.tzinfo else datetime.now()
+        return (now - started).total_seconds() / 3600.0
+
+    def analysis_is_stale(
+        self, fallback_mtime: Optional[float] = None,
+        hours: float = ANALYZING_STALE_HOURS,
+    ) -> bool:
+        """"analyzing" の主張を放置された残骸と見なしてよいか。
+
+        経過時間が分からない場合は **False**(= 掴んだままとして扱う)。二重解析は
+        GPU を無駄にするうえ出力が競合するので、判断材料が無いときは踏み込まない。
+        呼び出し側は video_info.json の st_mtime を fallback_mtime に渡せるので、
+        実運用でこの分岐に落ちることはほぼ無い。
+        """
+        age = self.analysis_age_in_hours(fallback_mtime)
+        return age is not None and age >= hours
 
     def analysis_owner_label(self) -> str:
         """「どのPCがいつ掴んだか」を1行で返す。未記録なら "unknown host"。
