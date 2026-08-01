@@ -2,8 +2,10 @@ from typing import List, Optional, Dict, Union, Any
 from typing import List, Literal
 from pydantic import BaseModel, Field,ConfigDict, field_validator, model_validator
 from pathlib import Path
+from datetime import datetime
 import json
 import os
+import platform
 import pandas as pd
 
 RoiItem = Union[list[int], dict[str, str]]
@@ -446,6 +448,14 @@ class BehaviorParam(BaseModel):
                 },
             }, f, indent=4)
 
+def _hostname() -> str:
+    """実行PC名。betterstack_log の ``host`` と同じ出典(platform.node())にそろえる。"""
+    try:
+        return platform.node() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 class VideoInfo(BaseModel):
     # 解析済みのビデオファイルパスのリスト
     raw_video_list: List[str]
@@ -468,6 +478,42 @@ class VideoInfo(BaseModel):
 
     # DLCの設定ファイルパス（実際にファイルが存在するかチェックしたい場合は FilePath 型も使えます）
     dlc_param: Optional[str] = ""
+
+    # 解析を開始したPC名と開始時刻(ISO8601, ローカルtz付き)。
+    # DLCは複数のワークステーションが同じ raw_video を取り合うので、"analyzing" のまま
+    # 固着したフォルダを見たとき「どのPCがいつ掴んだか」が分からないと、生きている解析なのか
+    # 落ちた残骸なのか判断できない。mark_analyzing() で status と同時に書く。
+    # 旧データには存在しないので Optional(未記録は None)。done/fail になっても消さない
+    # (「誰がいつ回したか」の記録として残す)。
+    analysis_host: Optional[str] = None
+    analysis_started_at: Optional[str] = None
+
+    def mark_analyzing(self) -> None:
+        """status を "analyzing" にし、実行PC名と開始時刻を同時に記録する。
+
+        PC名は betterstack_log が全ログに付ける ``host`` と同じ ``platform.node()``
+        を使う。video_info.json とログを同じ名前で突き合わせられるようにするため。
+        """
+        self.analysis_status = "analyzing"
+        self.analysis_host = _hostname()
+        self.analysis_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def analysis_owner_label(self) -> str:
+        """「どのPCがいつ掴んだか」を1行で返す。未記録なら "unknown host"。
+
+        経過時間も添える(固着の判断に要るのは絶対時刻より経過時間のため)。
+        開始時刻が壊れている場合は時刻だけそのまま出す。
+        """
+        host = self.analysis_host or "unknown host"
+        if not self.analysis_started_at:
+            return host
+        try:
+            started = datetime.fromisoformat(self.analysis_started_at)
+        except ValueError:
+            return f"{host} since {self.analysis_started_at}"
+        now = datetime.now(started.tzinfo) if started.tzinfo else datetime.now()
+        hours = (now - started).total_seconds() / 3600.0
+        return f"{host} since {self.analysis_started_at} ({hours:.1f}h ago)"
 
     def get_video_full_path_list(self, basedir:Path) -> list:
         '''
