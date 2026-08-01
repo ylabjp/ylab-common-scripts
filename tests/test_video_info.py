@@ -90,3 +90,71 @@ class TestOwnerLabel:
         started = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
         v = VideoInfo(raw_video_list=[], analysis_host="ws-hpc", analysis_started_at=started)
         assert "1.0h ago" in v.analysis_owner_label()
+
+
+class TestStaleness:
+    """"analyzing" のまま放置された主張を、いつ奪ってよいか。
+
+    閾値を下回るものまで奪うと走行中の解析と二重に走り、GPU を無駄にしたうえ
+    同じフォルダへ同時に書き込む。逆に永久に奪えないと固着したフォルダを誰も
+    再解析できない。どちらにも倒れないことを両方向で固定する。
+    """
+
+    def _v(self, hours_ago=None, **kw):
+        started = None
+        if hours_ago is not None:
+            started = (datetime.now(timezone.utc)
+                       - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+        return VideoInfo(raw_video_list=[], analysis_started_at=started, **kw)
+
+    def test_old_claim_is_stale(self):
+        from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
+
+        assert self._v(ANALYZING_STALE_HOURS + 1).analysis_is_stale() is True
+
+    def test_recent_claim_is_not_stale(self):
+        from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
+
+        assert self._v(ANALYZING_STALE_HOURS - 1).analysis_is_stale() is False
+
+    def test_boundary_is_inclusive(self):
+        from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
+
+        assert self._v(ANALYZING_STALE_HOURS + 0.01).analysis_is_stale() is True
+
+    def test_threshold_is_overridable(self):
+        assert self._v(3).analysis_is_stale(hours=2) is True
+        assert self._v(3).analysis_is_stale(hours=4) is False
+
+    def test_file_mtime_is_used_when_start_time_is_missing(self):
+        """開始時刻を書く前の旧データでも、json の mtime で古さを判断できる。"""
+        import time
+
+        from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
+
+        v = self._v()
+        old = time.time() - (ANALYZING_STALE_HOURS + 1) * 3600
+        assert v.analysis_is_stale(old) is True
+        assert v.analysis_is_stale(time.time()) is False
+
+    def test_start_time_wins_over_file_mtime(self):
+        """開始時刻がある場合はそちらが正。json は他の理由でも書き換わるため。"""
+        import time
+
+        v = self._v(1)
+        assert v.analysis_is_stale(time.time() - 100 * 3600) is False
+
+    def test_unknown_age_is_not_stale(self):
+        """判断材料が無いときは奪わない(二重解析より固着のほうがまし)。"""
+        v = self._v()
+        assert v.analysis_age_in_hours() is None
+        assert v.analysis_is_stale() is False
+
+    def test_broken_timestamp_falls_back_to_mtime(self):
+        import time
+
+        from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
+
+        v = VideoInfo(raw_video_list=[], analysis_started_at="not-a-time")
+        old = time.time() - (ANALYZING_STALE_HOURS + 1) * 3600
+        assert v.analysis_is_stale(old) is True
