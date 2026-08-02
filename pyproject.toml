@@ -7,7 +7,10 @@ requires-python = "===3.12.9"
 dependencies = [
     "h5py>=3.15.1",
     "matplotlib>=3.7.0",
-    "pandas==3.0.3", # 3.0.4 は access violation を起こすため 3.0.3 に固定(修正版を待つ)
+    # 3.0.4 は access violation を起こすため除外する(修正版を待つ)。
+    # DeepLabCut が pandas<3 を要求するため下限のみとし 2.x も許容する。
+    # 2.3.3 / 3.0.3 の双方でテスト・pandas 利用箇所の出力一致を確認済み。
+    "pandas>=2.3.3,!=3.0.4",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.3",
     #"scipy>=1.16.3",
