@@ -11,6 +11,7 @@ from bioio_tifffile import Reader as TiffReader
 from bioio import BioImage
 from ylabcommon.utils.normalize_bioImage import normalize_to_tczyx
 from ylabcommon.utils.outfile_name import extract_dimensions, is_mosaic
+from ylabcommon.utils.perf import timed_step
 
 
 # ---------------------------------------------------------
@@ -64,9 +65,24 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # Axis index of the stacking dimension within TCZYX.
     axis = {"T": 0, "C": 1, "Z": 2, "Y": 3, "X": 4}[mode]
 
+    # 計測ログの target は取得ディレクトリ (img*) に揃える。sorter 側の load_image と
+    # 同じ値になるので、Better Stack 上で工程をまたいで突き合わせられる。
+    target = str(Path(xml_path).parent)
+
     # Size filter (a stat() per file, NOT a pixel read). ``tiff_files`` is already
     # sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
-    filtered_files = sorted(f for f in tiff_files if os.path.getsize(f) > min_kb * 1024)
+    #
+    # 画素は読まないが stat は1ファイルにつき1回走る。生データはネットワークドライブ
+    # (V:) 上にあるため、数万ファイルになるとこの往復だけで数分かかり、接続が切れると
+    # ここで止まる。何件目のどのファイルを見ているかを進捗として送る。
+    with timed_step("thorlab.filter_by_size", total=len(tiff_files),
+                    target=target) as step:
+        kept = []
+        for f in tiff_files:
+            step.advance(item=f)
+            if os.path.getsize(f) > min_kb * 1024:
+                kept.append(f)
+        filtered_files = sorted(kept)
 
     # Mosaic (multiple XY stage positions) is NOT supported here: each tile would
     # be collapsed into Z/T. Detect it from the filenames and fail loudly rather
@@ -97,8 +113,18 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     for ch in sorted(by_channel):
         # Read each file for this channel lazily as a 5D TCZYX dask array; bioio
         # expands/reorders axes for us (no custom TCZYX normalization needed).
-        arrs = [BioImage(f, reader=TiffReader).get_image_dask_data("TCZYX")
-                for f in by_channel[ch]]
+        #
+        # 遅延なのは「画素」だけで、BioImage() 自体は1ファイルずつ開いてヘッダを読む。
+        # 数万ファイルをネットワークドライブ越しに開くため取り込みの中で最も長く、
+        # 途中で止まるとしても最有力の箇所。1件ずつ進捗を刻んでおけば、沈黙しても
+        # heartbeat が「どのファイルを掴んだまま止まっているか」を名指しできる。
+        ch_files = by_channel[ch]
+        with timed_step("thorlab.open_tiffs", total=len(ch_files),
+                        channel=ch, target=target) as step:
+            arrs = []
+            for f in ch_files:
+                step.advance(item=f)
+                arrs.append(BioImage(f, reader=TiffReader).get_image_dask_data("TCZYX"))
 
         # Prefer a single multi-page file (mode axis already > 1) if the channel
         # has one; otherwise concatenate the individual planes along the mode axis.
