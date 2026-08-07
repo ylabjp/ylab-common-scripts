@@ -6,6 +6,8 @@ from math import prod
 import numpy as np
 from bioio import PhysicalPixelSizes
 
+from ylabcommon.utils.perf import timed_step
+
 try:
     import dask.array as _da
 except Exception:  # pragma: no cover - dask is a hard dep of bioio in practice
@@ -204,29 +206,37 @@ class BioIOWriter:
         plane_bytes = max(Y * X * dtype.itemsize, 1)
         block = max(1, (256 * 1024**2) // plane_bytes)  # ~256 MB worth of Z planes
 
-        def planes():
-            for t in range(T):
-                for c in range(C):
-                    for z0 in range(0, Z, block):
-                        z1 = min(z0 + block, Z)
-                        chunk = np.asarray(data[t, c, z0:z1])  # (z1-z0, Y, X), bounded
-                        for k in range(z1 - z0):
-                            yield chunk[k]
-
         print(f"[BioIOWriter] Streaming OME-TIFF "
               f"(T={T},C={C},Z={Z},Y={Y},X={X}, {dtype}, ~{nbytes / 1024**3:.1f} GiB, "
               f"bigtiff={bigtiff}, zblock={block}) → {out_file}")
 
-        with tifffile.TiffWriter(out_file, bigtiff=bigtiff, ome=True) as tif:
-            tif.write(
-                planes(),
-                shape=(T, C, Z, Y, X),
-                dtype=dtype,
-                photometric="minisblack",
-                metadata=metadata,
-                compression=self.compression,
-                compressionargs={"level": self.compression_level},
-            )
+        # 遅延配列の画素を実際に読むのはここ (np.asarray) なので、取り込み全体の中で
+        # 最も長く、入力(生データ)と出力の両方がネットワークドライブ越しになる。数十分
+        # 沈黙しうる区間なので、ブロック単位で進捗を刻んで「どこまで書けたか」を残す。
+        with timed_step("ometiff.stream_write", total=T * C * Z,
+                        target=str(out_file), n_bytes=nbytes) as step:
+
+            def planes():
+                for t in range(T):
+                    for c in range(C):
+                        for z0 in range(0, Z, block):
+                            z1 = min(z0 + block, Z)
+                            # 読む前に記録する。止まったときに掴んだままのブロックが分かる。
+                            step.advance(z1 - z0, item=f"T={t} C={c} Z={z0}:{z1}")
+                            chunk = np.asarray(data[t, c, z0:z1])  # (z1-z0, Y, X), bounded
+                            for k in range(z1 - z0):
+                                yield chunk[k]
+
+            with tifffile.TiffWriter(out_file, bigtiff=bigtiff, ome=True) as tif:
+                tif.write(
+                    planes(),
+                    shape=(T, C, Z, Y, X),
+                    dtype=dtype,
+                    photometric="minisblack",
+                    metadata=metadata,
+                    compression=self.compression,
+                    compressionargs={"level": self.compression_level},
+                )
 
         print(f"[BioIOWriter] OME-TIFF (streamed) written → {out_file}")
 

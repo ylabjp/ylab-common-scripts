@@ -8,6 +8,7 @@ from ylabcommon.utils.file_selection import collect_valid_tiffs
 from ylabcommon.utils.outfile_name import extract_dimensions
 from ylabcommon.utils.summary_metadata_helper import get_enhanced_metadata, generate_file_sha256
 from ylabcommon.utils.utils import hybrid, style_print
+from ylabcommon.utils.perf import timed_step
 from ylabcommon.bioio.core.bioio_reader import BioIOReader
 from ylabcommon.bioio.core.bioio_writer import BioIOWriter
 from ylabcommon.bioio.thorlab.thorlab_metadata_extractor import ThorlabMetadataExtractor
@@ -100,16 +101,23 @@ class ThorlabBioioBuilder:
 
         print("[Builder] Discovering valid TIFF files...")
 
-        tiff_files = collect_valid_tiffs(self.tiff_dir)
+        # ディレクトリ一覧の取得。ネットワークドライブが応答しないと、まだ1枚も
+        # 開いていない段階でここが止まる。段階を分けておくと切り分けられる。
+        with timed_step("thorlab.discover_tiffs", target=str(self.tiff_dir)):
+            tiff_files = collect_valid_tiffs(self.tiff_dir)
 
         if not tiff_files:
             raise RuntimeError("No valid TIFF files found.")
 
         print(f"[Builder] Found {len(tiff_files)} usable TIFF files")
         print("[Builder] Ultra stacking images...")
-        
-        get_thorlabs_params = self._get_params()
-        stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(tiff_files, self.xml_file, get_thorlabs_params)
+
+        with timed_step("thorlab.parse_params", target=str(self.xml_file)):
+            get_thorlabs_params = self._get_params()
+
+        with timed_step("thorlab.stack", target=str(self.tiff_dir),
+                        n_files=len(tiff_files)):
+            stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(tiff_files, self.xml_file, get_thorlabs_params)
 
         # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
         # params + slice count, not from the pixels.
@@ -355,16 +363,20 @@ class ThorlabBioioBuilder:
 
         stacked_data, tiff_files = self._discover_and_stack()
 
-        data, image_meta, hybrid_channel_name  = self._load_with_bioio(stacked_data)
+        # 画素は読まずヘッダ/XML だけを見る工程。ここが長い場合は「読み込みが重い」の
+        # ではなくメタデータ側の問題なので、画素の工程 (thorlab.stack) と分けて計る。
+        with timed_step("thorlab.read_metadata", target=str(self.tiff_dir)):
+            data, image_meta, hybrid_channel_name  = self._load_with_bioio(stacked_data)
 
         xml_meta = None
 
         if self.validate_metadata and self.xml_file:
-            xml = ExperimentXMLParser(self.xml_file)
-            xml_meta = xml.extract_metadata()
+            with timed_step("thorlab.parse_xml", target=str(self.xml_file)):
+                xml = ExperimentXMLParser(self.xml_file)
+                xml_meta = xml.extract_metadata()
 
         report = self._validate_thorlab_stack(xml_meta, image_meta)
-        
+
         image_name, dims = extract_dimensions(tiff_files)
         
         if self.dry_run:
