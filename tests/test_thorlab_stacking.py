@@ -294,3 +294,37 @@ def test_metadata_now_carries_the_acquisition_time_and_objective(tmp_path):
     assert b.image_meta.imaging_datetime.year == 2025
     assert b.image_meta.timelapse_interval.total_seconds() == 2.5
     assert b.image_meta.objective == "20x"
+
+
+def test_an_io_error_survives_dask_with_its_errno_and_filename(tmp_path, monkeypatch):
+    """compute 時の EIO が、errno とファイル名を保ったまま dask を抜けてくる。
+
+    sorter 側はこの errno で「ネットワークドライブ切断」を判定し、案内文を添える
+    (slice_analysis.data_curation.sorter._is_io_error)。遅延にしたことで読み取りが
+    dask の中へ移ったので、そこを通っても errno が消えないことを固定する。
+    """
+    import errno
+
+    import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as mod
+
+    d = tmp_path / "img01"
+    d.mkdir()
+    for i in range(1, 4):
+        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", plane(i))
+    xml = write_experiment_xml(d, steps=3)
+    params = ExperimentXMLParser(xml).as_params()
+
+    files = sorted(str(p) for p in d.glob("*.tif"))
+    stacked, _ = stack_thorlab_with_bioio_calibrated(files, xml, params, min_kb=0)
+
+    # グラフを組んだ後で読み取りだけを落とす (= 取り込み中にドライブが切れた状況)
+    def drive_gone(*a, **kw):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(mod.tifffile, "imread", drive_gone)
+
+    with pytest.raises(OSError) as excinfo:
+        np.asarray(stacked)
+
+    assert excinfo.value.errno == errno.EIO       # sorter の EIO 判定が効く
+    assert "ChanA_001_001_001_" in str(excinfo.value)   # どのファイルかが残る

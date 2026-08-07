@@ -98,8 +98,11 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     try:
         arr = tifffile.imread(str(path))
     except OSError as e:
-        # ネットワークドライブが落ちたときに、どのファイルで落ちたかを残す。
-        raise OSError(e.errno, "%s (while reading %s)" % (e.strerror, path)) from e
+        # ネットワークドライブが落ちたときに、どのファイルで落ちたかを残す。読むのは
+        # compute 時 (書き出しや解析側) なので、呼び出し側の try では捕まえきれない。
+        # errno はそのまま引き継ぐ (sorter 側が EIO かどうかで分岐するため)。
+        raise OSError(e.errno, "%s (while reading %s)"
+                      % (e.strerror or type(e).__name__, path)) from e
 
     arr = np.asarray(arr)
     if arr.shape[-2:] != (height, width):
