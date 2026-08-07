@@ -11,10 +11,15 @@ class ResultVisualizer:
     def create_preview(self, img_obj, pixel_size_xy):
         """Generates a MIP with a 50µm scale bar."""
         # TCZYX access: Max project over Z (axis 2)
-        # Using .compute() if it's a dask array from BioIO
-        data = np.asarray(img_obj.data[0, 0, :, :, :])
-        mip = np.max(data, axis=0)
-        
+        #
+        # 以前は np.asarray(img_obj.data[0, 0, :, :, :]) としていたが、Python は添字より
+        # 先に img_obj.data を評価する。これは bioio の EAGER アクセサなので volume 全体を
+        # RAM へ展開してから 99.8% を捨てていた (プレビューに要るのは 1 時点 1 チャンネル分だけ)。
+        # 遅延ビューのまま [0, 0] で切り出し、Z 投影まで遅延で済ませてから実体化する。
+        src = getattr(img_obj, "dask_data", img_obj)
+        mip = np.asarray(src[0, 0].max(axis=0))
+
+
         fig, ax = plt.subplots(figsize=(8, 8))
         # Use 'magma' for better dynamic range visibility than grayscale
         im = ax.imshow(mip, cmap='magma')

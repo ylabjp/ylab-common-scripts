@@ -78,23 +78,58 @@ class BioIOReader:
             raise RuntimeError(f"[BioIOReader] Cannot initialize BioImage: {e}")
 
     def read(self):
-        return self.get_data()  
-    # ---------------------------
-    # Returns TCZYX numpy array
-    # ---------------------------
-    def get_data(self):
-        try:
-            return self._img.data
-        except Exception as e:
-            warnings.warn(f"[BioIO] Unable to read pixel data: {e}")
-            return None
+        """遅延(dask)の TCZYX 配列を返す (:meth:`get_data` と同じ)。"""
+        return self.get_data()
 
     # ---------------------------
-    # xarray access
+    # Returns a LAZY (dask) TCZYX array
+    # ---------------------------
+    def get_data(self):
+        """TCZYX の *遅延* (dask) 配列を返す。画素は読まない。
+
+        以前は bioio の EAGER アクセサ ``self._img.data`` を返していた。これは
+        volume 全体を RAM へ展開する (T=2000, Z=31, 1024x1024 uint16 で 121 GiB) うえ、
+        bioio 側が結果をキャッシュして ``_xarray_dask_data`` を numpy 実体から作り直す
+        ため、以降その BioImage は「遅延」に見えて実体を抱え続ける。
+
+        取り込みは RAM に載らない volume を日常的に扱う (だから書き出しは
+        ``BioIOWriter._write_ometiff_streaming`` でブロック単位に流している) ので、
+        既定は遅延にして、実体化は :meth:`get_data_eager` の明示呼び出しに限る。
+
+        戻り値は dask 配列なので ``.shape`` / ``.dtype`` はそのまま使え、画素が要る
+        ときだけ必要な範囲をスライスしてから ``np.asarray`` する。
+        """
+        try:
+            return self._img.dask_data
+        except Exception as e:
+            warnings.warn(f"[BioIO] Unable to build the lazy pixel view: {e}")
+            return None
+
+    def get_data_eager(self):
+        """全画素を RAM へ読み込んだ numpy 配列を返す (**volume 全体が載る場合のみ**)。
+
+        巨大な volume では MemoryError / OOM kill になる。ストリーミング書き出しや
+        ブロック単位のスライスで足りるなら、そちらを使うこと。
+
+        例外は握り潰さずそのまま送出する。ここで MemoryError を warning に変えて
+        None を返すと、呼び出し側が原因の分からない失敗をするため
+        (MemoryError は Exception のサブクラスなので、素の except Exception では
+        メモリ不足も飲み込んでしまう)。
+        """
+        return self._img.data
+
+    # ---------------------------
+    # xarray access (lazy)
     # ---------------------------
     def get_xarray(self):
+        """遅延(dask)裏付けの xarray ビューを返す。
+
+        ``self._img.xarray_data`` は bioio の EAGER アクセサで、参照しただけで
+        volume 全体を展開する (同じ注意書きが thorlab_metadata_extractor にもある)。
+        遅延版の ``xarray_dask_data`` を返す。
+        """
         try:
-            return self._img.xarray_data
+            return self._img.xarray_dask_data
         except Exception as e:
             warnings.warn(f"[BioIO] xarray view unavailable: {e}")
             return None

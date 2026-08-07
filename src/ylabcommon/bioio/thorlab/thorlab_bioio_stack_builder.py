@@ -129,8 +129,28 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
         # Prefer a single multi-page file (mode axis already > 1) if the channel
         # has one; otherwise concatenate the individual planes along the mode axis.
         multi = [a for a in arrs if a.shape[axis] > 1]
+        if multi and len(arrs) > 1:
+            # ここは以前 max(multi, key=...) で「最も大きい1ファイル」だけを採用しており、
+            # 同じチャンネルの残りのファイルを黙って捨てていた (10ページ x 3ファイルなら
+            # 30 プレーンのうち 10 しか残らず、しかも警告も出ない)。
+            # 複数の多ページファイルが「1つのスタックの連続した一部」なのか「同じものの
+            # 別コピー」なのかはファイル名からは決められないので、取り違えたスタックを
+            # 黙って作らず、mosaic 判定と同じく明示的に失敗させる。
+            raise RuntimeError(
+                "Channel %s has %d files and %d of them contain multiple %s slices "
+                "(%s sizes: %s). It is ambiguous whether these files are consecutive "
+                "parts of one stack (which should be concatenated) or alternative copies "
+                "of the same stack (one of which should be chosen), so the stack cannot be "
+                "built safely. Note the previous behaviour silently kept only the largest "
+                "file and discarded the rest, which lost data. Either arrange the "
+                "acquisition so each channel has a single multi-page file or only "
+                "single-plane files, or decide the intended rule and update "
+                "stack_thorlab_with_bioio_calibrated."
+                % (ch, len(arrs), len(multi), mode, mode,
+                   [int(a.shape[axis]) for a in arrs])
+            )
         if multi:
-            ch_stack = max(multi, key=lambda a: a.shape[axis])
+            ch_stack = multi[0]
             print(f"DEBUG: Channel {ch}: multi-page file with {ch_stack.shape[axis]} {mode} slices")
         else:
             ch_stack = arrs[0] if len(arrs) == 1 else da.concatenate(arrs, axis=axis)
