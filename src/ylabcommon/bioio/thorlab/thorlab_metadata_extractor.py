@@ -2,7 +2,11 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime, timedelta
 import warnings
+
 from ylabcommon.bioio.core.metadata_extractor_base import MicroscopeMetadataExtractor
+
+#: ThorImage の Date 属性の書式 (例: ``11/20/2025 14:03:22``)。
+_THORIMAGE_DATE_FORMATS = ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%Y-%m-%dT%H:%M:%S")
 
 
 @dataclass
@@ -26,110 +30,92 @@ class ImagePhysicalMetadata:
 
     channel_names_index: Optional[List[str]]
 
+    @property
+    def dim_order(self):
+        """``dimension_order`` の別名 (writer が dim_order という名前で受け取るため)。"""
+        return self.dimension_order
+
     def to_dict(self):
-        return self.__dict__
+        # 呼び出し側が返り値にキーを足すこと (sorter の PhysicalSizeXUnit など) が
+        # あるので、インスタンスの __dict__ そのものではなく複製を返す。
+        return dict(self.__dict__)
+
+
+def _parse_imaging_datetime(raw) -> Optional[datetime]:
+    """Experiment.xml の Date 属性を datetime にする。読めなければ None。"""
+    if not raw:
+        return None
+    for fmt in _THORIMAGE_DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _clean_channel_names(names, size_c: int) -> List[str]:
+    """チャンネル名を OME に書ける形に整える。
+
+    ThorImage の Wavelength 名は ``ChanA: 略称`` のように接尾辞が付くことがあるので
+    先頭部分だけを使う。名前が足りない/多いときは C 軸の長さに合わせる
+    (OME writer は名前の数と C が一致しないと例外を出すため)。
+    """
+    cleaned = [str(c).split(":")[0].strip() for c in (names or [])]
+    cleaned = [c for c in cleaned if c]
+
+    if len(cleaned) < size_c:
+        cleaned += [f"Channel {i}" for i in range(len(cleaned), size_c)]
+    elif len(cleaned) > size_c:
+        warnings.warn(
+            "[thorlab] XML declares %d channel name(s) but the stack has C=%d; "
+            "using the first %d." % (len(cleaned), size_c, size_c),
+            stacklevel=2,
+        )
+        cleaned = cleaned[:size_c]
+
+    # 分解して "Channel" だけになったものは番号を戻す。
+    return [f"Channel {i}" if c == "Channel" else c for i, c in enumerate(cleaned)]
 
 
 class ThorlabMetadataExtractor(MicroscopeMetadataExtractor):
+    """遅延スタックと Experiment.xml から :class:`ImagePhysicalMetadata` を作る。
 
-    def __init__(self, reader, pixel_size_tuple=None, channel_names_index=None):
-        self._img = reader._img
-        self._pixel_size = pixel_size_tuple
-        self._channel_names_index = channel_names_index
+    以前はここで ``BioImage`` を1つ作り、その ``dims`` / ``shape`` を読んでいた。しかし
+    渡していたのは自分たちで組み立てた TCZYX の dask 配列なので、shape は元から分かって
+    いて BioImage を経由する意味が無く、``standard_metadata`` から取ろうとしていた
+    撮影日時・タイムラプス間隔・対物レンズは (生の配列由来なので) 常に None になっていた。
+
+    それらは Experiment.xml に書いてあるので、XML から直接埋める。
+    """
+
+    def __init__(self, stack, params: Optional[Dict] = None):
+        self._stack = stack
+        self._params = params or {}
 
     def extract(self) -> ImagePhysicalMetadata:
 
-        # Dimension order
-        try:
-            dim_order = self._img.dims.order
-        except Exception:
-            dim_order = None
-            warnings.warn("Dimension order unavailable")
-
-        # Shape
-        try:
-            shape = self._img.shape
-        except Exception:
-            shape = None
-
-        # sizes from dims (safe)
-        dims = getattr(self._img, "dims", None)
-
-        def safe_get(attr):
-            try:
-                return getattr(dims, attr)
-            except:
-                return None
-
-        size_t = safe_get("T")
-        size_c = safe_get("C")
-        size_z = safe_get("Z")
-        size_y = safe_get("Y")
-        size_x = safe_get("X")
-
-        # Physical pixel size
-        ''' 
-        try:
-            pps = self._img.physical_pixel_sizes
-            pixel_size = (pps.Z, pps.Y, pps.X) if pps else None
-        except:
-            pixel_size = None
-        '''
-
-        # Physical pixel size comes from the calibrated Thorlabs params (metadata).
-        # IMPORTANT: do NOT read self._img.xarray_data here — that is bioio's EAGER
-        # accessor and would decode the ENTIRE volume into RAM just to fetch an
-        # attribute that is immediately overwritten below.
-        pixel_size = self._pixel_size if self._pixel_size else (1.0, 1.0, 1.0)
-        print(f"DEBUG EXTRACTOR: Using fixed pixel size: {pixel_size}")
-        '''
-        try:
-            # Remap Thorlabs XML names to our (Z, Y, X) standard
-            pixel_size = (
-                float(self._params.get("PixelSizeZ", 1.0)),
-                float(self._params.get("PixelSizeY", 1.0)),
-                float(self._params.get("PixelSizeX", 1.0))
+        shape = tuple(int(n) for n in self._stack.shape)
+        if len(shape) != 5:
+            raise ValueError(
+                "Expected a 5D TCZYX stack, got shape %s" % (shape,)
             )
-        except (TypeError, ValueError):
-            print("[WARN] Could not parse XML pixel sizes. Defaulting to 1.0")
-            pixel_size = (1.0, 1.0, 1.0)
-        '''
+        size_t, size_c, size_z, size_y, size_x = shape
 
-        # Scale
-        try:
-            scale_obj = self._img.scale
-            scale = tuple(scale_obj) if scale_obj else None
-        except:
-            scale = None
+        p = self._params
+        dx = p.get("PixelSizeX") or 1.0
+        dy = p.get("PixelSizeY") or dx
+        dz = p.get("PixelSizeZ") or 1.0
+        pixel_size = (dz, dy, dx)
 
-        # Standard metadata
-        std = getattr(self._img, "standard_metadata", None)
+        interval_sec = p.get("TimeIntervalSec")
+        timelapse_interval = (
+            timedelta(seconds=float(interval_sec)) if interval_sec else None
+        )
 
-        # Channel names
-        try:
-            channel_names_index = self._img.channel_names_index
-        except:
-            channel_names_index = None
-
-        if self._channel_names_index:
-            clean_names_index  = [str(c).split(':')[0] for c in self._channel_names_index]
-        else:
-            num_c = self._img.shape[1]
-            clean_names_index = [f"Channel {i}" for i in range(num_c)]
-
-    # If splitting left us with just 'Channel', let's add the index back for clarity
-        final_names_index = []
-        for i, name in enumerate(clean_names_index):
-            if name == "Channel":
-                final_names_index.append(f"Channel {i}")
-            else:
-                final_names_index.append(name)
-
-        print(f"[DEBUG Final Names for OME] {final_names_index}")
-
+        channel_names_index = _clean_channel_names(p.get("ChannelNames"), size_c)
 
         return ImagePhysicalMetadata(
-            dimension_order = dim_order,
+            dimension_order="TCZYX",
             shape=shape,
             size_t=size_t,
             size_c=size_c,
@@ -137,11 +123,10 @@ class ThorlabMetadataExtractor(MicroscopeMetadataExtractor):
             size_y=size_y,
             size_x=size_x,
             pixel_size=pixel_size,
-            scale=scale,
-            imaging_datetime=getattr(std, "imaging_datetime", None),
-            timelapse_interval=getattr(std, "timelapse_interval", None),
-            objective=getattr(std, "objective", None),
-            #channel_names_index = channel_names_index,
-            channel_names_index=final_names_index,
+            # bioio の Scale と同じ TCZYX 並び。C にスケールは無いので 1.0。
+            scale=(float(interval_sec) if interval_sec else None, 1.0, dz, dy, dx),
+            imaging_datetime=_parse_imaging_datetime(p.get("TimeStamp")),
+            timelapse_interval=timelapse_interval,
+            objective=p.get("Objective"),
+            channel_names_index=channel_names_index,
         )
-

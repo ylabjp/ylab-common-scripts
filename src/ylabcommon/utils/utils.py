@@ -13,27 +13,20 @@ def find_tiff_files(folder: str) -> List[str]:
     p = Path(folder)
     if not p.exists():
         raise FileNotFoundError(f"Input folder not found: {folder}")
+    # ディレクトリの解決は1回で足りる。以前は1ファイルずつ resolve() を呼んでおり、
+    # 生データがネットワークドライブ上にある取得 (数万ファイル) では、この realpath
+    # だけで往復が数万回発生していた。
+    base = p.resolve()
     files = []
     for ext in ("*.tif", "*.tiff"):
         files.extend(list(p.glob(ext)))
     files = sorted(files, key=lambda x: natural_sort_key(x.name))
-    return [str(x.resolve()) for x in files]
+    return [str(base / x.name) for x in files]
 
 def count_files_in_directory(directory_path):
     path = Path(directory_path)
     count = len([p for p in path.iterdir() if p.is_file()])
     return count
-
-def hybrid(val1: list, val2: list):
-    hybrid_names = []
-    for i in range(len(val1)):
-        idx_label = str(val1[i])
-        if i < len(val2):
-            name_label = str(val2[i]) 
-        else:  
-            name_label = "Unknown"
-        hybrid_names.append(f"{(idx_label)}: {(name_label[2:-2])}")
-    return hybrid_names
 
 def get_theme():
     """Returns a dictionary of ANSI escape codes for styling."""
