@@ -34,12 +34,14 @@ fast-Z のデータが 1 件あれば、以下がまとめて決まる。**優�
 | `SizeT = frames // steps` か | `frames` は面数なので段数で割る | 時点数が段数倍ずれる |
 | `LSM/@NumberOfPlanes` が段数になるか | 平面取得では `1` だった | — (裏取りが増えるだけ) |
 | `Streaming/@flybackFrames="1"` の意味 | 各ボリューム末尾に捨てる面が 1 枚ある? | **Z が 1 面ずれる。無視すると全ボリュームが 1 面分回転する** |
-| `RemoteFocus/@steps` が効くか | 平面取得では `1` だった | remote focus 方式を取りこぼす |
 | `ZStage/@zStreamFrames` / `@zStreamMode` | 平面取得では `1` / `0`。判別に使えなかった | — |
 
 確かめ方: fast-Z で 2〜3 ボリュームだけ撮り、`Experiment.xml` と生ファイル名一覧
 (`dir /b`) を並べる。ファイル名の Z 連番が 1..steps を回るか、`frames` が
 面数なのかボリューム数なのかが直接読める。
+
+なお、ここでいう fast-Z は **`ZStage` 側の高速 Z** を指す。remote focus は別方式で、
+そちらは下記 D のとおり未導入である。
 
 ### B. 片チャンネルだけ有効にした取得
 
@@ -52,6 +54,36 @@ fast-Z のデータが 1 件あれば、以下がまとめて決まる。**優�
 
 平面取得の完了時は `<ExperimentStatus value="Complete" />`。途中で止めた取得で
 別の値になるなら、「最後の時点が欠けている」の裏取りに使える。**未検証**。
+
+### D. remote focus — **2026-08 時点で未導入 (将来導入予定)**
+
+```xml
+<RemoteFocus steps="1" startPlane="0" stepSize="1" IsRemoteFocus="0"
+             captureMode="0" customSequenceEnabled="0" />
+```
+
+**この装置には remote focus がまだ入っていない。** サンプルの
+`IsRemoteFocus="0"` / `steps="1"` は「無効」ではなく **「そもそも搭載していない」
+状態の既定値**なので、この属性から remote focus 時の挙動は一切読み取れない。
+`steps="1"` を「remote focus では 1 段」の根拠に使わないこと。
+
+現在の Z の読み方 ([Z と T の枠](#z-と-t-の枠--streaming-が主、zstage--timelapse-は従)) は
+`ZStage` と `Streaming` の 2 つしか見ていない。remote focus が導入されると
+**Z を振る 3 つ目の経路**ができるので、そのときは読み方の見直しが要る。
+
+導入時に確認すること:
+
+- `IsRemoteFocus="1"` のとき、SizeZ は `RemoteFocus/@steps` か `ZStage/@steps` か
+- µm/px (Z) は `RemoteFocus/@stepSize` か `ZStage/@stepSizeUM` か
+  (単位も違う可能性がある — `stepSize` に `UM` が付いていない)
+- `Streaming/@zFastEnable` との関係。排他なのか併用できるのか
+- `RemoteFocus/@captureMode` / `@customSequenceEnabled` の意味。
+  custom sequence だと Z の並びが等間隔でなくなるかもしれない
+  (そうなるとファイル名の Z 連番と物理位置の対応が崩れる)
+
+**導入したらこの節を宿題から本文へ移すこと。** 導入に気付かないまま古い読み方を
+続けると、Z スタックの設定が残ったまま Streaming に切り替えた今回と
+同じ壊れ方をする (使われない設定を信じて軸を取り違える)。
 
 ---
 
@@ -113,6 +145,13 @@ Z スタックの設定を組んだあと Streaming に切り替えたため、�
 
 古いバージョンや別の取得形式ではノードごと無いことがある。その場合は
 `Streaming enable="0"` と同じ扱い (`ZStage` + `Timelapse`) にしている。**推定**。
+
+### Z を振る経路は現状 2 つしかない
+
+上の表が見ているのは `ZStage` (低速 Z) と `Streaming/@zFastEnable` (fast-Z) だけである。
+**remote focus は 2026-08 時点で未導入** なので勘定に入れていない。導入されると
+3 つ目の経路になり、この表だけでは足りなくなる
+([宿題 D](#d-remote-focus--2026-08-時点で未導入-将来導入予定))。
 
 ---
 
@@ -221,6 +260,9 @@ XML とヘッダが食い違ったときは **ヘッダを採る** (XML は設�
   混ざることがあり、これが関係している可能性がある。連番の読めないファイルは
   `_fill_frame` が落として報告する
 - `Streaming/@dmaFrames="1500"` — 転送バッファらしい。`frames` の半分。構造には無関係とみられる
+- `RemoteFocus` — **2026-08 時点で未導入 (将来導入予定)**。今の値は搭載していない
+  状態の既定値なので何も読み取れない。導入されたら Z の読み方を見直すこと
+  ([宿題 D](#d-remote-focus--2026-08-時点で未導入-将来導入予定))
 - `Photobleaching`, `SLM`, `Pockels` — 刺激系。取り込みの構造には関与しない。
   ただし **刺激のタイミングは時間軸の再構成に要る** ので、そちらでは読むことになる
 - `Sample/@initialStageLocationX` `@initialStageLocationY` — ステージ位置。
@@ -296,7 +338,10 @@ ChanA_001_001_001_001.tif
              flybackFrames="1"                <!-- 宿題 A: fast-Z で意味を持つ? -->
              previewIndex="1" />
 
+  <!-- remote focus は 2026-08 時点で未導入。この値は「無効」ではなく
+       「搭載していない」状態の既定値なので、挙動の根拠にならない。宿題 D -->
   <RemoteFocus steps="1" startPlane="0" stepSize="1" IsRemoteFocus="0" />
+
   <CaptureMode mode="1" />                 <!-- 値の意味は未確認 -->
   <ExperimentStatus value="Complete" />    <!-- 宿題 C -->
 </ThorImageExperiment>
