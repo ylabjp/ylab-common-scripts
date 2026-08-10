@@ -9,9 +9,17 @@ ThorImage の XML に公開仕様は無く、読み方は実データとの突�
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
+
+#: docs に置いた実物の取得 XML。合成した最小形だけでテストすると、
+#: 「自分が書いた XML を自分で読めた」ことしか確かめられない。
+REAL_SAMPLE = (Path(__file__).resolve().parents[1]
+               / "docs" / "samples"
+               / "Experiment_streaming_xyt_ThorImageLS4.4.xml")
 
 
 def write_xml(d, *, streaming=None, z_steps=61, z_enable="1", timepoints=3000,
@@ -180,3 +188,50 @@ def test_an_empty_xml_still_yields_usable_params(tmp_path):
     assert (p["SizeZ"], p["SizeT"]) == (1, 1)
     assert p["PixelSizeX"] == 1.0 and p["PixelSizeZ"] == 1.0
     assert p["Streaming"] is False
+
+
+# ---- 実物のサンプルで固定する ------------------------------------------------
+
+def test_the_documented_sample_is_present():
+    """docs のサンプルが消えたら気付けるようにする (テストの土台なので)。"""
+    assert REAL_SAMPLE.exists(), REAL_SAMPLE
+
+
+def test_the_real_sample_matches_the_documented_table():
+    """docs/thorlabs_experiment_xml.md の付録の表と、実際の読み取り結果を突き合わせる。
+
+    文書とコードがずれると、文書の方が「正典」と書いてある分だけ危ない。
+    表の値をここに写しておき、どちらかを直したらもう一方も直さざるを得なくする。
+    """
+    m = ExperimentXMLParser(REAL_SAMPLE).extract_metadata()
+
+    assert (m["SizeX"], m["SizeY"]) == (512, 512)
+    assert m["SizeZ"] == 1                       # ZStage steps=61 は使わない
+    assert m["SizeT"] == 3000                    # Streaming/@frames
+    assert m["Channels"] == ["ChanA", "ChanB"]   # ChannelEnable Set=3
+    assert m["PixelSizeX"] == pytest.approx(0.17)
+    assert m["PixelSizeY"] == pytest.approx(0.17)
+    assert m["PixelSizeZ"] == pytest.approx(0.5)
+    assert m["Objective"] == "25xOLY"
+    assert m["TimeStamp"] == "07/29/2026 12:52:07"
+    assert (m["Streaming"], m["ZFastEnabled"]) == (True, False)
+
+
+def test_the_real_sample_keeps_the_time_axis_as_the_unreliable_xml_value():
+    """時間軸は XML からは決まらない (仕様外)。
+
+    ここに入っているのは「正しい時間軸」ではなく後方互換のための置き場所である。
+    正確な時間軸はトリガー記録から再構成する。この値を根拠にした解析を書かないこと。
+
+    Timelapse/@intervalSec=60 だと 3000 時点で 50 時間、LSM/@frameRate=45.638 だと
+    66 秒。3 桁違ううえ、triggerMode=1 (外部トリガ) なら実時刻は外部装置が決めるので
+    XML のどこにも書かれていない。
+    """
+    m = ExperimentXMLParser(REAL_SAMPLE).extract_metadata()
+
+    assert m["TimeIntervalSec"] == 60.0          # Timelapse/@intervalSec そのまま
+    assert m["FrameRate"] == pytest.approx(45.638)
+    # 2つの読みが桁で食い違っていること自体を記録しておく (どちらも根拠にならない)
+    by_interval = m["SizeT"] * m["TimeIntervalSec"]
+    by_frame_rate = m["SizeT"] / m["FrameRate"]
+    assert by_interval / by_frame_rate > 1000

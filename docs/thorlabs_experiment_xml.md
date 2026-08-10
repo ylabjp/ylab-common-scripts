@@ -9,12 +9,49 @@ ThorImageLS の `Experiment.xml` に公開仕様は無い。ここに書いて�
 |---|---|
 | 確認済 | 実データで検証した。反例が出るまでは信じてよい |
 | 推定 | 属性名と値から読めるが、その条件のデータをまだ見ていない |
-| 未解決 | 食い違いが分かっているが、どちらが正しいか決まっていない |
+| 仕様外 | XML には答えが無いことが分かっている。別の情報源が要る |
 
 反例が出たらこの表を直すこと。**コードのコメントではなくここが正典** で、
 `xml_parser.py` はここを参照する。
 
-対象バージョン: `<Software version="4.4.2026.1231"/>` (ThorImageLS 4.4)
+- 対象バージョン: `<Software version="4.4.2026.1231"/>` (ThorImageLS 4.4)
+- サンプル: [`samples/Experiment_streaming_xyt_ThorImageLS4.4.xml`](samples/Experiment_streaming_xyt_ThorImageLS4.4.xml)
+  — 実際の取得の XML。[付録](#付録-サンプル-xml-の要点) に要点を抜き出してある
+
+---
+
+## 宿題 — サンプルが手に入ったら確認すること
+
+**ここが「戻ってくる場所」。** 未確認のまま実装している仮説と、それを確かめるのに
+何が要るかを 1 か所に集める。確認できたら本文へ移し、確度を上げること。
+
+### A. fast-Z (`zFastEnable="1"`) の取得がまだ 1 件も無い
+
+fast-Z のデータが 1 件あれば、以下がまとめて決まる。**優先度が最も高い。**
+
+| 確かめること | 期待 | 外れたときの被害 |
+|---|---|---|
+| `SizeT = frames // steps` か | `frames` は面数なので段数で割る | 時点数が段数倍ずれる |
+| `LSM/@NumberOfPlanes` が段数になるか | 平面取得では `1` だった | — (裏取りが増えるだけ) |
+| `Streaming/@flybackFrames="1"` の意味 | 各ボリューム末尾に捨てる面が 1 枚ある? | **Z が 1 面ずれる。無視すると全ボリュームが 1 面分回転する** |
+| `RemoteFocus/@steps` が効くか | 平面取得では `1` だった | remote focus 方式を取りこぼす |
+| `ZStage/@zStreamFrames` / `@zStreamMode` | 平面取得では `1` / `0`。判別に使えなかった | — |
+
+確かめ方: fast-Z で 2〜3 ボリュームだけ撮り、`Experiment.xml` と生ファイル名一覧
+(`dir /b`) を並べる。ファイル名の Z 連番が 1..steps を回るか、`frames` が
+面数なのかボリューム数なのかが直接読める。
+
+### B. 片チャンネルだけ有効にした取得
+
+`<ChannelEnable Set>` のビットマスク解釈 (`Set=1` → ChanA のみ) は **推定**。
+`Set=2` で ChanB のみになるかを確認したい。外すとチャンネル名がずれる。
+
+確かめ方: ChanB だけ有効にして数枚撮り、`Set` の値と生ファイルの接頭辞を見る。
+
+### C. 途中で止めた取得の `ExperimentStatus`
+
+平面取得の完了時は `<ExperimentStatus value="Complete" />`。途中で止めた取得で
+別の値になるなら、「最後の時点が欠けている」の裏取りに使える。**未検証**。
 
 ---
 
@@ -58,7 +95,7 @@ XML は **取得を始める前の画面の状態** を書き出したもので�
 | `Streaming/@enable` | `Streaming/@zFastEnable` | SizeZ | SizeT | 確度 |
 |---|---|---|---|---|
 | `1` | `0` | **1** | `Streaming/@frames` | 確認済 |
-| `1` | `1` | `ZStage/@steps` | `frames // steps` | 推定 |
+| `1` | `1` | `ZStage/@steps` | `frames // steps` | 推定 ([宿題 A](#a-fast-z-zfastenable1-の取得がまだ-1-件も無い)) |
 | `0` | — | `ZStage/@steps` (`enable="1"` のとき) | `Timelapse/@timepoints` | 確認済 |
 
 **要点: `Streaming enable="1"` のとき、`ZStage/@steps` は `zFastEnable="1"` の
@@ -70,54 +107,59 @@ Z スタックの設定を組んだあと Streaming に切り替えたため、�
 残っていた。
 
 `zFastMode="1"` は fast-Z の **方式** (ノコギリ波/階段など) で、有効/無効ではない。
-`zFastEnable` と混同しないこと。
+`zFastEnable` と混同しないこと。**この取り違えは `steps` を信じるのと同じ壊れ方をする。**
 
 ### `Streaming` が無い場合
 
 古いバージョンや別の取得形式ではノードごと無いことがある。その場合は
 `Streaming enable="0"` と同じ扱い (`ZStage` + `Timelapse`) にしている。**推定**。
 
-### 裏取りに使えそうな属性 (未検証)
-
-- `LSM/@NumberOfPlanes` — 上の例では `1` で、実データの Z=1 と一致する。
-  fast-Z のときに `61` になるなら、これ 1 つで判定できるかもしれない。
-  **fast-Z のデータが手に入ったら確認すること。**
-- `RemoteFocus/@steps` — 上の例では `1`。remote focus 方式の fast-Z ではここが
-  効く可能性がある。**未検証**。
-- `ZStage/@zStreamFrames`, `ZStage/@zStreamMode` — 名前からして Streaming 時の
-  Z 制御に関係しそうだが、上の例では `1` / `0` で判別に使えなかった。**未検証**。
-
 ---
 
-## 時間軸 — **未解決**
+## 時間軸 — **XML からは決まらない (仕様外)**
+
+**結論: `Experiment.xml` に正確な時間軸は無い。トリガー記録から別途再構成する。**
+
+XML の値は目安にしかならないので、時間精度が要る解析
+(ΔF/F の立ち上がり、刺激との対応など) では **使ってはいけない**。
+
+根拠 — 同じ取得について 3 桁違う値が並んでいる:
 
 ```xml
-<Timelapse timepoints="3000" intervalSec="60" .../>
-<Streaming enable="1" frames="3000" .../>
-<LSM frameRate="45.638" averageMode="0" averageNum="10" .../>
+<Timelapse timepoints="3000" intervalSec="60" triggerMode="0" />
+<Streaming enable="1" frames="3000" triggerMode="1" ... />
+<LSM frameRate="45.638" averageMode="0" averageNum="10" ... />
 ```
 
-`Timelapse/@intervalSec="60"` を素直に読むと 3000 時点 × 60 秒 = **50 時間**。
-一方 `frameRate="45.638"` から読むと 3000 フレーム = **約 66 秒**。3 桁違う。
+- `Timelapse/@intervalSec="60"` を素直に読むと 3000 時点 × 60 秒 = **50 時間**
+- `LSM/@frameRate="45.638"` から読むと 3000 フレーム = **約 66 秒**
 
+さらに、どちらを採っても正しくならない理由がある:
+
+- `Streaming/@triggerMode="1"` は外部トリガとみられる。この場合、面が取得される
+  実時刻は **外部の刺激装置が決める** ので、XML のどこにも書かれていない
 - `Timelapse/@timepoints` と `Streaming/@frames` がどちらも 3000 なのは、
-  ThorImage が一方を他方へ写しているだけかもしれない。
-- `Streaming/@triggerMode="1"` は外部トリガの可能性があり、その場合の間隔は
-  フレームレートでもなく `intervalSec` でもない。
+  ThorImage が一方を他方へ写しているだけの可能性がある
+  (Streaming 取得で `Timelapse` 側が使われている証拠は無い)
 - `averageNum="10"` が効いていれば実効フレーム周期は 10 倍になるが、
-  `averageMode="0"` が「平均なし」を意味するのかは未確認。
+  `averageMode="0"` が「平均なし」を意味するのかは未確認
 
-**現状の実装は `Timelapse/@intervalSec` をそのまま採っている** (従来どおり)。
-根拠が足りないまま変えると、ΔF/F の時間軸が静かにずれるため保留している。
-Streaming 取得の実時間が分かる資料 (取得ログ、ストップウォッチ、あるいは
-`ChanA` の連番と壁時計の対応) が 1 件あれば決められる。
+### 現状の扱い
+
+`TimeIntervalSec` には従来どおり `Timelapse/@intervalSec` をそのまま入れている。
+**これは「正しい時間軸」ではなく、後方互換のための置き場所**である。
+正確な時間軸はトリガー記録から再構成し、そちらを正とする。
+
+将来ここを触るときの注意: XML 由来の値を「もっともらしい別の値」に差し替えても
+問題は解決しない (どれも根拠が無い)。むしろ、どこかで暗黙に使われていたときに
+静かに結果が変わる。時間軸を直すなら、トリガー由来の系列を明示的に持ち込むこと。
 
 ---
 
 ## チャンネル — `ChannelEnable/@Set` のビットマスク
 
 ```xml
-<Wavelengths>
+<Wavelengths nyquistExWavelengthNM="0" nyquistEmWavelengthNM="0">
   <Wavelength name="ChanA" exposureTimeMS="0" />
   <Wavelength name="ChanB" exposureTimeMS="0" />
   <ChannelEnable Set="3" />
@@ -125,11 +167,12 @@ Streaming 取得の実時間が分かる資料 (取得ログ、ストップウ�
 ```
 
 `<Wavelength>` は **設定されている** 波長を並べるだけで、その取得で有効だったかは
-`<ChannelEnable Set>` が持つ。`Set` は 1-origin のビットマスクで、`3 = 0b11` は
-1 番目と 2 番目が有効。**確認済** (2 チャンネル分の生ファイルがある)。
+`<ChannelEnable Set>` が持つ。`Set` はビットマスクで、`3 = 0b11` は 1 番目と
+2 番目が有効。**確認済** (2 チャンネル分の生ファイルがある)。
 
 `<Wavelength>` を数えるだけだと、片方だけ有効にした取得で「XML は 2 波長だが
-実データは 1 チャンネル」という食い違いが出る。**推定** (片チャンネル取得の実例は未確認)。
+実データは 1 チャンネル」という食い違いが出る。ビット位置と波長の対応は
+**推定** ([宿題 B](#b-片チャンネルだけ有効にした取得))。
 
 `LSM/@channel="3"` と `PMT/@enableA` `@enableB` も同じ情報を持っているように見える。
 冗長なので今は使っていない。
@@ -149,18 +192,18 @@ Streaming 取得の実時間が分かる資料 (取得ログ、ストップウ�
 | µm/px (XY) | `LSM/@pixelWidthUM` / `@pixelHeightUM` | 確認済 |
 | µm/px (Z) | `ZStage/@stepSizeUM` の絶対値 | 確認済 |
 | 対物 | `Magnification/@name` (`"25xOLY"`) | 確認済 |
-| 取得時刻 | `Date/@date` (`MM/DD/YYYY HH:MM:SS`) | 確認済 |
+| 取得日時 | `Date/@date` (`MM/DD/YYYY HH:MM:SS`) | 確認済 |
 
 罠:
 
 - `LSM/@width` / `@height` は **存在しない**。以前のアダプタがこれを読んでいたため
-  SizeX/SizeY が常に既定値の 512 になっていた (この XML ではたまたま 512 なので
-  気付けなかった)。
+  SizeX/SizeY が常に既定値の 512 になっていた (このサンプルはたまたま 512 なので
+  気付けなかった)
 - `LSM/@pixelSizeUM="2.93"` は µm/px **ではない**。`pixelWidthUM` (0.17) と 17 倍
-  違う。用途不明。**使わないこと。**
-- `Camera/@pixelSizeUM="0.25"` は多光子取得では無関係 (`Camera/@width="0"`)。
+  違う。用途不明。**使わないこと**
+- `Camera/@pixelSizeUM="0.25"` は多光子取得では無関係 (`Camera/@width="0"`)
 - `widthUM="86.96"` ÷ `pixelX="512"` = 0.1698 ≒ `pixelWidthUM`。整合しているので
-  どちらから求めてもよいが、丸めの分だけ `pixelWidthUM` の方が素直。
+  どちらから求めてもよいが、丸めの分だけ `pixelWidthUM` の方が素直
 
 XML とヘッダが食い違ったときは **ヘッダを採る** (XML は設定、ファイルは結果)。
 食い違いは警告に出す。
@@ -173,14 +216,13 @@ XML とヘッダが食い違ったときは **ヘッダを採る** (XML は設�
 
 - `CaptureMode/@mode="1"` — 取得種別らしいが、値の意味は未確認。`Streaming/@enable`
   と重複している可能性がある
-- `ExperimentStatus/@value="Complete"` — 途中で止めた取得では別の値になるはず。
-  「最後の時点が欠けている」の裏取りに使えるかもしれない。**未検証**
+- `ExperimentStatus/@value="Complete"` — [宿題 C](#c-途中で止めた取得の-experimentstatus)
 - `Streaming/@previewIndex="1"` — 生データに連番の付かない余分なファイルが
   混ざることがあり、これが関係している可能性がある。連番の読めないファイルは
   `_fill_frame` が落として報告する
-- `Streaming/@flybackFrames="1"` — fast-Z のとき、各ボリュームの末尾に捨てる面が
-  あることを示すかもしれない。**fast-Z のデータで要確認** (無視すると Z が 1 面ずれる)
-- `Photobleaching`, `SLM`, `Pockels` — 刺激系。取り込みの構造には関与しない
+- `Streaming/@dmaFrames="1500"` — 転送バッファらしい。`frames` の半分。構造には無関係とみられる
+- `Photobleaching`, `SLM`, `Pockels` — 刺激系。取り込みの構造には関与しない。
+  ただし **刺激のタイミングは時間軸の再構成に要る** ので、そちらでは読むことになる
 - `Sample/@initialStageLocationX` `@initialStageLocationY` — ステージ位置。
   タイル取得を扱うようになったら要る
 
@@ -209,3 +251,66 @@ ChanA_001_001_001_001.tif
 枠は **目標であって上限ではない**。はみ出したファイルは捨てずに使い、件数だけ
 報告する。XML が当てにならないことが分かっている以上、それを上限にすると実在する
 面を落とす。
+
+---
+
+## 付録: サンプル XML の要点
+
+全文: [`samples/Experiment_streaming_xyt_ThorImageLS4.4.xml`](samples/Experiment_streaming_xyt_ThorImageLS4.4.xml)
+(`tests/test_thorlab_xml_reading.py` がこの現物を読んで期待値を固定している)
+
+- 取得: 単一平面の連続取得 (XYT)、2 チャンネル、生ファイル 3001 枚 × ch
+- 判定: `Streaming enable=1` + `zFastEnable=0` → **SizeZ=1, SizeT=3000**
+
+構造の判定に関わるノードだけを抜き出したもの (属性は間引いてある):
+
+```xml
+<ThorImageExperiment>
+  <Date date="07/29/2026 12:52:07" uTime="1785297127" />
+  <Software version="4.4.2026.1231" />
+  <Magnification mag="27.777" name="25xOLY" />
+
+  <Wavelengths>
+    <Wavelength name="ChanA" exposureTimeMS="0" />
+    <Wavelength name="ChanB" exposureTimeMS="0" />
+    <ChannelEnable Set="3" />            <!-- 0b11 = ChanA と ChanB が有効 -->
+  </Wavelengths>
+
+  <!-- steps=61 / enable=1 だが、Streaming 中は zFastEnable=0 なので使われない -->
+  <ZStage name="ThorDAQZ" steps="61" stepSizeUM="0.5" enable="1"
+          zStreamFrames="1" zStreamMode="0" />
+
+  <!-- Streaming 取得では使われていないとみられる (frames と同値なだけ) -->
+  <Timelapse timepoints="3000" intervalSec="60" triggerMode="0" />
+
+  <LSM pixelX="512" pixelY="512"           <!-- SizeX / SizeY -->
+       pixelWidthUM="0.17" pixelHeightUM="0.17"   <!-- um/px。pixelSizeUM ではない -->
+       pixelSizeUM="2.93"                  <!-- um/px ではない。用途不明、使わない -->
+       widthUM="86.96" heightUM="86.96"
+       frameRate="45.638" averageMode="0" averageNum="10"
+       NumberOfPlanes="1" />               <!-- 平面取得では 1。宿題 A -->
+
+  <!-- ここが Z/T の主。zFastEnable=0 なので Z=1、T=frames=3000 -->
+  <Streaming enable="1" frames="3000" dmaFrames="1500" triggerMode="1"
+             zFastEnable="0" zFastMode="1"    <!-- Mode は方式。Enable と別物 -->
+             flybackFrames="1"                <!-- 宿題 A: fast-Z で意味を持つ? -->
+             previewIndex="1" />
+
+  <RemoteFocus steps="1" startPlane="0" stepSize="1" IsRemoteFocus="0" />
+  <CaptureMode mode="1" />                 <!-- 値の意味は未確認 -->
+  <ExperimentStatus value="Complete" />    <!-- 宿題 C -->
+</ThorImageExperiment>
+```
+
+この XML で `xml_parser.ExperimentXMLParser` が返す値:
+
+| 項目 | 値 | 出どころ |
+|---|---|---|
+| `SizeX` / `SizeY` | 512 / 512 | `LSM/@pixelX` `@pixelY` |
+| `SizeZ` | **1** | `Streaming/@zFastEnable="0"` (`ZStage/@steps=61` は使わない) |
+| `SizeT` | **3000** | `Streaming/@frames` (`Timelapse/@timepoints` ではない) |
+| `Channels` | `["ChanA", "ChanB"]` | `ChannelEnable/@Set=3` |
+| `PixelSizeX` / `Y` | 0.17 / 0.17 | `LSM/@pixelWidthUM` `@pixelHeightUM` |
+| `PixelSizeZ` | 0.5 | `ZStage/@stepSizeUM` |
+| `Objective` | `25xOLY` | `Magnification/@name` |
+| `TimeIntervalSec` | 60.0 | `Timelapse/@intervalSec` — **時間軸としては信用しない** |

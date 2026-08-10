@@ -49,6 +49,16 @@ Repository Structure
 
 ---
 
+## Documentation
+
+- [ThorImage `Experiment.xml` の読み方](docs/thorlabs_experiment_xml.md) —
+  公開仕様が無いためリバースエンジニアリングした結果。各項目に確度
+  (確認済 / 推定 / 仕様外) を付けてあり、**コードのコメントではなくこの文書が正典**。
+  未確認の仮説は冒頭の「宿題」節にまとめてあるので、新しい取得条件のサンプルが
+  手に入ったらそこから確認すること。
+
+---
+
 ## Installation
 
 ### Clone repository:

@@ -115,6 +115,13 @@ class ExperimentXMLParser:
             if step is not None:
                 meta["PixelSizeZ"] = abs(step)
 
+        # 時間軸は XML からは決まらない (docs/thorlabs_experiment_xml.md)。
+        # Timelapse/@intervalSec=60 だと 3000 時点で 50 時間、LSM/@frameRate=45.638
+        # だと 66 秒。3 桁違ううえ、triggerMode=1 (外部トリガ) なら実時刻は外部装置が
+        # 決めるので XML のどこにも書かれていない。
+        # ここに入るのは「正しい時間軸」ではなく後方互換のための値であって、
+        # 正確な時間軸はトリガー記録から別途再構成する。この値を根拠にした解析を
+        # 書かないこと。
         if tl is not None:
             meta["TimeIntervalSec"] = self._safe_float(tl.get("intervalSec"))
 
