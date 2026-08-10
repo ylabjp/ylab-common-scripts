@@ -12,8 +12,51 @@ def natural_sort_key(s: str):
     parts = re.split(r"(\d+)", s)
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
+def scan_tiff_dir(folder: str):
+    """``folder`` 直下の TIFF を **1 回の列挙で** 列挙し、``(paths, sizes)`` を返す。
+
+    サイズは列挙の応答に最初から入っている (Windows の
+    ``FindFirstFileW``/``FindNextFileW`` は ``nFileSizeHigh/Low`` を返し、SMB2 は
+    1 応答に多数のエントリをまとめる)。``os.DirEntry`` はそれを保持しているので、
+    ここで受け取っておけば後段が同じディレクトリをもう一度列挙せずに済む。
+
+    以前は :func:`find_tiff_files` が列挙してサイズを捨て、サイズフィルタが
+    :func:`sizes_from_dir_scan` でもう一度同じディレクトリを列挙していた。
+    取り込み1回あたり列挙が2回、つまり SMB 越しの往復が2倍かかっていた。
+
+    Returns:
+        tuple[list[str], dict[str, int]]: 自然順に並べた絶対パスと ``{パス: バイト数}``。
+    """
+    p = Path(folder)
+    if not p.exists():
+        raise FileNotFoundError(f"Input folder not found: {folder}")
+    base = p.resolve()
+
+    entries = []
+    with os.scandir(base) as it:
+        for entry in it:
+            if any(fnmatch.fnmatch(entry.name, ext) for ext in ("*.tif", "*.tiff")):
+                entries.append(entry)
+    entries.sort(key=lambda e: natural_sort_key(e.name))
+
+    paths, sizes = [], {}
+    for entry in entries:
+        path = str(base / entry.name)
+        paths.append(path)
+        try:
+            # 列挙時に取得済みの値。追加の往復は発生しない。
+            sizes[path] = entry.stat().st_size
+        except OSError:
+            # 拾えなければ呼び出し側が個別 stat で補える (含めないだけ)。
+            pass
+    return paths, sizes
+
+
 def find_tiff_files(folder: str) -> List[str]:
     """Return the absolute paths of the TIFF files directly under ``folder``.
+
+    サイズも要るなら :func:`scan_tiff_dir` を使うこと。こちらを呼んでから
+    サイズを別途取りに行くと、同じディレクトリを2回列挙することになる。
 
     ネットワークドライブ (SMB/UNC) 上での往復回数がこの関数の設計上の制約になる。
 
@@ -41,17 +84,7 @@ def find_tiff_files(folder: str) -> List[str]:
         返っていたが、今はリンクのパスが返る。Thorlabs の生データにも SMB 共有にも
         該当するものは無く、後段はどちらでも同じファイルを開く。
     """
-    p = Path(folder)
-    if not p.exists():
-        raise FileNotFoundError(f"Input folder not found: {folder}")
-    base = p.resolve()
-    names = []
-    with os.scandir(base) as it:
-        for entry in it:
-            if any(fnmatch.fnmatch(entry.name, ext) for ext in ("*.tif", "*.tiff")):
-                names.append(entry.name)
-    names.sort(key=natural_sort_key)
-    return [str(base / n) for n in names]
+    return scan_tiff_dir(folder)[0]
 
 
 def sizes_from_dir_scan(paths, on_directory=None) -> Dict[str, int]:

@@ -108,8 +108,10 @@ class ThorlabBioioBuilder:
 
         # ディレクトリ一覧の取得。ネットワークドライブが応答しないと、まだ1枚も
         # 開いていない段階でここが止まる。段階を分けておくと切り分けられる。
+        # 列挙は1回だけ。サイズも同じ応答から受け取り、後段のサイズフィルタへ渡す
+        # (以前はフィルタ側が同じディレクトリをもう一度列挙していた)。
         with timed_step("thorlab.discover_tiffs", target=str(self.tiff_dir)):
-            tiff_files = collect_valid_tiffs(self.tiff_dir)
+            tiff_files, sizes = collect_valid_tiffs(self.tiff_dir)
 
         if not tiff_files:
             raise RuntimeError("No valid TIFF files found.")
@@ -122,7 +124,8 @@ class ThorlabBioioBuilder:
 
         with timed_step("thorlab.stack", target=str(self.tiff_dir),
                         n_files=len(tiff_files)):
-            stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(tiff_files, self.xml_file, get_thorlabs_params)
+            stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(
+                tiff_files, self.xml_file, get_thorlabs_params, sizes=sizes)
 
         # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
         # params + slice count, not from the pixels.

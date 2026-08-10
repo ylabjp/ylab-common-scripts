@@ -213,11 +213,17 @@ def test_discover_and_stack_separates_listing_xml_and_stacking(steps, monkeypatc
     """
     lazy = np.zeros((1, 1, 3, 4, 4), dtype=np.uint16)
 
-    monkeypatch.setattr(builder_mod, "collect_valid_tiffs", lambda d: ["a.tif", "b.tif"])
-    monkeypatch.setattr(
-        builder_mod, "stack_thorlab_with_bioio_calibrated",
-        lambda files, xml, params: (lazy, files),
-    )
+    # 探索は (files, sizes) を返す。サイズを一緒に返すのは、後段のフィルタが
+    # 同じディレクトリをもう一度列挙しないで済ませるため。
+    monkeypatch.setattr(builder_mod, "collect_valid_tiffs",
+                        lambda d: (["a.tif", "b.tif"], {"a.tif": 1, "b.tif": 2}))
+    seen = {}
+
+    def _stack(files, xml, params, sizes=None):
+        seen["sizes"] = sizes
+        return lazy, files
+
+    monkeypatch.setattr(builder_mod, "stack_thorlab_with_bioio_calibrated", _stack)
 
     b = builder_mod.ThorlabBioioBuilder(tmp_path)
     monkeypatch.setattr(b, "_get_params", lambda: PARAMS)
@@ -231,3 +237,5 @@ def test_discover_and_stack_separates_listing_xml_and_stacking(steps, monkeypatc
         "thorlab.stack",
     ]
     assert done_fields(steps, "thorlab.stack")["n_files"] == 2
+    # 探索で得たサイズがそのままスタッカへ渡る (再列挙させない)
+    assert seen["sizes"] == {"a.tif": 1, "b.tif": 2}
