@@ -86,18 +86,17 @@ def _note_file(exc: BaseException, text: str) -> None:
         pass
 
 
+#: 枠を埋めた結果。``kept`` が実際に使う (t, z) の並び、``cut`` は理由ごとの件数。
+FilledFrame = namedtuple("FilledFrame", "slots t_keep z_keep unreadable outside ragged")
+
+
 def _thorlabs_zt(path):
     """ファイル名の末尾2つの数値連番を ``(z, t)`` として返す。読めなければ None。
 
     ThorLabs は取得の実際の次元をファイル名の連番で持っている
-    (``ChanA_<X>_<Y>_<Z>_<T>.tif``)。XML は **取得前の設定** なので、Z スタックを
-    組んだまま T 連続撮影に切り替えた、途中で止めた、といった場合に実データと
-    ずれる。ファイルは取得の結果なので、こちらが事実。
-
-    「ちょうど5トークン」ではなく **末尾の2つ** を見るのは、接頭辞が増えた形
-    (``Image_ChanA_001_001_001_0001.tif`` など) でも同じ規約が続くため。
-    数値が2つ未満なら Z と T を分けられないので None を返し、呼び出し側が
-    XML の mode へ退避する。
+    (``ChanA_<X>_<Y>_<Z>_<T>.tif``)。「ちょうど5トークン」ではなく **末尾の2つ**
+    を見るのは、接頭辞が増えた形 (``Image_ChanA_001_001_001_0001.tif``) でも
+    同じ規約が続くため。
     """
     nums = [t for t in Path(path).stem.split("_") if t.isdigit()]
     if len(nums) < 2:
@@ -105,26 +104,107 @@ def _thorlabs_zt(path):
     return int(nums[-2]), int(nums[-1])
 
 
-def _group_by_timepoint(files):
-    """``[(t, [ファイル, ...]), ...]`` を t 昇順・各時点内は z 昇順で返す。
+def _fill_frame(files, max_t, max_z) -> FilledFrame:
+    """XML が決めた枠 ``(max_t, max_z)`` をファイルで埋め、埋まらない分を落とす。
 
-    ファイル名が 5 トークンの数値形式でなければ None (呼び出し側が XML の mode へ
-    退避する)。
+    取り込みの組み立てはこの3段階だけで決まる。
+
+    1. **枠** は XML が決める (``SizeT`` x ``SizeZ``)。取得の上限であって、
+       実際にそこまで撮れたかは XML には書かれていない。
+    2. **埋める** のはファイル。名前の末尾2つの連番が (z, t) の位置を指す。
+    3. **埋まらなかった分はカットする**。取得を途中で止めれば後ろの時点は空のまま、
+       止めた瞬間の時点は Z が途中まで、という形で必ず端に穴が空く。
+
+    枠は **目標であって上限ではない**。枠からはみ出したファイルは捨てずに使い、
+    件数だけ報告する。この装置の XML は当てにならないことが分かっており
+    (Z スタックの設定が残ったまま T 連続撮影される)、当てにならない値を上限に
+    使うと実在する面を落としてしまう。``SizeZ`` は面数で数えるがファイル名の Z は
+    ファイル番号なので、多ページのファイルが混ざると単位も合わない。
+    枠が効くのは「宣言された枡が埋まらなかったとき」だけで、それは下の
+    カットで自然に処理される。
+
+    連番が読めないファイルはどの枡も指せないので落ちる。1枚混ざっただけで
+    チャンネル全体を諦めてはいけない (それが不具合を覆い隠していた)。
+
+    「カット」の切り方だけは自明でない。最後の1時点だけ Z が欠けたとき、
+    「全時点に共通する z」を採るとその1時点のために全時点の z が削れ、
+    「全 z が揃う時点」を採ると欠けた1時点だけが落ちる。どちらが正しいかは
+    件数で決まるので、**残る面の数が最大になる長方形** を選ぶ
+    (61面 x 49時点 = 2989 と、12面 x 50時点 = 600 なら前者)。
     """
-    indexed = []
+    slots, unreadable, outside = {}, [], []
     for f in files:
         zt = _thorlabs_zt(f)
         if zt is None:
-            return None
-        indexed.append((zt[1], zt[0], f))       # (t, z, path)
-    indexed.sort()
+            unreadable.append(f)
+            continue
+        z, t = zt
+        if t > max_t or z > max_z:
+            outside.append(f)           # 使うが、XML とずれている事実は残す
+        slots[(t, z)] = f
 
-    groups = []
-    for t, _z, f in indexed:
-        if not groups or groups[-1][0] != t:
-            groups.append((t, []))
-        groups[-1][1].append(f)
-    return groups
+    if not slots:
+        return FilledFrame({}, [], [], unreadable, outside, [])
+
+    z_counts = defaultdict(int)
+    for _t, z in slots:
+        z_counts[z] += 1
+    t_values = sorted({t for t, _z in slots})
+
+    best = None
+    for threshold in sorted(set(z_counts.values())):
+        z_keep = sorted(z for z, n in z_counts.items() if n >= threshold)
+        t_keep = [t for t in t_values
+                  if all((t, z) in slots for z in z_keep)]
+        score = len(z_keep) * len(t_keep)
+        if best is None or score > best[0]:
+            best = (score, t_keep, z_keep)
+
+    _score, t_keep, z_keep = best
+    ragged = [t for t in t_values if t not in set(t_keep)]
+    return FilledFrame(slots, t_keep, z_keep, unreadable, outside, ragged)
+
+
+def _examples(files, n=3):
+    return ", ".join(Path(f).name for f in files[:n]) + (" ..." if len(files) > n else "")
+
+
+def _report_cuts(ch, ch_files, frame, max_t, max_z) -> None:
+    """枠のどこが埋まり、何が落ちたかを1行で出し、落ちた分は警告する。
+
+    カットは正常系でも起きる (取得を止めれば必ず後ろが空く) ので、落ちたこと自体は
+    エラーにしない。ただし **黙って落とさない**: 何枚がなぜ落ちたかが出ていないと、
+    出来上がったスタックが正しいのか確かめようがない。
+    """
+    print(f"DEBUG: Channel {ch}: frame {max_t}T x {max_z}Z from the XML, filled "
+          f"{len(frame.slots)}/{len(ch_files)} file(s) → "
+          f"T={len(frame.t_keep)} Z={len(frame.z_keep)}")
+
+    if frame.unreadable:
+        warnings.warn(
+            "[thorlab] Channel %s: %d file(s) have no Z/T sequence numbers in their "
+            "name, so they cannot be placed in the acquisition frame and were cut "
+            "(%s). Thorlabs raw files end in two numeric fields, "
+            "e.g. ChanA_001_001_<Z>_<T>.tif."
+            % (ch, len(frame.unreadable), _examples(frame.unreadable)),
+            stacklevel=2,
+        )
+    if frame.outside:
+        warnings.warn(
+            "[thorlab] Channel %s: %d file(s) sit beyond the frame the XML declares "
+            "(SizeT=%d x SizeZ=%d) — the XML is out of date with the data. They were "
+            "kept, since the files record what was actually acquired (%s)."
+            % (ch, len(frame.outside), max_t, max_z, _examples(frame.outside)),
+            stacklevel=2,
+        )
+    if frame.ragged:
+        warnings.warn(
+            "[thorlab] Channel %s: %d timepoint(s) do not have all %d plane(s) and "
+            "were cut (t=%s). The acquisition probably stopped mid-stack."
+            % (ch, len(frame.ragged), len(frame.z_keep),
+               frame.ragged[:5] + (["..."] if len(frame.ragged) > 5 else [])),
+            stacklevel=2,
+        )
 
 
 def probe_plane_layout(path) -> PlaneLayout:
@@ -320,6 +400,11 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
             stacklevel=2,
         )
 
+    # 取得の枠は XML が決める。上限ではなく目標で、実際にそこまで撮れたかは
+    # XML には書かれていない (:func:`_fill_frame` 参照)。
+    max_t = max(int(params.get("SizeT") or 1), 1)
+    max_z = max(int(params.get("SizeZ") or 1), 1)
+
     # 1ファイル = 1面 が圧倒的多数。そうでないときだけ面数を確かめに行く。
     read_planes = dask.delayed(_read_file_planes, pure=True)
 
@@ -342,81 +427,42 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
                     dtype=layout.dtype,
                 )
 
-        # 多ページのファイルはその全ページが面として並ぶ。以前はチャンネル内に
-        # 多ページのファイルが1つでもあると、それ1つだけを残して他のファイルを
-        # 黙って捨てていた (40面あるのに Z=10 のスタックが出来ていた)。
-        # どの面がどの時点・どの Z なのかはファイル名が持っている。XML の mode は
-        # 「Z スタックとして組んだか」という **取得前の設定** でしかなく、
-        # Z スタックを組んだまま T 連続撮影に切り替えた取得では実データとずれる
-        # (実際に SizeZ=61 / ZStackEnabled=1 の XML で 3001 枚の XYT が撮られ、
-        # 3001 時点が丸ごと Z 軸へ潰れて深さ 1500 um のスタックが出来ていた)。
-        # フレームサイズを XML でなく TIFF ヘッダから採るのと同じ理由で、
-        # ここでもファイルを事実として扱う。
-        groups = _group_by_timepoint(ch_files)
-        if groups is None:
-            # 退避: ファイル名から連番が読めない。次元が分からないので XML の mode に
-            # 従って1軸へ積む (従来の挙動)。
-            #
-            # ここは **黙って通してはいけない**。読めなかったことに気付かないまま
-            # mode を信じると、T 連続撮影が Z 軸へ潰れて「深さ 1500 um のスタック」が
-            # 出来上がる。どのファイル名で諦めたのかを添えて知らせる。
-            warnings.warn(
-                "[thorlab] Could not read the Z/T sequence numbers from the file "
-                "names of channel %s, so the acquisition layout is unknown. Falling "
-                "back to the XML mode=%s, which puts all %d plane(s) on the %s axis. "
-                "If that is wrong the stack is silently mis-shaped. Example file "
-                "name: %s (expected two trailing numeric fields, "
-                "e.g. ChanA_001_001_<Z>_<T>.tif)."
-                % (ch, mode, len(ch_files), mode, Path(ch_files[0]).name),
-                stacklevel=2,
-            )
-            print(f"DEBUG: Channel {ch}: file names give no Z/T "
-                  f"(first name: {Path(ch_files[0]).name}); using XML mode={mode}")
-            planes = da.concatenate([blocks[f] for f in ch_files], axis=0)
-            vol = planes[np.newaxis] if mode == "Z" else planes[:, np.newaxis]
-        else:
-            n_t = len(groups)
-            n_z = max(len(fs) for _t, fs in groups)
-            print(f"DEBUG: Channel {ch}: file names give Z={n_z} x T={n_t} "
-                  f"(XML says SizeZ={params.get('SizeZ')} SizeT={params.get('SizeT')}, "
-                  f"mode={mode})")
-            per_t = []
-            for _t, fs in groups:
-                zs = [blocks[f] for f in fs]
-                per_t.append(zs[0] if len(zs) == 1 else da.concatenate(zs, axis=0))
+        # 枠を埋めて、埋まらなかった分を落とす (:func:`_fill_frame`)。
+        # 面の位置はファイル名の連番が決める。XML の mode ("Z スタックとして
+        # 組んだか") は取得 **前** の設定でしかなく、Z スタックの設定を残したまま
+        # T 連続撮影した取得では実データとずれるため、軸の割り当てには使わない。
+        frame = _fill_frame(ch_files, max_t, max_z)
+        _report_cuts(ch, ch_files, frame, max_t, max_z)
 
-            # 取得が途中で終わると、最後の時点だけ Z が欠ける。欠けた時点を捨てて
-            # 揃っている分で続ける (XML より短い T を許容しているのと同じ考え方)。
-            depths = [int(v.shape[0]) for v in per_t]
-            full = max(set(depths), key=depths.count)
-            if len(set(depths)) > 1:
-                dropped = [t for (t, _), d in zip(groups, depths) if d != full]
-                warnings.warn(
-                    "[thorlab] %d of %d timepoints have an incomplete Z stack "
-                    "(expected Z=%d, got %s); dropping them. The acquisition was "
-                    "probably stopped mid-stack. Dropped timepoints: %s"
-                    % (len(dropped), len(depths), full,
-                       sorted({d for d in depths if d != full}),
-                       dropped[:10] + (["..."] if len(dropped) > 10 else [])),
-                    stacklevel=2,
-                )
-                per_t = [v for v, d in zip(per_t, depths) if d == full]
-            vol = da.stack(per_t, axis=0)               # (T, Z, Y, X)
+        if not frame.t_keep:
+            raise RuntimeError(
+                "Channel %s: none of the %d file name(s) carry the Z/T sequence "
+                "numbers needed to place the planes, so no stack can be built. "
+                "Thorlabs raw files end in two numeric fields, e.g. "
+                "ChanA_001_001_<Z>_<T>.tif. Example of what was found: %s."
+                % (ch, len(ch_files), Path(ch_files[0]).name)
+            )
+
+        per_t = []
+        for t in frame.t_keep:
+            zs = [blocks[frame.slots[(t, z)]] for z in frame.z_keep]
+            per_t.append(zs[0] if len(zs) == 1 else da.concatenate(zs, axis=0))
+        vol = da.stack(per_t, axis=0)                   # (T, Z, Y, X)
 
         channel_stacks.append(vol)
         print(f"DEBUG: Channel {ch}: {len(ch_files)} file(s) → "
               f"T={vol.shape[0]} Z={vol.shape[1]}")
 
     # 取得が途中で終わると、チャンネルによって時点数 (または面数) が1つ違うことがある。
-    # バッチ全体を落とさず、揃っている分だけを使う (XML より短い T を許容しているのと
-    # 同じ考え方)。T 側と Z 側のどちらがずれるかは取得の切れ方で変わるので両方見る。
-    for axis, label in ((0, "時点数"), (1, "面数")):
+    # バッチ全体を落とさず、揃っている分だけを使う。T 側と Z 側のどちらがずれるかは
+    # 取得の切れ方で変わるので両方見る。
+    for axis, label in ((0, "timepoints"), (1, "planes")):
         counts = [int(s.shape[axis]) for s in channel_stacks]
         if len(set(counts)) > 1:
             keep = min(counts)
             warnings.warn(
-                "[thorlab] チャンネルごとの%sが揃っていません (%s)。取得が途中で終了した"
-                "可能性があります。共通する %d までで続行します。"
+                "[thorlab] The channels do not have the same number of %s (%s); the "
+                "acquisition probably ended mid-frame. Continuing with the common %d."
                 % (label, dict(zip(channel_keys, counts)), keep),
                 stacklevel=2,
             )

@@ -10,12 +10,17 @@ ThorLabs の生ファイルは ``ChanA_<X>_<Y>_<Z>_<T>.tif`` で、取得の実�
 3001 時点が Z 軸へ潰れて「深さ 1500 um のスタック」が黙って出来上がる
 (実際に起きた: XML が SizeZ=61 / ZStackEnabled=1、実データは 3001 枚)。
 
-そこで積む軸はファイル名から決める。時点ごとに Z をまとめて (T, C, Z, Y, X) を
-組むので、XYT / Z スタック / 4D / 1時点=1多ページファイル が同じ1本の経路で通る。
+組み立ては3段階しかない。
 
-連番が読めない命名だけは XML の mode へ退避するが、**黙って退避しない**。
-読めなかったことに気付かないまま mode を信じるのが、まさに上の不具合が
-表に出なかった経路だった (退避したこと自体がログのどこにも出ていなかった)。
+1. **枠** を XML が決める (SizeT x SizeZ)。取得の上限であって、実際にそこまで
+   撮れたかは XML には書かれていない。
+2. ファイル名の末尾2つの連番が指す枡を **埋める**。
+3. 埋まらなかった分を **カットする**。
+
+退避経路は無い。以前は「連番が読めないファイルが1枚でもあれば XML の mode に
+従って全部を1軸へ積む」という退避があり、それが 3000 枚から得られた正しい配置を
+捨てて不具合を覆い隠していた。読めないファイルは枡を埋めないので落ちるだけで、
+残りの配置には影響しない。
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ import pytest
 import tifffile
 
 from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import (
-    _group_by_timepoint,
+    _fill_frame,
     _thorlabs_zt,
     stack_thorlab_with_bioio_calibrated,
 )
@@ -71,17 +76,82 @@ def test_unparsable_names_return_none(name):
     assert _thorlabs_zt("/x/" + name) is None
 
 
-def test_grouping_orders_timepoints_and_z_within_them():
-    files = ["ChanA_001_001_002_002.tif", "ChanA_001_001_001_002.tif",
-             "ChanA_001_001_002_001.tif", "ChanA_001_001_001_001.tif"]
-    assert _group_by_timepoint(files) == [
-        (1, ["ChanA_001_001_001_001.tif", "ChanA_001_001_002_001.tif"]),
-        (2, ["ChanA_001_001_001_002.tif", "ChanA_001_001_002_002.tif"]),
-    ]
+# ---- 枠を埋める / 埋まらない分をカットする ------------------------------------
+
+def _names(z_range, t_range):
+    return ["ChanA_001_001_%03d_%03d.tif" % (z, t) for t in t_range for z in z_range]
 
 
-def test_grouping_gives_up_on_names_it_cannot_read():
-    assert _group_by_timepoint(["ChanA_001_001_001_001.tif", "odd.tif"]) is None
+def test_the_frame_is_filled_in_order():
+    frame = _fill_frame(_names(range(1, 3), range(1, 4)), max_t=3, max_z=2)
+    assert frame.t_keep == [1, 2, 3]
+    assert frame.z_keep == [1, 2]
+    assert frame.slots[(2, 1)] == "ChanA_001_001_001_002.tif"
+    assert (frame.unreadable, frame.outside, frame.ragged) == ([], [], [])
+
+
+def test_an_unfilled_tail_is_cut_not_the_whole_frame():
+    """枠が 3000 時点でも、埋まったのが 3 時点ならそこまで。"""
+    frame = _fill_frame(_names(range(1, 3), range(1, 4)), max_t=3000, max_z=2)
+    assert frame.t_keep == [1, 2, 3]
+
+
+def test_unfilled_z_is_cut_so_a_timelapse_does_not_become_a_stack():
+    """XML が Z=61 でも、ファイルが z=1 しか埋めなければ Z=1 になる。
+
+    報告された不具合そのもの: 枠を信じて 3001 時点を Z 軸へ積むと
+    「深さ 1500 um のスタック」が出来ていた。
+    """
+    frame = _fill_frame(_names([1], range(1, 3002)), max_t=3000, max_z=61)
+    assert frame.z_keep == [1]                # 埋まらなかった z=2..61 は落ちる
+    # 枠は目標なので、はみ出した t=3001 は落とさず報告だけする
+    assert len(frame.t_keep) == 3001
+    assert len(frame.outside) == 1
+
+
+def test_names_without_sequence_numbers_are_cut_not_fatal():
+    """読めない名前が1枚混ざっても、残り全部の情報は捨てない。
+
+    回帰: 以前は1枚でも読めないとチャンネル全体を諦めて XML の mode へ退避し、
+    3000 枚から得られた正しい配置を丸ごと捨てていた。
+    """
+    files = _names([1], range(1, 5)) + ["ChanA_Preview.tif"]
+    frame = _fill_frame(files, max_t=4, max_z=1)
+
+    assert frame.t_keep == [1, 2, 3, 4]       # 残りは通常どおり埋まる
+    assert frame.unreadable == ["ChanA_Preview.tif"]
+
+
+def test_the_largest_complete_block_wins():
+    """最後の1時点だけ Z が欠けたら、その時点を捨てる (z を削らない)。
+
+    「全時点に共通する z」を採ると 12面 x 50時点 = 600 面、
+    「全 z が揃う時点」を採ると 61面 x 49時点 = 2989 面。後者を選ぶ。
+    """
+    files = _names(range(1, 62), range(1, 50)) + _names(range(1, 13), [50])
+    frame = _fill_frame(files, max_t=3000, max_z=61)
+
+    assert len(frame.z_keep) == 61
+    assert len(frame.t_keep) == 49
+    assert frame.ragged == [50]
+
+
+def test_a_few_stray_planes_do_not_shrink_a_long_timelapse():
+    """逆向きの場合。少数の時点だけ余分な z を持つなら、その z の方を捨てる。
+
+    100 時点の XYT に、2 時点だけ z=2..5 のファイルが紛れている状況。
+    「z を残す」を選ぶと 5面 x 2時点 = 10 面しか残らず、98 時点が消える。
+    「時点を残す」なら 1面 x 100時点 = 100 面。後者を選ぶ。
+
+    上の「最後の1時点だけ欠ける」ケースとは逆向きなので、この2つが揃って
+    初めて「残る面の数を最大にする」規則が効いていると言える
+    (片方だけなら「常に z を優先」でも通ってしまう)。
+    """
+    files = _names([1], range(1, 101)) + _names(range(2, 6), [1, 2])
+    frame = _fill_frame(files, max_t=3000, max_z=61)
+
+    assert frame.z_keep == [1]
+    assert len(frame.t_keep) == 100
 
 
 # ---- 4D 取得 -----------------------------------------------------------------
@@ -159,7 +229,7 @@ def test_an_interrupted_last_stack_is_dropped_with_a_warning(tmp_path):
         _write(d, "ChanA", z, 4, 40 + z)
     files = sorted(str(p) for p in d.glob("*.tif"))
 
-    with pytest.warns(UserWarning, match="incomplete Z stack"):
+    with pytest.warns(UserWarning, match="were cut"):
         stacked, _ = stack_thorlab_with_bioio_calibrated(
             files, d / "Experiment.xml", _params("Z", size_z=4, size_t=4),
             min_kb=0)
@@ -242,31 +312,31 @@ def test_a_stale_z_stack_xml_does_not_push_a_timelapse_onto_Z(tmp_path):
     assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5, 6, 7]
 
 
-def test_names_without_sequence_numbers_fall_back_loudly(tmp_path, capsys):
-    """連番が読めないときに黙って mode を信じない。
+def test_names_without_sequence_numbers_are_cut_and_reported(tmp_path, capsys):
+    """連番が読めないファイルは落ちるだけ。残りの配置は壊さない。
 
-    回帰: 実データで ``_group_by_timepoint`` が None を返し、何の説明もないまま
-    XML の mode="Z" が採用された。結果は以前と同じ「3001 時点が Z 軸」で、
-    しかもログには退避したことがどこにも出ていなかったため、修正が効いていない
-    のか経路が違うのかを log からは切り分けられなかった。
+    回帰: 以前はここに「XML の mode に従って全部を1軸へ積む」退避があり、
+    1枚読めないだけでチャンネル全体の配置を捨てていた。実データではそれが起きて
+    3001 時点が Z 軸へ潰れ、しかも退避したこと自体がログに出ていなかった。
     """
     d = tmp_path / "img01"
     d.mkdir()
-    for i in range(1, 5):
-        # チャンネルは読めるが連番が読めない命名 ("p1" は数値トークンではない)
-        tifffile.imwrite(d / f"ChanA_p{i}.tif",
-                         np.full((8, 8), i, dtype=np.uint16))
+    for t in range(1, 5):
+        _write(d, "ChanA", 1, t, t)
+    tifffile.imwrite(d / "ChanA_Preview.tif",       # 連番の無い紛れ込み
+                     np.zeros((8, 8), dtype=np.uint16))
     files = sorted(str(p) for p in d.glob("*.tif"))
 
-    with pytest.warns(UserWarning, match="Could not read the Z/T sequence numbers"):
+    with pytest.warns(UserWarning, match="no Z/T sequence numbers"):
         stacked, _ = stack_thorlab_with_bioio_calibrated(
-            files, d / "Experiment.xml", _params("Z", size_z=4, size_t=1), min_kb=0)
+            files, d / "Experiment.xml", _params("Z", size_z=61, size_t=4), min_kb=0)
 
-    assert stacked.shape == (1, 1, 4, 8, 8)          # 従来の退避結果は変えない
-    # どのファイル名で諦めたのかが分かる (次の調査の起点になる)
+    # 紛れ込みを落としたうえで、残り4枚は時点として正しく並ぶ
+    assert stacked.shape == (4, 1, 1, 8, 8)
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4]
+    # 何がどれだけ落ちたかが分かる
     out = capsys.readouterr().out
-    assert "file names give no Z/T" in out
-    assert "ChanA_p1.tif" in out
+    assert "filled 4/5 file(s)" in out
 
 
 def test_a_matching_z_stack_is_not_flagged(tmp_path):

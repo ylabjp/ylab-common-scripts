@@ -226,7 +226,7 @@ def test_ragged_channels_are_truncated_with_a_warning(tmp_path):
     params = ExperimentXMLParser(xml).as_params()
 
     files = sorted(str(p) for p in d.glob("*.tif"))
-    with pytest.warns(UserWarning, match="揃っていません"):
+    with pytest.warns(UserWarning, match="do not have the same number"):
         stacked, _ = stack_thorlab_with_bioio_calibrated(files, xml, params, min_kb=0)
 
     assert stacked.shape == (1, 2, 2, 64, 64)   # 共通する2面まで
