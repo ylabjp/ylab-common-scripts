@@ -368,12 +368,15 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
     # Mosaic (multiple XY stage positions) is NOT supported here: each tile would
     # be collapsed into Z/T. Detect it from the filenames and fail loudly rather
     # than produce a silently wrong stack.
-    try:
-        _, _dims = extract_dimensions(filtered_files)
-        _is_mosaic = is_mosaic(_dims)
-    except Exception:
-        _dims, _is_mosaic = {}, False
-    if _is_mosaic:
+    #
+    # ここを try/except Exception で包んではいけない。以前は包んでいて、
+    # extract_dimensions が落ちると「mosaic ではない」として素通りしていた
+    # (しかも実際に Timelapse のようなトークンを含む名前で落ちた)。安全確認が
+    # 確認できなかったときに通す形になっていたので、タイル取得が黙って
+    # Z/T 軸へ潰される。extract_dimensions は例外を投げない契約にしたので、
+    # ここで何か飛んできたらそれは本物の不具合であり、握り潰さず落とす。
+    _, _dims = extract_dimensions(filtered_files)
+    if is_mosaic(_dims):
         raise RuntimeError(
             "Multiple XY stage positions (mosaic) detected — not supported by "
             "stack_thorlab_with_bioio_calibrated (tiles would collapse into Z/T). "

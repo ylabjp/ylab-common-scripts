@@ -8,8 +8,27 @@ from pathlib import Path
 from collections import defaultdict
 
 
-def extract_dimensions(sorted_tiffs):
+#: ラベル付き形式の接頭辞 → 次元名。長い接頭辞を先に見る (``XY`` を ``X`` より先、
+#: ``CH`` を ``C`` より先)。そうしないと ``XY01`` が X=Y01 として拾われる。
+_LABELLED_PREFIXES = (("XY", "XY"), ("CH", "CH"),
+                      ("X", "X"), ("Y", "Y"), ("Z", "Z"), ("T", "T"))
 
+
+def extract_dimensions(sorted_tiffs):
+    """ファイル名から次元ごとの連番の集合を取り出す。
+
+    **この関数は例外を投げない。** 読めないトークンは黙って飛ばす。
+
+    以前は ``Z`` / ``T`` / ``XY`` / ``CH`` の分岐だけ ``isdigit()`` の確認が無く、
+    ``Timelapse`` や ``Zstack`` のようなトークンを含む名前で ``ValueError`` に
+    なっていた。呼び出し側 (mosaic 判定) はそれを ``except Exception`` で受けて
+    「mosaic ではない」として続行していたため、**タイル取得が黙って Z/T 軸へ
+    潰される** 経路になっていた。安全確認が、確認できなかったときに素通りする形に
+    なっていたということである。
+
+    そこで X/Y と同じように全分岐で数字を確認する。読めないものは次元として
+    数えないだけなので、呼び出し側は「投げない」ことだけ前提にできる。
+    """
     dims = defaultdict(set)
     image_name = None
 
@@ -21,34 +40,17 @@ def extract_dimensions(sorted_tiffs):
         if image_name is None:
             image_name = tokens[0]
 
-        # Case 1: labeled format
+        # Case 1: labeled format (image_XY01_Z02_CH1_T03)
         for token in tokens:
+            for prefix, dim in _LABELLED_PREFIXES:
+                if token.startswith(prefix) and token[len(prefix):].isdigit():
+                    dims[dim].add(int(token[len(prefix):]))
+                    break
 
-            if token.startswith("XY"):
-                dims["XY"].add(int(token[2:]))
-
-            elif token.startswith("X") and token[1:].isdigit():
-                dims["X"].add(int(token[1:]))
-
-            elif token.startswith("Y") and token[1:].isdigit():
-                dims["Y"].add(int(token[1:]))
-
-            elif token.startswith("Z"):
-                dims["Z"].add(int(token[1:]))
-
-            elif token.startswith("CH"):
-                dims["CH"].add(int(token[2:]))
-
-            elif token.startswith("T"):
-                dims["T"].add(int(token[1:]))
-
-        # Case 2: Thorlab numeric format
-        if len(tokens) == 5 and tokens[1].isdigit():
-
-            dims["X"].add(int(tokens[1]))
-            dims["Y"].add(int(tokens[2]))
-            dims["Z"].add(int(tokens[3]))
-            dims["T"].add(int(tokens[4]))
+        # Case 2: Thorlab numeric format (ChanA_<X>_<Y>_<Z>_<T>)
+        if len(tokens) == 5 and all(t.isdigit() for t in tokens[1:]):
+            for dim, value in zip(("X", "Y", "Z", "T"), tokens[1:]):
+                dims[dim].add(int(value))
 
     return image_name, dims
 
