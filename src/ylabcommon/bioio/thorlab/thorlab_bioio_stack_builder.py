@@ -27,7 +27,7 @@ import tifffile
 
 from ylabcommon.utils.outfile_name import extract_dimensions, is_mosaic
 from ylabcommon.utils.perf import timed_step
-from ylabcommon.utils.utils import natural_sort_key
+from ylabcommon.utils.utils import natural_sort_key, sizes_from_dir_scan
 from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
 
 
@@ -71,21 +71,40 @@ def _thorlabs_channel_key(path):
     return stem
 
 
+def _note_file(exc: BaseException, text: str) -> None:
+    """例外の型を変えずに「どのファイルか」だけを足す。
+
+    ``tifffile`` の例外はファイル名を持たないものがある (``TiffFileError:
+    not a TIFF file: header=b''`` / ``ValueError: failed to read 2048 bytes,
+    got 896``)。3001 枚を数時間流したあとにこれだけ出ても調べようがない。
+    型を包み替えると呼び出し側の ``except`` の意味が変わるので、PEP 678 の
+    note として添えるだけにする。
+    """
+    try:
+        exc.add_note(text)
+    except AttributeError:      # Python < 3.11
+        pass
+
+
 def probe_plane_layout(path) -> PlaneLayout:
     """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。
 
     XML から分からないのはこの3つだけなので、同一取得であれば1枚読めば全ファイルに
     ついて分かる。画素は読まない。
     """
-    with tifffile.TiffFile(str(path)) as tf:
-        page = tf.pages[0]
-        shape = tuple(page.shape)
-        if len(shape) < 2:
-            raise RuntimeError(
-                f"Unexpected TIFF page shape {shape} in {path}; expected at least 2D."
-            )
-        return PlaneLayout(len(tf.pages), int(shape[-2]), int(shape[-1]),
-                           np.dtype(page.dtype))
+    try:
+        with tifffile.TiffFile(str(path)) as tf:
+            page = tf.pages[0]
+            shape = tuple(page.shape)
+            if len(shape) < 2:
+                raise RuntimeError(
+                    f"Unexpected TIFF page shape {shape} in {path}; expected at least 2D."
+                )
+            return PlaneLayout(len(tf.pages), int(shape[-2]), int(shape[-1]),
+                               np.dtype(page.dtype))
+    except BaseException as e:
+        _note_file(e, "while reading the TIFF header of: %s" % path)
+        raise
 
 
 def _read_file_planes(path, n_pages, height, width, dtype):
@@ -103,6 +122,12 @@ def _read_file_planes(path, n_pages, height, width, dtype):
         # errno はそのまま引き継ぐ (sorter 側が EIO かどうかで分岐するため)。
         raise OSError(e.errno, "%s (while reading %s)"
                       % (e.strerror or type(e).__name__, path)) from e
+    except BaseException as e:
+        # 途中で切れたファイルは OSError ではなく ``ValueError: failed to read
+        # 2048 bytes, got 896`` で落ちる。errno を持たないので包み替えられないが、
+        # ファイル名が無いのは同じように困るので note で添える。
+        _note_file(e, "while reading the pixels of: %s" % path)
+        raise
 
     arr = np.asarray(arr)
     if arr.shape[-2:] != (height, width):
@@ -159,20 +184,46 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # 同じ値になるので、Better Stack 上で工程をまたいで突き合わせられる。
     target = str(Path(xml_path).parent)
 
-    # Size filter (a stat() per file, NOT a pixel read). ``tiff_files`` is already
-    # sorted by collect_valid_tiffs; honor the ``min_kb`` parameter.
+    # Size filter (NOT a pixel read). ``tiff_files`` is already sorted by
+    # collect_valid_tiffs; honor the ``min_kb`` parameter.
     #
-    # 画素は読まないが stat は1ファイルにつき1回走る。生データはネットワークドライブ
-    # (V:) 上にあるため、数万ファイルになるとこの往復だけで数分かかり、接続が切れると
-    # ここで止まる。何件目のどのファイルを見ているかを進捗として送る。
+    # 以前は ``os.path.getsize(f)`` を1ファイルずつ呼んでいた。画素は読まないが往復は
+    # 1件1回で、生データがネットワークドライブ (V:) 上にあるため数万ファイルでは
+    # この stat だけで数分かかり、接続が切れるとここで止まっていた。
+    #
+    # サイズはディレクトリ列挙の応答に最初から入っているので、ディレクトリごとに1回
+    # 列挙すれば全件分が追加の往復なしで揃う (:func:`sizes_from_dir_scan`)。
+    # 3001 回の stat が 1 回の列挙になる。
+    #
+    # ただし列挙が返すサイズは、書き込み中のファイルに対して古い値になりうる
+    # (Windows のメタデータ更新は遅延する)。そこで **捨てる判断だけ** は
+    # ``os.path.getsize`` で裏を取る。正常系では 0 回、取りこぼしかけた件数ぶんしか
+    # 追加の往復が発生せず、「取得と並行して走らせたら数枚落ちた」を防げる。
+    # 列挙で止まったときに「どのディレクトリを見ているか」を名指しできるよう、
+    # ディレクトリに入る直前に item を差し替える (ファイル単位のループと同じ読み方)。
+    with timed_step("thorlab.scan_sizes", total=len(tiff_files),
+                    target=target) as scan_step:
+        scan_step.advance(n=0, item=target)
+        scanned_sizes = sizes_from_dir_scan(
+            tiff_files, on_directory=lambda d: scan_step.advance(n=0, item=d))
+        scan_step.advance(n=len(scanned_sizes), item=target)
+
     with timed_step("thorlab.filter_by_size", total=len(tiff_files),
-                    target=target) as step:
+                    target=target, scanned=len(scanned_sizes)) as step:
         filtered_files = []
+        threshold = min_kb * 1024
         for f in tiff_files:
             step.advance(item=f)
-            if os.path.getsize(f) > min_kb * 1024:
+            size = scanned_sizes.get(f)
+            if size is None or size <= threshold:
+                # 列挙で拾えなかった / 小さすぎるように見えるものだけ個別に確認する。
+                size = os.path.getsize(f)
+            if size > threshold:
                 filtered_files.append(f)
 
+    # ``tiff_files`` は collect_valid_tiffs が自然順に並べたものなので、ここで
+    # 並べ直さない。素の sorted() は ChanA_00002 < ChanA_00010 を保証しないため、
+    # ゼロ埋めが崩れた取得で面の順序が入れ替わりうる。
     if not filtered_files:
         raise RuntimeError(
             "No TIFF file larger than %d KB was found; nothing to stack." % min_kb

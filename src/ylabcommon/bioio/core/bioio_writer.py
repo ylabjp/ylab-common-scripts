@@ -65,7 +65,11 @@ class BioIOWriter:
         dim_order: str = "TCZYX",
         channel_names: Optional[Sequence[str]] = None,
         physical_pixel_sizes: Optional[tuple[float, float, float]] = None,
-        save_zarr: bool = True,
+        # 既定は False。OME-Zarr も書くと同じ遅延スタックをもう一度 compute することに
+        # なり、生 TIFF を全部読み直したうえ _write_omezarr 側は volume 全体を RAM に
+        # 展開する。安全側を既定にして、必要な呼び出し側だけが明示的に有効化する
+        # (ThorlabBioioBuilder.write は以前から save_zarr=False を明示していた)。
+        save_zarr: bool = False,
     ) -> None:
         """
         Write validated dataset.
