@@ -311,11 +311,14 @@ def timed_step(step: str, *, total: Optional[int] = None,
     payload["step"] = step
     payload["event"] = "done"
     payload["duration_sec"] = round(elapsed, 3)
-    quiet = elapsed < QUIET_UNDER_SEC
-    if not quiet:
-        handle.flush_start()
+    # 完了時に開始行を出さない。工程が終わってから "step start" が現れると、
+    # その工程自身が出力した行より **後ろ** に並んで読み順が壊れる
+    # (実例: DEBUG の出力群のあとに "step start: thorlab.stack" が出た)。
+    # 完了行は工程名も所要時間も持っているので、開始行が要るのは
+    # 「まだ終わっていない」あいだだけである。
+    handle._pending_start = None
     log_info("step done: %s in %.1f s" % (step, elapsed),
-             console=not quiet, **payload)
+             console=elapsed >= QUIET_UNDER_SEC, **payload)
 
 
 # ---------------------------------------------------------------------------

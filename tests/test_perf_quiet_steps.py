@@ -67,17 +67,35 @@ def test_many_fast_steps_stay_silent(sink, capsys):
 
 # ---- 長い工程 ----------------------------------------------------------------
 
-def test_a_slow_step_prints_both_start_and_done(sink, capsys, monkeypatch):
-    """しきい値を超えたら開始行と完了行が対で出る (順序もそのまま)。"""
+def test_a_slow_step_prints_its_completion(sink, capsys, monkeypatch):
+    """しきい値を超えたら完了行が出る。"""
     monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.05)
 
     with perf.timed_step("slow"):
         time.sleep(0.08)
 
+    assert "step done: slow" in capsys.readouterr().out
+
+
+def test_a_finished_step_does_not_print_its_start_line_afterwards(
+        sink, capsys, monkeypatch):
+    """完了時に開始行を遡って出さない。
+
+    回帰: 工程が終わってから "step start" が現れると、その工程自身が出力した行より
+    **後ろ** に並ぶ。実際のログでは DEBUG の出力群のあとに
+    "step start: thorlab.stack" が出て、読み順が壊れていた。
+    完了行が工程名と所要時間を持っているので、開始行が要るのは
+    「まだ終わっていない」あいだだけ。
+    """
+    monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.05)
+
+    with perf.timed_step("slow"):
+        print("...work output...")
+        time.sleep(0.08)
+
     out = capsys.readouterr().out
-    assert "step start: slow" in out
-    assert "step done: slow" in out
-    assert out.index("step start") < out.index("step done")
+    assert "step start: slow" not in out
+    assert out.index("...work output...") < out.index("step done: slow")
 
 
 def test_a_failure_always_names_the_step_however_fast(sink, capsys):
