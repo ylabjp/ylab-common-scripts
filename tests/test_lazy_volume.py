@@ -109,12 +109,17 @@ def test_stacking_chunks_are_per_source_file(thorlab_dir):
 
 # ---- 多ページファイルの取り違え (データ欠落) ---------------------------------
 
-def test_multiple_multipage_files_are_rejected_instead_of_silently_dropped(tmp_path):
+def test_multiple_multipage_files_are_concatenated_not_silently_dropped(tmp_path):
     """複数の多ページファイルを黙って捨てない。
 
     以前は max() で最大の 1 ファイルだけを採用し、残りを警告もなく捨てていた
-    (10ページ x 3ファイル = 30 プレーンのはずが 10 プレーンになる)。どちらの意図か
-    決められない以上、mosaic 判定と同じく明示的に失敗させる。
+    (10ページ x 3ファイル = 30 プレーンのはずが 10 プレーンになる)。
+
+    「連続した一部」なのか「同じものの別コピー」なのかはファイル名からは
+    決められない、という理由で以前はここで失敗させていたが、ThorLabs の生データで
+    後者が出たことは無く、ファイル名の連番はそのまま面の順序である。
+    素直に全部つなぐ (取り違えるくらいなら落とす、の判断は面の数と順序を
+    ここで固定することに置き換える)。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -123,12 +128,16 @@ def test_multiple_multipage_files_are_rejected_instead_of_silently_dropped(tmp_p
                          np.full((10, 8, 8), i, dtype=np.uint16))
     files = sorted(str(p) for p in d.glob("*.tif"))
 
-    with pytest.raises(RuntimeError, match="ambiguous"):
-        stack_thorlab_with_bioio_calibrated(
-            files, d / "Experiment.xml",
-            {"mode": "Z", "SizeZ": 30, "PixelSizeX": .5, "PixelSizeY": .5, "PixelSizeZ": 1.},
-            min_kb=0,
-        )
+    stacked, _ = stack_thorlab_with_bioio_calibrated(
+        files, d / "Experiment.xml",
+        {"mode": "Z", "SizeZ": 30, "PixelSizeX": .5, "PixelSizeY": .5, "PixelSizeZ": 1.},
+        min_kb=0,
+    )
+
+    assert stacked.shape == (1, 1, 30, 8, 8)     # 1 ファイルぶんに縮んでいない
+    # 面の順序がファイル名順のまま (ファイル i の 10 面が連続して並ぶ)
+    assert np.asarray(stacked)[0, 0, :, 0, 0].tolist() == \
+        [1] * 10 + [2] * 10 + [3] * 10
 
 
 def test_a_single_multipage_file_is_still_accepted(tmp_path):

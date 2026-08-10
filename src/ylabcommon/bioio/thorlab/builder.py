@@ -1,19 +1,13 @@
 from pathlib import Path
 
-import json
 import warnings
-from datetime import datetime, UTC, timezone
 
 from ylabcommon.utils.file_selection import collect_valid_tiffs
-from ylabcommon.utils.outfile_name import extract_dimensions
-from ylabcommon.utils.summary_metadata_helper import get_enhanced_metadata, generate_file_sha256
-from ylabcommon.utils.utils import hybrid, style_print
+from ylabcommon.utils.utils import style_print
 from ylabcommon.utils.perf import timed_step
-from ylabcommon.bioio.core.bioio_reader import BioIOReader
 from ylabcommon.bioio.core.bioio_writer import BioIOWriter
 from ylabcommon.bioio.thorlab.thorlab_metadata_extractor import ThorlabMetadataExtractor
-from ylabcommon.bioio.thorlab.thorlab_params_adapter import ThorlabParamsAdapter
-from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import stack_thorlab_with_bioio_calibrated, get_channel_names_index
+from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import stack_thorlab_with_bioio_calibrated
 
 from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
 
@@ -58,8 +52,12 @@ class ThorlabBioioBuilder:
     """
     Full reconstruction pipeline:
 
-    TIFF discovery → Ultra stacking → BioIOReader →
-    Metadata extraction → XML validation → Output naming → Write OME
+    TIFF discovery → lazy (dask) stacking → metadata from Experiment.xml →
+    XML validation → Write OME
+
+    画素の読み取りは書き出し (または解析側の compute) の1回だけで、この class 自体は
+    1バイトも画素を読まない。入力側は Experiment.xml とファイル名、それに TIFF の
+    ヘッダ1枚で完全に決まるため bioio は経由せず、bioio は出力 (OME) にだけ使う。
     """
 
     def __init__(
@@ -69,7 +67,7 @@ class ThorlabBioioBuilder:
         compression: str = "zlib",
         compression_level: int = 6,
         validate_metadata: bool = True,
-        dry_run: str = False,
+        dry_run: bool = False,
     ):
 
         self.tiff_dir = Path(tiff_dir)
@@ -82,19 +80,26 @@ class ThorlabBioioBuilder:
 
         self.stacked_data=None
         self.image_meta=None
+        self._xml_cache=None
         self._params_cache=None
 
     # -------------------------------------------------
     # TIFF DISCOVERY + STACK
     # -------------------------------------------------
 
+    def _get_xml(self) -> ExperimentXMLParser:
+        """Experiment.xml を1回だけ開いて使い回す。
+
+        以前は同じファイルを3回開いていた (params アダプタ / チャンネル名の取得 /
+        検証用のパーサ)。取り出す値は大半が重複していたので、パーサを1つに集約した。
+        """
+        if self._xml_cache is None:
+            self._xml_cache = ExperimentXMLParser(self.xml_file)
+        return self._xml_cache
+
     def _get_params(self):
-        # Parse Experiment.xml once and reuse; the adapter was previously invoked
-        # separately in _discover_and_stack and _load_with_bioio, re-parsing the
-        # same file each time.
         if self._params_cache is None:
-            params_adapter = ThorlabParamsAdapter(self.xml_file)
-            self._params_cache = params_adapter.extract()
+            self._params_cache = self._get_xml().as_params()
         return self._params_cache
 
     def _discover_and_stack(self):
@@ -130,89 +135,27 @@ class ThorlabBioioBuilder:
         return stacked_data, tiff_files
 
     # -------------------------------------------------
-    # BioIO Processing Reader
+    # Metadata (XML only — no pixels, no BioImage)
     # -------------------------------------------------
 
-    def _load_with_bioio(self, stacked_data):
+    def _build_image_metadata(self, stacked_data):
 
-        print("[Builder] Loading stacked data via BioIOReader...")
+        print("[Builder] Building image metadata from Experiment.xml...")
 
-        reader = BioIOReader(stacked_data)
+        # shape は自分たちで組み立てた遅延スタックが持っている。それ以外 (物理ピクセル
+        # サイズ・チャンネル名・撮影日時・対物レンズ) は Experiment.xml が持っている。
+        # どちらも画素を読まずに分かるので、ここでは1バイトも読まない。
+        image_meta = ThorlabMetadataExtractor(stacked_data, self._get_params()).extract()
 
-        # Metadata only — do NOT call reader.read()/.data here; that would decode
-        # the whole volume. All values below come from headers/params.
-        params = self._get_params()
-        #params = get_thorlabs_params(self.xml_file)
-        dx = params.get("PixelSizeX", 1.0)
-        dy = params.get("PixelSizeY", dx)
-        dz = params.get("PixelSizeZ", 1.0)
-        channel_names_str = params.get("ChannelNames")
-        current_pixel_size = (dz, dy, dx) # The (Z, Y, X) tuple
-        channel_names_index = get_channel_names_index(self.xml_file)
+        print(f"Data shape: {image_meta.shape}")
+        print(f"Dimension order: {image_meta.dimension_order}")
+        print(f"Channel names: {image_meta.channel_names_index}")
 
-        extractor = ThorlabMetadataExtractor(
-            reader, 
-            pixel_size_tuple = current_pixel_size,
-            channel_names_index = channel_names_index
-        )
-        hybrid_channel_name = hybrid(channel_names_index, channel_names_str)
-        image_meta = extractor.extract()
-        image_meta.dim_order = "TCZYX"
-
-        print(f"Data shape: {reader.get_shape()}")
-        print(f"Dimension order from reader: {reader.get_dim_order()}")
-        print(f"Shape from image meta: {image_meta.shape}")
-
-        # Pass the lazy stack straight through — still unread.
-        return stacked_data, image_meta, hybrid_channel_name
+        return image_meta
 
     # -------------------------------------------------
     # XML Validation
     # -------------------------------------------------
-
-    def _validate(self, xml_meta, image_meta):
-
-        print("[Builder] Validating XML <-> BioIO metadata...")
-
-        report = {"status": "PASS", "checks": []}
-
-        def record(name, ok, detail):
-            report["checks"].append(
-                {"check": name, "ok": ok, "detail": detail}
-            )
-            if not ok:
-                report["status"] = "NOT VALIDATED"
-
-        if xml_meta:
-
-            # spatial size validation
-            record("SizeX",
-                   xml_meta["SizeX"] == image_meta.shape[-1],
-                   f"xml={xml_meta['SizeX']} image={image_meta.shape[-1]}")
-
-            record("SizeY",
-                   xml_meta["SizeY"] == image_meta.shape[-2],
-                   f"xml={xml_meta['SizeY']} image={image_meta.shape[-2]}")
-
-            # Z depth
-            record("SizeZ",
-                   xml_meta["SizeZ"] == image_meta.shape[2],
-                   f"xml={xml_meta['SizeZ']} image={image_meta.shape[2]}")
-        #Pixel calibratio
-        if xml_meta["PixelSizeX"] and image_meta.pixel_size:
-
-            diff = abs(xml_meta["PixelSizeX"] - image_meta.pixel_size[2])
-
-            record("PixelSizeX",
-                   diff < 1e-3,
-                   f"Δ={diff}")
-        #Channel count
-        record("Channels",
-               len(xml_meta["Channels"]) == image_meta.shape[1],
-               "channel count")
-
-        print(f"[Builder] Validation status: {report['status']}")
-        return report
 
     def _validate_thorlab_stack(self, xml_meta, image_meta):
         """
@@ -264,9 +207,9 @@ class ThorlabBioioBuilder:
 
             #Channel Count
             xml_chan_count = len(xml_meta.get("Channels", []))
-            record("Channels", 
-                xml_chan_count == image_meta.size_c, 
-                f"xml={xml_chan_count} img={image_meta.size_c}"), 
+            record("Channels",
+                xml_chan_count == image_meta.size_c,
+                f"xml={xml_chan_count} img={image_meta.size_c}"),
 
         style_print("\n========== Validation Results ================", "header")
 
@@ -279,8 +222,8 @@ class ThorlabBioioBuilder:
 
     # -------------------------------------------------
     # WRITE OUTPUT
-    # ---------------------------------------   ----------
-    
+    # -------------------------------------------------
+
     def write(self,output_path:Path):
 
         print("[Builder] Writing OME output...")
@@ -319,39 +262,6 @@ class ThorlabBioioBuilder:
             physical_pixel_sizes=self.image_meta.pixel_size,
             save_zarr=False,
         )
-    # -------------------------------------------------
-    # Validation report
-    # -------------------------------------------------
-
-    def _write_report(self, report, image_meta, output_path, hybrid_channel_name, tiff_files):
-
-        report_path = output_path.with_suffix(".validation.json")
-        extra_meta_summary = get_enhanced_metadata(image_meta, tiff_files)
-
-        payload = {
-            #"timestamp": datetime.datetime.now(datetime.UTC),
-            #"timestamp": datetime.utcnow().isoformat(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **extra_meta_summary,
-            "source_tiff_dir": str(self.tiff_dir),
-            "experiment_xml": str(self.xml_file) if self.xml_file else None,
-            "Channel_name_hybrid_index_str": hybrid_channel_name, 
-            "image_metadata": image_meta.to_dict(),
-            "validation": report,
-            "software": "ylabcommon + thorlab_loader + bioio backend",
-        }
-
-        #payload.update(extra_meta_summary)
-
-        for i in (tiff_files): 
-            if i == 0:  # Only do this for the first file to save time
-                first_file_hash = generate_file_sha256(output_path)
-                payload["integrity_check"] = {"first_file_sha256": first_file_hash}
-
-        with open(report_path, "w") as f:
-            json.dump(payload, f, indent=2)
-
-        print(f"[Builder] Validation report → {report_path}")
 
     # -------------------------------------------------
     # MAIN PIPELINE
@@ -366,19 +276,18 @@ class ThorlabBioioBuilder:
         # 画素は読まずヘッダ/XML だけを見る工程。ここが長い場合は「読み込みが重い」の
         # ではなくメタデータ側の問題なので、画素の工程 (thorlab.stack) と分けて計る。
         with timed_step("thorlab.read_metadata", target=str(self.tiff_dir)):
-            data, image_meta, hybrid_channel_name  = self._load_with_bioio(stacked_data)
+            image_meta = self._build_image_metadata(stacked_data)
 
         xml_meta = None
 
         if self.validate_metadata and self.xml_file:
+            # _get_xml() が返すのは _discover_and_stack で既に開いたパーサなので、
+            # ここでファイルを読み直すことはない。
             with timed_step("thorlab.parse_xml", target=str(self.xml_file)):
-                xml = ExperimentXMLParser(self.xml_file)
-                xml_meta = xml.extract_metadata()
+                xml_meta = self._get_xml().extract_metadata()
 
         report = self._validate_thorlab_stack(xml_meta, image_meta)
 
-        image_name, dims = extract_dimensions(tiff_files)
-        
         if self.dry_run:
             style_print("[DRY RUN ENABLED]", "info")
             print("[Validating] TIFF discovery successful")
@@ -389,7 +298,7 @@ class ThorlabBioioBuilder:
             print("[Skipping] summary JSON writing")
             print("\n    EXECUTION SUMMARY    \n")
             print(f"Input TIFF count : {len(tiff_files)}")
-            print(f"Stack shape      : {data.shape}")
+            print(f"Stack shape      : {stacked_data.shape}")
             print(f"Pixel size (µm)  : {image_meta.pixel_size}")
 
             print("\nDry run completed successfully.\n")
@@ -397,55 +306,5 @@ class ThorlabBioioBuilder:
 
         self.stacked_data=stacked_data
         self.image_meta=image_meta
-
-        #===============================================================
-        #Write summary report 
-        #===============================================================
-
-        # summary_report = ReportBuilder()
-
-        # # dataset information
-        # summary_report.collect_dataset(
-        #     str(self.tiff_dir),
-        #     "Thorlab",
-        #     len(tiff_files)
-        # )
-
-        # # experiment XML
-        # summary_report.add_section(
-        #     "experiment_files",
-        #     {
-        #         "experiment_xml": str(self.xml_file)
-        #      }
-        # )
-
-        # # hybrid channel names
-        # summary_report.add_section(
-        #     "thorlab_channels",
-        #     {
-        #          "Channel_name_hybrid_index_str": hybrid_channel_name
-        #     }
-        # )
-
-        # # metadata from stacked TIFF
-        # summary_report.add_section(
-        #     "image_metadata",
-        #     image_meta
-        # )
-
-        # # dimensions detected from filenames
-        # summary_report.set_dimensions(dims)
-
-        # # stack metadata (shape, dtype, pixel sizes etc.)
-        # summary_report.collect_metadata(image_meta, stacked_data)
-
-        # # output information
-        # summary_report.set_output(self.output_dir, output_filename)
-
-        # # validation
-        # summary_report.finalize_validation()
-
-        # # write report
-        # summary_report.write(self.output_dir, output_filename)
 
         print("[Builder] DONE.")

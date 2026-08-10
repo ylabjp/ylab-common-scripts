@@ -110,17 +110,6 @@ def count_files_in_directory(directory_path):
     count = len([p for p in path.iterdir() if p.is_file()])
     return count
 
-def hybrid(val1: list, val2: list):
-    hybrid_names = []
-    for i in range(len(val1)):
-        idx_label = str(val1[i])
-        if i < len(val2):
-            name_label = str(val2[i]) 
-        else:  
-            name_label = "Unknown"
-        hybrid_names.append(f"{(idx_label)}: {(name_label[2:-2])}")
-    return hybrid_names
-
 def get_theme():
     """Returns a dictionary of ANSI escape codes for styling."""
     return {

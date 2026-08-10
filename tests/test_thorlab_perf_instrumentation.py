@@ -153,26 +153,22 @@ def test_size_filter_still_drops_small_files(steps, thorlab_dir):
     assert done_fields(steps, "thorlab.filter_by_size")["done"] == 6
 
 
-def test_a_failure_inside_the_open_loop_is_reported_with_the_file_it_died_on(
+def test_a_failure_while_probing_is_reported_with_the_file_it_died_on(
     steps, thorlab_dir, monkeypatch
 ):
-    """読み込み中に落ちたとき、失敗ログがどこまで進んでいたかを持っている。
+    """ヘッダ読みで落ちたとき、失敗ログが落ちたファイルを名指しできる。
 
-    fake は *呼び出し回数* ではなく *ファイル名* で落とす。ヘッダ読みはワーカー
-    スレッドで並行に走るので、``calls["n"] == 2`` のような回数条件だとどのファイルに
-    当たるかが実行ごとに変わる (実測: 3ファイルを同時入場させると 001/002/003 の
-    いずれにも当たり、カウンタ自体の競合で一度も落ちない回すらあった)。
+    1ファイルずつ BioImage を開くのをやめたので、取り込み時に触る実ファイルは
+    ヘッダを見る1〜2枚だけになった。ネットワークドライブが応答しないときはここで
+    落ちる (= sorter の load_image の中で落ちる) ので、この工程が失敗を報告できる
+    ことが停止箇所の特定に効く。
     """
     import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as mod
 
-    real = mod._read_tiff_header
+    def dead_drive(path):
+        raise OSError(5, "Input/output error")
 
-    def flaky(path, **kwargs):
-        if str(path).endswith("_002.tif"):
-            raise OSError(5, "Input/output error")
-        return real(path, **kwargs)
-
-    monkeypatch.setattr(mod, "_read_tiff_header", flaky)
+    monkeypatch.setattr(mod, "probe_plane_layout", dead_drive)
     files = sorted(str(p) for p in thorlab_dir.glob("*.tif"))
 
     with pytest.raises(OSError):
@@ -180,11 +176,28 @@ def test_a_failure_inside_the_open_loop_is_reported_with_the_file_it_died_on(
             files, thorlab_dir / "Experiment.xml", PARAMS, min_kb=0
         )
 
-    failed = [f for s, event, f in steps if s == "thorlab.open_tiffs" and event == "failed"]
+    failed = [f for s, event, f in steps
+              if s == "thorlab.probe_layout" and event == "failed"]
     assert len(failed) == 1
-    assert failed[0]["done"] == 2                    # 2件目に着手して落ちた
     assert failed[0]["error_type"] == "OSError"
-    assert failed[0]["item"].endswith("_002.tif")    # 落ちたファイルを名指しできる
+    assert failed[0]["item"].endswith(".tif")        # 落ちたファイルを名指しできる
+
+
+def test_a_read_failure_names_the_file_even_though_it_happens_lazily(thorlab_dir):
+    """画素の読み取りが遅延しても、落ちたファイル名は失われない。
+
+    実際の読み取りは compute 時 (書き出しや解析側) に起きるため、dask の中で
+    OSError が出る。素の errno だけではどのファイルか分からないので、読み取り関数が
+    パスを添えて送出することを固定する。
+    """
+    from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import _read_file_planes
+
+    missing = str(thorlab_dir / "does_not_exist.tif")
+
+    with pytest.raises(OSError) as excinfo:
+        _read_file_planes(missing, 1, 8, 8, np.uint16)
+
+    assert "does_not_exist.tif" in str(excinfo.value)
 
 
 # ---- Builder の工程分割 ------------------------------------------------------

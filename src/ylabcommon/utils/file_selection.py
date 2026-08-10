@@ -33,5 +33,7 @@ def collect_valid_tiffs(tiff_dir: Path):
 
     print(f"[DISCOVERY] Found {len(tiff_files)} usable TIFF files")
 
-    return sorted(tiff_files)
+    # find_tiff_files が既に自然順 (Z9 < Z10) で返している。ここで素の sorted() を
+    # かけ直すと辞書順に戻ってしまい、ゼロ埋めされていない取得で面の順序が狂う。
+    return tiff_files
 
