@@ -124,7 +124,7 @@ def test_multiple_multipage_files_are_concatenated_not_silently_dropped(tmp_path
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 4):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif",
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif",
                          np.full((10, 8, 8), i, dtype=np.uint16))
     files = sorted(str(p) for p in d.glob("*.tif"))
 

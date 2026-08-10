@@ -204,12 +204,13 @@ def test_a_pure_timelapse_still_lands_on_T(tmp_path):
     assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5]
 
 
-def test_a_stale_z_stack_xml_over_a_timelapse_is_flagged(tmp_path):
-    """XML が Z スタック指定なのに面数が合わないときは黙って通さない。
+def test_a_stale_z_stack_xml_does_not_push_a_timelapse_onto_Z(tmp_path):
+    """XML が Z スタック指定でも、ファイル名が T 連続撮影ならそちらに従う。
 
-    ファイル名の T しか動いていない以上、どちらの軸が正しいかはここでは決められない。
-    決められないからこそ、深さが桁違いになっていることを名指しで知らせる
-    (実際に 3001 枚が Z 軸へ載り、深さ 1500 um のスタックが出来ていた)。
+    これが報告された不具合そのもの。XML は ZStackEnabled=1 / SizeZ=61 のまま
+    T 連続撮影で 3001 枚が撮られ、3001 時点が丸ごと Z 軸へ潰れて
+    「深さ 1500 um のスタック」が出来ていた。XML は取得前の設定でしかないので、
+    ファイル名の連番を事実として採る。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -217,12 +218,13 @@ def test_a_stale_z_stack_xml_over_a_timelapse_is_flagged(tmp_path):
         _write(d, "ChanA", 1, t, t)
     files = sorted(str(p) for p in d.glob("*.tif"))
 
-    with pytest.warns(UserWarning, match="really a time series"):
+    with pytest.warns(UserWarning, match="record what it actually produced"):
         stacked, _ = stack_thorlab_with_bioio_calibrated(
             files, d / "Experiment.xml", _params("Z", size_z=61, size_t=3000),
             min_kb=0)
 
-    assert stacked.shape == (1, 1, 7, 8, 8)      # 従来どおりの結果は変えない
+    assert stacked.shape == (7, 1, 1, 8, 8)     # T 軸に載る (Z=1)
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_a_matching_z_stack_is_not_flagged(tmp_path):

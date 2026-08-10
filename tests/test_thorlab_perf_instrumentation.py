@@ -47,8 +47,10 @@ def thorlab_dir(tmp_path):
     d.mkdir()
     for ch in ("ChanA", "ChanB"):
         for i in range(1, 4):
+            # Z スタック取得なので Z 連番 (4番目) が動く。ThorLabs は
+            # ChanA_<X>_<Y>_<Z>_<T>.tif という並びで実際の次元を持たせている。
             tifffile.imwrite(
-                d / f"{ch}_001_001_001_{i:03d}.tif",
+                d / f"{ch}_001_001_{i:03d}_001.tif",
                 np.zeros((8, 8), dtype=np.uint16),
             )
     return d

@@ -84,7 +84,7 @@ def test_the_experiment_xml_is_parsed_exactly_once_per_build(tmp_path, monkeypat
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 4):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", big_plane(i))
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif", big_plane(i))
     write_experiment_xml(d, pixel_x=BIG, pixel_y=BIG, steps=3)
 
     real_parse = xml_mod.etree.parse
@@ -114,7 +114,7 @@ def test_a_multipage_file_no_longer_discards_its_sibling_files(tmp_path):
     tifffile.imwrite(d / "ChanA_001_001_001_001.tif",
                      np.stack([plane(i) for i in range(10)]))
     for i in range(2, 32):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", plane(100 + i))
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif", plane(100 + i))
     xml = write_experiment_xml(d, steps=40)
     params = ExperimentXMLParser(xml).as_params()
 
@@ -132,7 +132,7 @@ def test_multipage_planes_keep_their_order(tmp_path):
     first = np.stack([plane(0), plane(1)])
     second = plane(2)
     tifffile.imwrite(d / "ChanA_001_001_001_001.tif", first)
-    tifffile.imwrite(d / "ChanA_001_001_001_002.tif", np.stack([second, plane(3)]))
+    tifffile.imwrite(d / "ChanA_001_001_002_001.tif", np.stack([second, plane(3)]))
     xml = write_experiment_xml(d, steps=4)
     params = ExperimentXMLParser(xml).as_params()
 
@@ -159,7 +159,7 @@ def test_building_the_stack_reads_no_pixels(tmp_path, monkeypatch):
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 6):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", plane(i))
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif", plane(i))
     xml = write_experiment_xml(d, steps=5)
     params = ExperimentXMLParser(xml).as_params()
 
@@ -180,7 +180,7 @@ def test_the_builder_leaves_the_stack_lazy(tmp_path):
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 4):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", big_plane(i))
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif", big_plane(i))
     write_experiment_xml(d, pixel_x=BIG, pixel_y=BIG, steps=3)
 
     b = ThorlabBioioBuilder(d)
@@ -219,9 +219,9 @@ def test_ragged_channels_are_truncated_with_a_warning(tmp_path):
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 4):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif", plane(i))
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif", plane(i))
     for i in range(1, 3):                       # ChanB は1枚少ない
-        tifffile.imwrite(d / f"ChanB_001_001_001_{i:03d}.tif", plane(10 + i))
+        tifffile.imwrite(d / f"ChanB_001_001_{i:03d}_001.tif", plane(10 + i))
     xml = write_experiment_xml(d, steps=3, channels=("ChanA", "ChanB"))
     params = ExperimentXMLParser(xml).as_params()
 

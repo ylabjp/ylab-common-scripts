@@ -339,23 +339,25 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
         # 多ページのファイルはその全ページが面として並ぶ。以前はチャンネル内に
         # 多ページのファイルが1つでもあると、それ1つだけを残して他のファイルを
         # 黙って捨てていた (40面あるのに Z=10 のスタックが出来ていた)。
-        # ファイル名の Z / T 連番が両方とも動いているなら 4D 取得 (Z スタックの
-        # タイムラプス)。この形は mode がどちらであっても1軸には収まらないので、
-        # ファイル名の通りに組む。片方しか動いていない取得は従来どおり mode に従う
-        # (どちらの軸に積むかはファイル名だけからは決められないため)。
+        # どの面がどの時点・どの Z なのかはファイル名が持っている。XML の mode は
+        # 「Z スタックとして組んだか」という **取得前の設定** でしかなく、
+        # Z スタックを組んだまま T 連続撮影に切り替えた取得では実データとずれる
+        # (実際に SizeZ=61 / ZStackEnabled=1 の XML で 3001 枚の XYT が撮られ、
+        # 3001 時点が丸ごと Z 軸へ潰れて深さ 1500 um のスタックが出来ていた)。
+        # フレームサイズを XML でなく TIFF ヘッダから採るのと同じ理由で、
+        # ここでもファイルを事実として扱う。
         groups = _group_by_timepoint(ch_files)
-        if groups is not None:
+        if groups is None:
+            # 退避: 5 トークンの数値形式でないファイル名。次元が読めないので
+            # XML の mode に従って1軸へ積む (従来の挙動)。
+            planes = da.concatenate([blocks[f] for f in ch_files], axis=0)
+            vol = planes[np.newaxis] if mode == "Z" else planes[:, np.newaxis]
+        else:
             n_t = len(groups)
             n_z = max(len(fs) for _t, fs in groups)
             print(f"DEBUG: Channel {ch}: file names give Z={n_z} x T={n_t} "
                   f"(XML says SizeZ={params.get('SizeZ')} SizeT={params.get('SizeT')}, "
                   f"mode={mode})")
-            if n_t < 2 or n_z < 2:
-                groups = None                   # 片方しか動いていない = 4D ではない
-        if groups is None:
-            planes = da.concatenate([blocks[f] for f in ch_files], axis=0)
-            vol = planes[np.newaxis] if mode == "Z" else planes[:, np.newaxis]
-        else:
             per_t = []
             for _t, fs in groups:
                 zs = [blocks[f] for f in fs]
@@ -414,15 +416,13 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # 3001 時点が Z 軸へ潰れて深さ 1500 um のスタックが静かに出来上がる。
     xml_z, xml_t = params.get("SizeZ"), params.get("SizeT")
     got_t, got_z = int(stacked.shape[0]), int(stacked.shape[2])
-    if mode == "Z" and xml_z and int(xml_z) != got_z:
+    if xml_z and int(xml_z) != got_z:
         warnings.warn(
-            "[thorlab] The XML was configured for a Z stack of SizeZ=%s (SizeT=%s), "
-            "but this build produced Z=%d over T=%d. Every plane has been put on the "
-            "Z axis because the file names show only one varying index. If this "
-            "acquisition is really a time series, the Z axis is wrong (it would make "
-            "the stack %.1f um deep) — check the file name layout before using the "
-            "result."
-            % (xml_z, xml_t, got_z, got_t, got_z * params.get("PixelSizeZ", 1.0)),
+            "[thorlab] The XML was configured for SizeZ=%s (SizeT=%s, mode=%s) but "
+            "the file names give Z=%d over T=%d. Using the layout from the file "
+            "names: the XML records how the acquisition was configured, the files "
+            "record what it actually produced."
+            % (xml_z, xml_t, mode, got_z, got_t),
             stacklevel=2,
         )
 

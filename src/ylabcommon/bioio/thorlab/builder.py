@@ -158,67 +158,51 @@ class ThorlabBioioBuilder:
     # -------------------------------------------------
 
     def _validate_thorlab_stack(self, xml_meta, image_meta):
+        """XML と実データの食い違いのうち、**まだ誰も報告していないもの** だけを返す。
+
+        以前はここで 7 項目を表で出していたが、検証として働いていたのは 2 つだけだった。
+
+        - ``PixelSizeX`` / ``PixelSizeZ`` は ``image_meta.pixel_size`` が XML の
+          params からそのまま作られているため、XML を XML と比べていた。
+          ``Δ=0.000000`` 以外になりようがなく、構造的に必ず PASS する。
+        - ``SizeX`` / ``SizeY`` / ``SizeZ`` は本物の比較だが、食い違いは
+          ``stack_thorlab_with_bioio_calibrated`` が「実データを採用した」と
+          添えて既に警告している。ここで再掲しても情報は増えず、しかも
+          「Final Status: NOT VALIDATED」という強い語だけが残る
+          (Z スタック設定のまま T 連続撮影した取得では毎回そうなる)。
+
+        残るのは、他のどこでも見ていない 2 つ。
+
+        - チャンネル数: XML の Wavelength 数と実際に見つかったチャンネル数
+        - 時点数が XML より **多い** 場合: 取得の打ち切りでは説明がつかない構造不一致
+          (少ない場合は打ち切りとして許容する。:func:`_check_size_t_tolerant`)
+
+        Returns:
+            list[str]: 見つかった問題。空なら何も言うことは無い。
         """
-        image_meta: The BioImage object (or a custom wrapper) of the stacked data
-        xml_meta: Dictionary parsed from Experiment.xml
-        """
-        report = {"status": "VALIDATED", "checks": []}
+        problems = []
+        if not xml_meta:
+            return problems
 
-        def record(name, ok, msg):
-            report["checks"].append({"name": name, "ok": ok, "msg": msg})
-            if not ok:
-                report["status"] = "NOT VALIDATED"
+        ok_t, warn_t, detail_t = _check_size_t_tolerant(
+            xml_meta.get("SizeT"), image_meta.size_t
+        )
+        if warn_t:
+            warnings.warn(warn_t, stacklevel=2)
+        if not ok_t:
+            problems.append("SizeT: %s" % detail_t)
 
-        if xml_meta:
-            #spatial size validation - use size_x, size_y, size_z
-            record("SizeX",
-               xml_meta["SizeX"] == image_meta.size_x,
-               f"xml={xml_meta['SizeX']} image={image_meta.size_x}")
-
-            record("SizeY",
-               xml_meta["SizeY"] == image_meta.size_y,
-               f"xml={xml_meta['SizeY']} image={image_meta.size_y}")
-
-            #Z depth
-            record("SizeZ",
-               xml_meta["SizeZ"] == image_meta.size_z,
-               f"xml={xml_meta['SizeZ']} image={image_meta.size_z}")
-
-            # Pixel calibration (X). image_meta.pixel_size is the (Z, Y, X) tuple,
-            # so index 2 is X.
-            if xml_meta.get("PixelSizeX") and image_meta.pixel_size:
-                diff_x = abs(xml_meta["PixelSizeX"] - image_meta.pixel_size[2])
-                record("PixelSizeX", diff_x < 1e-4, f"Δ={diff_x:.6f}")
-
-            # Pixel calibration (Z), when a Z step size is available.
-            if xml_meta.get("PixelSizeZ") and image_meta.pixel_size:
-                diff_z = abs(xml_meta["PixelSizeZ"] - image_meta.pixel_size[0])
-                record("PixelSizeZ", diff_z < 1e-4, f"Δ={diff_z:.6f}")
-
-            # SizeT: タイムラプス取得が途中終了して XML 指定より少ない T は許容(Warning + OK)し、
-            # 多い場合のみ構造不一致として NG にする(詳細は _check_size_t_tolerant を参照)。
-            # (origin/main の厳密一致チェックを、短いTを許容する版に置き換える)
-            ok_t, warn_t, detail_t = _check_size_t_tolerant(
-                xml_meta.get("SizeT"), image_meta.size_t
+        xml_chan_count = len(xml_meta.get("Channels", []))
+        if xml_chan_count != image_meta.size_c:
+            problems.append(
+                "Channels: the XML lists %d wavelength(s) but %d channel(s) were "
+                "found in the file names"
+                % (xml_chan_count, image_meta.size_c)
             )
-            if warn_t:
-                warnings.warn(warn_t, stacklevel=2)
-            record("SizeT", ok_t, detail_t)
 
-            #Channel Count
-            xml_chan_count = len(xml_meta.get("Channels", []))
-            record("Channels",
-                xml_chan_count == image_meta.size_c,
-                f"xml={xml_chan_count} img={image_meta.size_c}"),
-
-        style_print("\n========== Validation Results ================", "header")
-
-        for check in report["checks"]:
-            status = "PASS" if check["ok"] else "Some Parameters Not validated"
-            print(f"[{status}] {check['name']}: {check['msg']}")
-        print(f"Final Status: {report['status']}")
-        print("=============================================\n")
-        return report
+        for p in problems:
+            warnings.warn("[thorlab] %s" % p, stacklevel=2)
+        return problems
 
     # -------------------------------------------------
     # WRITE OUTPUT
@@ -286,22 +270,16 @@ class ThorlabBioioBuilder:
             with timed_step("thorlab.parse_xml", target=str(self.xml_file)):
                 xml_meta = self._get_xml().extract_metadata()
 
-        report = self._validate_thorlab_stack(xml_meta, image_meta)
+        problems = self._validate_thorlab_stack(xml_meta, image_meta)
 
         if self.dry_run:
             style_print("[DRY RUN ENABLED]", "info")
-            print("[Validating] TIFF discovery successful")
-            print("[Validating] BioIO stacking successful")
-            print("[Validating]  Metadata extraction successful")
-            print(f"[Validating] Validation status: {report['status']}")
-            print("[Skipping] file writing")
-            print("[Skipping] summary JSON writing")
             print("\n    EXECUTION SUMMARY    \n")
             print(f"Input TIFF count : {len(tiff_files)}")
             print(f"Stack shape      : {stacked_data.shape}")
             print(f"Pixel size (µm)  : {image_meta.pixel_size}")
-
-            print("\nDry run completed successfully.\n")
+            print(f"XML mismatches   : {'; '.join(problems) if problems else 'none'}")
+            print("\nDry run completed successfully (nothing was written).\n")
             return
 
         self.stacked_data=stacked_data
