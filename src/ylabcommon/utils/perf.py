@@ -50,6 +50,10 @@ DEFAULT_HEARTBEAT_INTERVAL_SEC = 60.0
 DEFAULT_STALL_AFTER_SEC = 600.0
 # 進捗ログの最短間隔。ファイル単位で送るとキューを溢れさせるので時間で間引く。
 DEFAULT_PROGRESS_INTERVAL_SEC = 5.0
+# これ未満で終わった工程は端末に出さない (Better Stack へは送る)。
+# 取り込み1件で timed_step は十数回走るが、そのほとんどは 0.0 s で終わる。
+# 端末に出るのが「時間を使った工程」だけになれば、どこが遅いかが一目で分かる。
+QUIET_UNDER_SEC = 1.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -94,7 +98,7 @@ class StepHandle:
 
     __slots__ = (
         "name", "fields", "started", "total", "done", "item",
-        "progress_at", "tracked", "_interval", "_last_log",
+        "progress_at", "tracked", "_interval", "_last_log", "_pending_start",
     )
 
     def __init__(self, name: str, fields: dict, total: Optional[int],
@@ -111,6 +115,22 @@ class StepHandle:
         self.tracked = total is not None
         self._interval = progress_interval_sec
         self._last_log = self.started
+        # 端末へまだ出していない開始行。長引いたと分かった時点で出す
+        # (:meth:`flush_start` 参照)。
+        self._pending_start: Optional[str] = None
+
+    def flush_start(self) -> None:
+        """保留していた開始行を端末へ出す (まだなら)。
+
+        開始行は「この工程に入った」ことを示すためのもので、一瞬で終わる工程では
+        直後の完了行と対になって雑音にしかならない。そこで開始時点では出さずに
+        保留し、**長引いたと分かった時点** —— 進捗ログ・heartbeat・失敗・
+        しきい値を超えた完了 —— で初めて出す。どれも「開始行が要る状況」なので、
+        遅い工程の見え方は変わらない。
+        """
+        msg, self._pending_start = self._pending_start, None
+        if msg is not None:
+            print("[INFO] %s" % msg)
 
     def advance(self, n: int = 1, item=None) -> None:
         """ループ1件分の進捗を記録し、必要なら進捗ログを送る。
@@ -135,6 +155,7 @@ class StepHandle:
         payload.update(self.progress_fields(now))
         payload["step"] = self.name
         payload["event"] = "progress"
+        self.flush_start()      # 進捗が出るほど長い = 開始行が要る工程
         log_info(
             "step progress: %s %s" % (self.name, self._progress_summary(now)),
             **payload,
@@ -258,7 +279,11 @@ def timed_step(step: str, *, total: Optional[int] = None,
         start_fields["total"] = total
     start_fields["step"] = step
     start_fields["event"] = "start"
-    log_info("step start: %s" % step, **start_fields)
+    # 端末には出さず保留する。一瞬で終わる工程は開始・完了の2行が対で並ぶだけで、
+    # 本当に見たい長い工程を押し流す。Better Stack へは常に送るので、集計や
+    # 「いつから遅くなったか」の比較には影響しない。
+    handle._pending_start = "step start: %s" % step
+    log_info("step start: %s" % step, console=False, **start_fields)
 
     _push(handle)
     try:
@@ -271,6 +296,7 @@ def timed_step(step: str, *, total: Optional[int] = None,
         payload["event"] = "failed"
         payload["duration_sec"] = round(elapsed, 3)
         payload["error_type"] = type(e).__name__
+        handle.flush_start()    # 失敗は所要時間によらず、どこで落ちたかを出す
         log_warning(
             "step failed: %s after %.1f s (%s)" % (step, elapsed, type(e).__name__),
             **payload,
@@ -285,7 +311,11 @@ def timed_step(step: str, *, total: Optional[int] = None,
     payload["step"] = step
     payload["event"] = "done"
     payload["duration_sec"] = round(elapsed, 3)
-    log_info("step done: %s in %.1f s" % (step, elapsed), **payload)
+    quiet = elapsed < QUIET_UNDER_SEC
+    if not quiet:
+        handle.flush_start()
+    log_info("step done: %s in %.1f s" % (step, elapsed),
+             console=not quiet, **payload)
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +369,11 @@ def _emit_heartbeat(stall_after_sec: float) -> None:
             "thread": ident,
             "stalled": stalled,
         })
+
+        # heartbeat が出るということは、その工程は既に長引いている。開始行を保留
+        # したままだと端末には「入った」記録が無いまま経過だけが出るので、ここで出す。
+        for s in stack:
+            s.flush_start()
 
         if stalled:
             log_warning(

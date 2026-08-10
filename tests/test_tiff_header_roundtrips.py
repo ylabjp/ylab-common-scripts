@@ -399,10 +399,10 @@ def test_an_uneven_tail_falls_back_to_probing_every_file(tmp_path):
     d = tmp_path / "img01"
     d.mkdir()
     for i in (1, 2, 3):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif",
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif",
                          np.full((4, 8, 8), i, dtype=np.uint16),
                          photometric="minisblack")
-    tifffile.imwrite(d / "ChanA_001_001_001_004.tif",       # 途中で終わった末尾
+    tifffile.imwrite(d / "ChanA_001_001_004_001.tif",       # 途中で終わった末尾
                      np.full((2, 8, 8), 4, dtype=np.uint16),
                      photometric="minisblack")
     files = sorted(str(p) for p in d.glob("*.tif"))
@@ -485,7 +485,7 @@ def test_multiple_multipage_files_are_concatenated_not_discarded(tmp_path):
     d = tmp_path / "img01"
     d.mkdir()
     for i in range(1, 4):
-        tifffile.imwrite(d / f"ChanA_001_001_001_{i:03d}.tif",
+        tifffile.imwrite(d / f"ChanA_001_001_{i:03d}_001.tif",
                          np.full((10, 8, 8), i, dtype=np.uint16))
     files = sorted(str(p) for p in d.glob("*.tif"))
 
