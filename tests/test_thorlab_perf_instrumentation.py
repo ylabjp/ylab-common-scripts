@@ -156,19 +156,23 @@ def test_size_filter_still_drops_small_files(steps, thorlab_dir):
 def test_a_failure_inside_the_open_loop_is_reported_with_the_file_it_died_on(
     steps, thorlab_dir, monkeypatch
 ):
-    """読み込み中に落ちたとき、失敗ログがどこまで進んでいたかを持っている。"""
+    """読み込み中に落ちたとき、失敗ログがどこまで進んでいたかを持っている。
+
+    fake は *呼び出し回数* ではなく *ファイル名* で落とす。ヘッダ読みはワーカー
+    スレッドで並行に走るので、``calls["n"] == 2`` のような回数条件だとどのファイルに
+    当たるかが実行ごとに変わる (実測: 3ファイルを同時入場させると 001/002/003 の
+    いずれにも当たり、カウンタ自体の競合で一度も落ちない回すらあった)。
+    """
     import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as mod
 
-    real = mod.BioImage
-    calls = {"n": 0}
+    real = mod._read_tiff_header
 
     def flaky(path, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:
+        if str(path).endswith("_002.tif"):
             raise OSError(5, "Input/output error")
         return real(path, **kwargs)
 
-    monkeypatch.setattr(mod, "BioImage", flaky)
+    monkeypatch.setattr(mod, "_read_tiff_header", flaky)
     files = sorted(str(p) for p in thorlab_dir.glob("*.tif"))
 
     with pytest.raises(OSError):
