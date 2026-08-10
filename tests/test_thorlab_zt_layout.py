@@ -10,10 +10,12 @@ ThorLabs の生ファイルは ``ChanA_<X>_<Y>_<Z>_<T>.tif`` で、取得の実�
 3001 時点が Z 軸へ潰れて「深さ 1500 um のスタック」が黙って出来上がる
 (実際に起きた: XML が SizeZ=61 / ZStackEnabled=1、実データは 3001 枚)。
 
-ここでは 4D 取得 —— ファイル名の Z と T が **両方とも** 動いている場合 —— を
-正しく (T, C, Z, Y, X) へ組めることを固定する。片方しか動いていない取得で
-どちらの軸に積むかはファイル名だけからは決まらないので、従来どおり XML の
-mode に従う (その挙動が変わっていないことも併せて固定する)。
+そこで積む軸はファイル名から決める。時点ごとに Z をまとめて (T, C, Z, Y, X) を
+組むので、XYT / Z スタック / 4D / 1時点=1多ページファイル が同じ1本の経路で通る。
+
+連番が読めない命名だけは XML の mode へ退避するが、**黙って退避しない**。
+読めなかったことに気付かないまま mode を信じるのが、まさに上の不具合が
+表に出なかった経路だった (退避したこと自体がログのどこにも出ていなかった)。
 """
 from __future__ import annotations
 
@@ -46,11 +48,24 @@ def test_zt_is_read_from_the_thorlabs_numeric_name():
     assert _thorlabs_zt("/x/ChanB_00001_00002_00061_02999.tif") == (61, 2999)
 
 
+@pytest.mark.parametrize("name,expected", [
+    # 接頭辞が増えても末尾2つの連番は同じ意味を持つ。ちょうど5トークンを
+    # 要求すると、こういう形で黙って退避してしまう (実際に起きた)。
+    ("Image_ChanA_001_001_003_004.tif", (3, 4)),
+    ("prefix_more_ChanA_001_001_007_042.tif", (7, 42)),
+    # 数値でないトークンは飛ばして、末尾の数値2つを見る。
+    ("ChanA_001_001_00a_003_004.tif", (3, 4)),
+    # 連番が2つしかない形 (X/Y を持たない命名) も読める。
+    ("ChanA_001_004.tif", (1, 4)),
+])
+def test_trailing_numbers_are_read_whatever_the_prefix(name, expected):
+    assert _thorlabs_zt("/x/" + name) == expected
+
+
 @pytest.mark.parametrize("name", [
-    "ChanA.tif",                       # トークンが足りない
-    "ChanA_001_001_001.tif",
-    "ChanA_001_001_00a_001.tif",       # 数値でない
-    "image_XY01_Z02_CH1_T03.tif",      # ラベル付き形式 (別系統)
+    "ChanA.tif",                       # 連番が無い
+    "ChanA_001.tif",                   # Z と T を分けられない
+    "image_XY01_Z02_CH1_T03.tif",      # ラベル付き形式 (数値トークンが無い)
 ])
 def test_unparsable_names_return_none(name):
     assert _thorlabs_zt("/x/" + name) is None
@@ -225,6 +240,33 @@ def test_a_stale_z_stack_xml_does_not_push_a_timelapse_onto_Z(tmp_path):
 
     assert stacked.shape == (7, 1, 1, 8, 8)     # T 軸に載る (Z=1)
     assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_names_without_sequence_numbers_fall_back_loudly(tmp_path, capsys):
+    """連番が読めないときに黙って mode を信じない。
+
+    回帰: 実データで ``_group_by_timepoint`` が None を返し、何の説明もないまま
+    XML の mode="Z" が採用された。結果は以前と同じ「3001 時点が Z 軸」で、
+    しかもログには退避したことがどこにも出ていなかったため、修正が効いていない
+    のか経路が違うのかを log からは切り分けられなかった。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    for i in range(1, 5):
+        # チャンネルは読めるが連番が読めない命名 ("p1" は数値トークンではない)
+        tifffile.imwrite(d / f"ChanA_p{i}.tif",
+                         np.full((8, 8), i, dtype=np.uint16))
+    files = sorted(str(p) for p in d.glob("*.tif"))
+
+    with pytest.warns(UserWarning, match="Could not read the Z/T sequence numbers"):
+        stacked, _ = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("Z", size_z=4, size_t=1), min_kb=0)
+
+    assert stacked.shape == (1, 1, 4, 8, 8)          # 従来の退避結果は変えない
+    # どのファイル名で諦めたのかが分かる (次の調査の起点になる)
+    out = capsys.readouterr().out
+    assert "file names give no Z/T" in out
+    assert "ChanA_p1.tif" in out
 
 
 def test_a_matching_z_stack_is_not_flagged(tmp_path):

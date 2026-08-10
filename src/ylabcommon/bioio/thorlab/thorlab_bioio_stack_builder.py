@@ -87,16 +87,22 @@ def _note_file(exc: BaseException, text: str) -> None:
 
 
 def _thorlabs_zt(path):
-    """``ChanA_<X>_<Y>_<Z>_<T>.tif`` から ``(z, t)`` を取り出す。読めなければ None。
+    """ファイル名の末尾2つの数値連番を ``(z, t)`` として返す。読めなければ None。
 
-    ThorLabs は取得の実際の次元をファイル名の連番で持っている。XML は **取得前の
-    設定** なので、Z スタックを組んだまま T 連続撮影に切り替えた、途中で止めた、
-    といった場合に実データとずれる。ファイルは取得の結果なので、こちらが事実。
+    ThorLabs は取得の実際の次元をファイル名の連番で持っている
+    (``ChanA_<X>_<Y>_<Z>_<T>.tif``)。XML は **取得前の設定** なので、Z スタックを
+    組んだまま T 連続撮影に切り替えた、途中で止めた、といった場合に実データと
+    ずれる。ファイルは取得の結果なので、こちらが事実。
+
+    「ちょうど5トークン」ではなく **末尾の2つ** を見るのは、接頭辞が増えた形
+    (``Image_ChanA_001_001_001_0001.tif`` など) でも同じ規約が続くため。
+    数値が2つ未満なら Z と T を分けられないので None を返し、呼び出し側が
+    XML の mode へ退避する。
     """
-    tokens = Path(path).stem.split("_")
-    if len(tokens) == 5 and tokens[3].isdigit() and tokens[4].isdigit():
-        return int(tokens[3]), int(tokens[4])
-    return None
+    nums = [t for t in Path(path).stem.split("_") if t.isdigit()]
+    if len(nums) < 2:
+        return None
+    return int(nums[-2]), int(nums[-1])
 
 
 def _group_by_timepoint(files):
@@ -348,8 +354,24 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
         # ここでもファイルを事実として扱う。
         groups = _group_by_timepoint(ch_files)
         if groups is None:
-            # 退避: 5 トークンの数値形式でないファイル名。次元が読めないので
-            # XML の mode に従って1軸へ積む (従来の挙動)。
+            # 退避: ファイル名から連番が読めない。次元が分からないので XML の mode に
+            # 従って1軸へ積む (従来の挙動)。
+            #
+            # ここは **黙って通してはいけない**。読めなかったことに気付かないまま
+            # mode を信じると、T 連続撮影が Z 軸へ潰れて「深さ 1500 um のスタック」が
+            # 出来上がる。どのファイル名で諦めたのかを添えて知らせる。
+            warnings.warn(
+                "[thorlab] Could not read the Z/T sequence numbers from the file "
+                "names of channel %s, so the acquisition layout is unknown. Falling "
+                "back to the XML mode=%s, which puts all %d plane(s) on the %s axis. "
+                "If that is wrong the stack is silently mis-shaped. Example file "
+                "name: %s (expected two trailing numeric fields, "
+                "e.g. ChanA_001_001_<Z>_<T>.tif)."
+                % (ch, mode, len(ch_files), mode, Path(ch_files[0]).name),
+                stacklevel=2,
+            )
+            print(f"DEBUG: Channel {ch}: file names give no Z/T "
+                  f"(first name: {Path(ch_files[0]).name}); using XML mode={mode}")
             planes = da.concatenate([blocks[f] for f in ch_files], axis=0)
             vol = planes[np.newaxis] if mode == "Z" else planes[:, np.newaxis]
         else:
