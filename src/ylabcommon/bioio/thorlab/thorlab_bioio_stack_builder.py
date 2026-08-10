@@ -86,6 +86,41 @@ def _note_file(exc: BaseException, text: str) -> None:
         pass
 
 
+def _thorlabs_zt(path):
+    """``ChanA_<X>_<Y>_<Z>_<T>.tif`` から ``(z, t)`` を取り出す。読めなければ None。
+
+    ThorLabs は取得の実際の次元をファイル名の連番で持っている。XML は **取得前の
+    設定** なので、Z スタックを組んだまま T 連続撮影に切り替えた、途中で止めた、
+    といった場合に実データとずれる。ファイルは取得の結果なので、こちらが事実。
+    """
+    tokens = Path(path).stem.split("_")
+    if len(tokens) == 5 and tokens[3].isdigit() and tokens[4].isdigit():
+        return int(tokens[3]), int(tokens[4])
+    return None
+
+
+def _group_by_timepoint(files):
+    """``[(t, [ファイル, ...]), ...]`` を t 昇順・各時点内は z 昇順で返す。
+
+    ファイル名が 5 トークンの数値形式でなければ None (呼び出し側が XML の mode へ
+    退避する)。
+    """
+    indexed = []
+    for f in files:
+        zt = _thorlabs_zt(f)
+        if zt is None:
+            return None
+        indexed.append((zt[1], zt[0], f))       # (t, z, path)
+    indexed.sort()
+
+    groups = []
+    for t, _z, f in indexed:
+        if not groups or groups[-1][0] != t:
+            groups.append((t, []))
+        groups[-1][1].append(f)
+    return groups
+
+
 def probe_plane_layout(path) -> PlaneLayout:
     """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。
 
@@ -291,45 +326,81 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
         # 1ファイルずつ BioImage を開いており、取り込みで最も長い工程だった。
         with timed_step("thorlab.open_tiffs", total=len(ch_files),
                         channel=ch, target=target) as step:
-            blocks = []
+            blocks = {}
             for f, n_pages in zip(ch_files, counts):
                 step.advance(item=f)
-                blocks.append(
-                    da.from_delayed(
-                        read_planes(f, n_pages, layout.height, layout.width,
-                                    layout.dtype),
-                        shape=(n_pages, layout.height, layout.width),
-                        dtype=layout.dtype,
-                    )
+                blocks[f] = da.from_delayed(
+                    read_planes(f, n_pages, layout.height, layout.width,
+                                layout.dtype),
+                    shape=(n_pages, layout.height, layout.width),
+                    dtype=layout.dtype,
                 )
 
         # 多ページのファイルはその全ページが面として並ぶ。以前はチャンネル内に
         # 多ページのファイルが1つでもあると、それ1つだけを残して他のファイルを
         # 黙って捨てていた (40面あるのに Z=10 のスタックが出来ていた)。
-        ch_planes = blocks[0] if len(blocks) == 1 else da.concatenate(blocks, axis=0)
-        channel_stacks.append(ch_planes)
+        # ファイル名の Z / T 連番が両方とも動いているなら 4D 取得 (Z スタックの
+        # タイムラプス)。この形は mode がどちらであっても1軸には収まらないので、
+        # ファイル名の通りに組む。片方しか動いていない取得は従来どおり mode に従う
+        # (どちらの軸に積むかはファイル名だけからは決められないため)。
+        groups = _group_by_timepoint(ch_files)
+        if groups is not None:
+            n_t = len(groups)
+            n_z = max(len(fs) for _t, fs in groups)
+            print(f"DEBUG: Channel {ch}: file names give Z={n_z} x T={n_t} "
+                  f"(XML says SizeZ={params.get('SizeZ')} SizeT={params.get('SizeT')}, "
+                  f"mode={mode})")
+            if n_t < 2 or n_z < 2:
+                groups = None                   # 片方しか動いていない = 4D ではない
+        if groups is None:
+            planes = da.concatenate([blocks[f] for f in ch_files], axis=0)
+            vol = planes[np.newaxis] if mode == "Z" else planes[:, np.newaxis]
+        else:
+            per_t = []
+            for _t, fs in groups:
+                zs = [blocks[f] for f in fs]
+                per_t.append(zs[0] if len(zs) == 1 else da.concatenate(zs, axis=0))
+
+            # 取得が途中で終わると、最後の時点だけ Z が欠ける。欠けた時点を捨てて
+            # 揃っている分で続ける (XML より短い T を許容しているのと同じ考え方)。
+            depths = [int(v.shape[0]) for v in per_t]
+            full = max(set(depths), key=depths.count)
+            if len(set(depths)) > 1:
+                dropped = [t for (t, _), d in zip(groups, depths) if d != full]
+                warnings.warn(
+                    "[thorlab] %d of %d timepoints have an incomplete Z stack "
+                    "(expected Z=%d, got %s); dropping them. The acquisition was "
+                    "probably stopped mid-stack. Dropped timepoints: %s"
+                    % (len(dropped), len(depths), full,
+                       sorted({d for d in depths if d != full}),
+                       dropped[:10] + (["..."] if len(dropped) > 10 else [])),
+                    stacklevel=2,
+                )
+                per_t = [v for v, d in zip(per_t, depths) if d == full]
+            vol = da.stack(per_t, axis=0)               # (T, Z, Y, X)
+
+        channel_stacks.append(vol)
         print(f"DEBUG: Channel {ch}: {len(ch_files)} file(s) → "
-              f"{ch_planes.shape[0]} {mode} plane(s)")
+              f"T={vol.shape[0]} Z={vol.shape[1]}")
 
-    # 取得が途中で終わると、チャンネルによって面数が1つ違うことがある。バッチ全体を
-    # 落とさず、揃っている分だけを使う (XML より短い T を許容しているのと同じ考え方)。
-    plane_counts = [int(s.shape[0]) for s in channel_stacks]
-    if len(set(plane_counts)) > 1:
-        keep = min(plane_counts)
-        warnings.warn(
-            "[thorlab] チャンネルごとの面数が揃っていません (%s)。取得が途中で終了した"
-            "可能性があります。共通する %d 面までで続行します。"
-            % (dict(zip(channel_keys, plane_counts)), keep),
-            stacklevel=2,
-        )
-        channel_stacks = [s[:keep] for s in channel_stacks]
+    # 取得が途中で終わると、チャンネルによって時点数 (または面数) が1つ違うことがある。
+    # バッチ全体を落とさず、揃っている分だけを使う (XML より短い T を許容しているのと
+    # 同じ考え方)。T 側と Z 側のどちらがずれるかは取得の切れ方で変わるので両方見る。
+    for axis, label in ((0, "時点数"), (1, "面数")):
+        counts = [int(s.shape[axis]) for s in channel_stacks]
+        if len(set(counts)) > 1:
+            keep = min(counts)
+            warnings.warn(
+                "[thorlab] チャンネルごとの%sが揃っていません (%s)。取得が途中で終了した"
+                "可能性があります。共通する %d までで続行します。"
+                % (label, dict(zip(channel_keys, counts)), keep),
+                stacklevel=2,
+            )
+            channel_stacks = [s[:keep] if axis == 0 else s[:, :keep]
+                              for s in channel_stacks]
 
-    # 面を TCZYX の該当軸へ置く。mode が Z ならファイル1枚が1つの Z 面、
-    # T ならファイル1枚が1つの時点。
-    if mode == "Z":
-        channel_stacks = [s[np.newaxis, np.newaxis] for s in channel_stacks]
-    else:
-        channel_stacks = [s[:, np.newaxis, np.newaxis] for s in channel_stacks]
+    # (T, Z, Y, X) へ C を挿して TCZYX にする。単一チャンネルでも 5D になる。
+    channel_stacks = [s[:, np.newaxis] for s in channel_stacks]
 
     # Stack channels along C (axis 1). A single channel still yields a full 5D
     # TCZYX array.
@@ -337,6 +408,23 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
         stacked = channel_stacks[0]
     else:
         stacked = da.concatenate(channel_stacks, axis=1)
+
+    # XML の宣言と実データが食い違っていたら、実データを採用したうえで知らせる。
+    # 「Z スタックのつもりで組んだが T 連続撮影になっていた」ときにここが黙ると、
+    # 3001 時点が Z 軸へ潰れて深さ 1500 um のスタックが静かに出来上がる。
+    xml_z, xml_t = params.get("SizeZ"), params.get("SizeT")
+    got_t, got_z = int(stacked.shape[0]), int(stacked.shape[2])
+    if mode == "Z" and xml_z and int(xml_z) != got_z:
+        warnings.warn(
+            "[thorlab] The XML was configured for a Z stack of SizeZ=%s (SizeT=%s), "
+            "but this build produced Z=%d over T=%d. Every plane has been put on the "
+            "Z axis because the file names show only one varying index. If this "
+            "acquisition is really a time series, the Z axis is wrong (it would make "
+            "the stack %.1f um deep) — check the file name layout before using the "
+            "result."
+            % (xml_z, xml_t, got_z, got_t, got_z * params.get("PixelSizeZ", 1.0)),
+            stacklevel=2,
+        )
 
     t, c, zz, yy, xx = stacked.shape
     print(f"DEBUG: Final stack (TCZYX) = ({t}, {c}, {zz}, {yy}, {xx})")

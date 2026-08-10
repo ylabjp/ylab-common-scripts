@@ -286,13 +286,21 @@ def send(
         print("[betterstack] send queue is full; dropping log event")
 
 
-def log_info(message: str, **fields) -> None:
-    print(f"[INFO] {message}")
+def log_info(message: str, *, console: bool = True, **fields) -> None:
+    """情報ログ。``console=False`` にすると送信だけ行い、端末には出さない。
+
+    端末は人が読むもので、Better Stack は後から辿るものなので、量の要求が違う。
+    「一瞬で終わった工程」のように端末では雑音でしかない記録も、集計や
+    「いつから遅くなったか」の比較には要るため、送信側は落とさない。
+    """
+    if console:
+        print(f"[INFO] {message}")
     send("info", message, **fields)
 
 
-def log_warning(message: str, **fields) -> None:
-    print(f"[WARNING] {message}")
+def log_warning(message: str, *, console: bool = True, **fields) -> None:
+    if console:
+        print(f"[WARNING] {message}")
     send("warning", message, **fields)
 
 
