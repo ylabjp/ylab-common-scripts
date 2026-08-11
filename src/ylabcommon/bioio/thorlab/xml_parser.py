@@ -49,6 +49,9 @@ class ExperimentXMLParser:
             "DwellTime": None,
             "ZStackEnabled": False,
             "TimeStamp": None,
+            # 取得の種類。Z/T の読み方がこれで変わる。
+            "Streaming": False,
+            "ZFastEnabled": False,
         }
 
         # -------------------------
@@ -69,41 +72,76 @@ class ExperimentXMLParser:
             meta["DwellTime"] = self._safe_float(lsm.get("dwellTime"))
 
         # -------------------------
-        # Z Stage
+        # Z / T の枠
+        #
+        # ここが最も間違えやすい。ZStage と Timelapse の値は「その画面で設定された
+        # もの」であって、その取得で実際に使われたかどうかは Streaming が決める。
+        # 詳しくは docs/thorlabs_experiment_xml.md。
         # -------------------------
 
         zstage = self.root.find(".//ZStage")
+        tl = self.root.find(".//Timelapse")
+        streaming = self.root.find(".//Streaming")
+
+        z_steps = self._safe_int(zstage.get("steps")) if zstage is not None else None
+        z_enable = zstage is not None and zstage.get("enable") == "1"
+
+        meta["Streaming"] = streaming is not None and streaming.get("enable") == "1"
+        meta["ZFastEnabled"] = (
+            streaming is not None and streaming.get("zFastEnable") == "1"
+        )
+
+        if meta["Streaming"]:
+            # 連続取得。ZStage の段数は fast-Z (zFastEnable) のときだけ使われる。
+            # 使われないのに steps を信じると、時系列が丸ごと Z 軸へ潰れる。
+            frames = self._safe_int(streaming.get("frames"))
+            if meta["ZFastEnabled"] and z_steps:
+                meta["SizeZ"] = z_steps
+                meta["ZStackEnabled"] = True
+                # frames は面数なので、ボリューム数は段数で割る。
+                meta["SizeT"] = (frames // z_steps) if frames else None
+            else:
+                meta["SizeZ"] = 1
+                meta["ZStackEnabled"] = False
+                meta["SizeT"] = frames
+        else:
+            meta["SizeZ"] = z_steps
+            meta["ZStackEnabled"] = z_enable
+            if tl is not None:
+                meta["SizeT"] = self._safe_int(tl.get("timepoints"))
 
         if zstage is not None:
-
-            meta["SizeZ"] = self._safe_int(zstage.get("steps"))
-            meta["ZStackEnabled"] = zstage.get("enable") == "1"
-
             step = self._safe_float(zstage.get("stepSizeUM"))
             if step is not None:
                 meta["PixelSizeZ"] = abs(step)
 
-        # -------------------------
-        # Timelapse
-        # -------------------------
-
-        tl = self.root.find(".//Timelapse")
-
+        # 時間軸は XML からは決まらない (docs/thorlabs_experiment_xml.md)。
+        # Timelapse/@intervalSec=60 だと 3000 時点で 50 時間、LSM/@frameRate=45.638
+        # だと 66 秒。3 桁違ううえ、triggerMode=1 (外部トリガ) なら実時刻は外部装置が
+        # 決めるので XML のどこにも書かれていない。
+        # ここに入るのは「正しい時間軸」ではなく後方互換のための値であって、
+        # 正確な時間軸はトリガー記録から別途再構成する。この値を根拠にした解析を
+        # 書かないこと。
         if tl is not None:
-
-            meta["SizeT"] = self._safe_int(tl.get("timepoints"))
             meta["TimeIntervalSec"] = self._safe_float(tl.get("intervalSec"))
 
         # -------------------------
         # Channels
+        #
+        # <Wavelength> は「設定された」波長を並べるだけで、その取得で有効だったかは
+        # <ChannelEnable Set> のビットマスクが持つ (Set=3 なら 1番目と2番目)。
+        # 片方だけ有効にした取得で全波長を数えると、実データと食い違って見える。
         # -------------------------
 
-        for w in self.root.findall(".//Wavelength"):
+        names = [w.get("name") for w in self.root.findall(".//Wavelength")
+                 if w.get("name")]
+        enable = self.root.find(".//ChannelEnable")
+        mask = self._safe_int(enable.get("Set")) if enable is not None else None
 
-            name = w.get("name")
-
-            if name:
-                meta["Channels"].append(name)
+        if mask:
+            meta["Channels"] = [n for i, n in enumerate(names) if mask & (1 << i)]
+        else:
+            meta["Channels"] = names
 
         # -------------------------
         # Objective
@@ -156,7 +194,8 @@ class ExperimentXMLParser:
 
         return {
             # Z スタックとして撮ったのか、タイムラプスとして撮ったのか。
-            # 1枚ずつのファイルをどちらの軸に積むかがこれで決まる。
+            # 面の配置はファイル名の連番が決めるので (thorlab_bioio_stack_builder の
+            # _fill_frame)、これは表示と互換のために残しているだけ。
             "mode": "Z" if (z_enabled and size_z > 1) else "T",
             "SizeX": meta["SizeX"] if meta["SizeX"] is not None else 512,
             "SizeY": meta["SizeY"] if meta["SizeY"] is not None else 512,
@@ -172,6 +211,8 @@ class ExperimentXMLParser:
             # 綴りが不揃いだが、既存の呼び出し側との互換のため残す。
             "TimesTamp": timestamp,
             "ZStackEnabled": z_enabled,
+            "Streaming": bool(meta["Streaming"]),
+            "ZFastEnabled": bool(meta["ZFastEnabled"]),
         }
 
     def _safe_int(self, value):

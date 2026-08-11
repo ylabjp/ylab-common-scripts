@@ -293,7 +293,16 @@ def _page_counts(files, layout, target):
     return counts
 
 
-def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_thorlabs_params, min_kb: int = 100):
+def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
+                                        get_thorlabs_params, min_kb: int = 100,
+                                        sizes=None):
+    """遅延 (dask) の TCZYX スタックと、実際に使ったファイル一覧を返す。
+
+    Args:
+        sizes: ``{パス: バイト数}``。列挙済みなら渡す (:func:`scan_tiff_dir` が返す)。
+            渡さなければここで列挙するが、呼び出し側が直前に列挙しているなら
+            同じディレクトリを2回列挙することになる。
+    """
     params = get_thorlabs_params
     print("PARMS : ", params)
     mode = params["mode"]
@@ -312,22 +321,28 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # 1件1回で、生データがネットワークドライブ (V:) 上にあるため数万ファイルでは
     # この stat だけで数分かかり、接続が切れるとここで止まっていた。
     #
-    # サイズはディレクトリ列挙の応答に最初から入っているので、ディレクトリごとに1回
-    # 列挙すれば全件分が追加の往復なしで揃う (:func:`sizes_from_dir_scan`)。
-    # 3001 回の stat が 1 回の列挙になる。
+    # サイズはディレクトリ列挙の応答に最初から入っているので、列挙1回で全件分が
+    # 追加の往復なしで揃う。3001 回の stat が 1 回の列挙になる。
+    #
+    # 通常は探索側 (scan_tiff_dir) が列挙したときのサイズがそのまま渡ってくるので、
+    # ここでは1往復も発生しない。渡されなかったときだけ自分で列挙する
+    # (スタッカを直接呼ぶ経路のため)。
     #
     # ただし列挙が返すサイズは、書き込み中のファイルに対して古い値になりうる
     # (Windows のメタデータ更新は遅延する)。そこで **捨てる判断だけ** は
     # ``os.path.getsize`` で裏を取る。正常系では 0 回、取りこぼしかけた件数ぶんしか
     # 追加の往復が発生せず、「取得と並行して走らせたら数枚落ちた」を防げる。
-    # 列挙で止まったときに「どのディレクトリを見ているか」を名指しできるよう、
-    # ディレクトリに入る直前に item を差し替える (ファイル単位のループと同じ読み方)。
-    with timed_step("thorlab.scan_sizes", total=len(tiff_files),
-                    target=target) as scan_step:
-        scan_step.advance(n=0, item=target)
-        scanned_sizes = sizes_from_dir_scan(
-            tiff_files, on_directory=lambda d: scan_step.advance(n=0, item=d))
-        scan_step.advance(n=len(scanned_sizes), item=target)
+    if sizes is not None:
+        scanned_sizes = sizes
+    else:
+        # 列挙で止まったときに「どのディレクトリを見ているか」を名指しできるよう、
+        # ディレクトリに入る直前に item を差し替える。
+        with timed_step("thorlab.scan_sizes", total=len(tiff_files),
+                        target=target) as scan_step:
+            scan_step.advance(n=0, item=target)
+            scanned_sizes = sizes_from_dir_scan(
+                tiff_files, on_directory=lambda d: scan_step.advance(n=0, item=d))
+            scan_step.advance(n=len(scanned_sizes), item=target)
 
     with timed_step("thorlab.filter_by_size", total=len(tiff_files),
                     target=target, scanned=len(scanned_sizes)) as step:
@@ -353,12 +368,15 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str, get_tho
     # Mosaic (multiple XY stage positions) is NOT supported here: each tile would
     # be collapsed into Z/T. Detect it from the filenames and fail loudly rather
     # than produce a silently wrong stack.
-    try:
-        _, _dims = extract_dimensions(filtered_files)
-        _is_mosaic = is_mosaic(_dims)
-    except Exception:
-        _dims, _is_mosaic = {}, False
-    if _is_mosaic:
+    #
+    # ここを try/except Exception で包んではいけない。以前は包んでいて、
+    # extract_dimensions が落ちると「mosaic ではない」として素通りしていた
+    # (しかも実際に Timelapse のようなトークンを含む名前で落ちた)。安全確認が
+    # 確認できなかったときに通す形になっていたので、タイル取得が黙って
+    # Z/T 軸へ潰される。extract_dimensions は例外を投げない契約にしたので、
+    # ここで何か飛んできたらそれは本物の不具合であり、握り潰さず落とす。
+    _, _dims = extract_dimensions(filtered_files)
+    if is_mosaic(_dims):
         raise RuntimeError(
             "Multiple XY stage positions (mosaic) detected — not supported by "
             "stack_thorlab_with_bioio_calibrated (tiles would collapse into Z/T). "

@@ -639,3 +639,60 @@ def test_unopenable_files_keep_their_native_exception_and_name_the_file(tmp_path
     with pytest.raises(Exception) as ei:
         mod._read_file_planes(str(p), 1, 32, 32, np.uint16)
     assert str(p) in "".join(getattr(ei.value, "__notes__", []))
+
+
+def test_the_directory_is_enumerated_only_once(xyt_dir, monkeypatch):
+    """取り込み1回で ``os.scandir`` は1回だけ。
+
+    回帰: 探索 (find_tiff_files) が列挙してサイズを捨て、サイズフィルタが
+    sizes_from_dir_scan で同じディレクトリをもう一度列挙していた。SMB 越しでは
+    ディレクトリ列挙も往復の塊なので、2回やれば単純に倍かかる。
+    サイズは列挙の応答に最初から入っているので、受け取っておけば済む。
+    """
+    from ylabcommon.bioio.thorlab.builder import ThorlabBioioBuilder
+    import ylabcommon.utils.utils as utils_mod
+
+    # Builder は既定で 100 KB 未満をメタデータ扱いで落とすので、それを超える大きさで
+    # 作り直す (256x256 uint16 = 128 KB)。
+    for f in xyt_dir.glob("*.tif"):
+        f.unlink()
+    for i in range(1, 9):
+        tifffile.imwrite(xyt_dir / f"ChanA_001_001_001_{i:03d}.tif",
+                         np.full((256, 256), i, dtype=np.uint16))
+
+    (xyt_dir / "Experiment.xml").write_text(
+        '<ThorImageExperiment>'
+        '<LSM pixelX="256" pixelY="256" pixelWidthUM="0.5" pixelHeightUM="0.5"/>'
+        '<ZStage steps="1" stepSizeUM="1" enable="0"/>'
+        '<Timelapse timepoints="8" intervalSec="1"/>'
+        '<Wavelengths><Wavelength name="ChanA"/></Wavelengths>'
+        '</ThorImageExperiment>', encoding="utf-8")
+
+    calls = []
+    real = os.scandir
+    monkeypatch.setattr(utils_mod.os, "scandir",
+                        lambda p: (calls.append(str(p)), real(p))[1])
+
+    ThorlabBioioBuilder(xyt_dir).build()
+
+    assert len(calls) == 1, "scandir was called %d times: %r" % (len(calls), calls)
+
+
+def test_the_size_filter_costs_no_extra_round_trip(xyt_dir, monkeypatch):
+    """探索が渡したサイズをそのまま使い、stat も再列挙もしない。"""
+    from ylabcommon.utils.utils import scan_tiff_dir
+
+    files, sizes = scan_tiff_dir(str(xyt_dir))
+    statted = []
+    monkeypatch.setattr(os.path, "getsize",
+                        lambda p: statted.append(p) or 10 ** 9)
+    scanned = []
+    monkeypatch.setattr(mod, "sizes_from_dir_scan",
+                        lambda *a, **kw: scanned.append(a) or {})
+
+    stacked, kept = stack_thorlab_with_bioio_calibrated(
+        files, xyt_dir / "Experiment.xml", PARAMS_T, min_kb=0, sizes=sizes)
+
+    assert statted == [], "getsize was called for %d file(s)" % len(statted)
+    assert scanned == [], "the directory was scanned again"
+    assert stacked.shape[0] == 8 and len(kept) == 8
