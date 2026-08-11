@@ -31,6 +31,27 @@ except ImportError:
     if importlib.util.find_spec("zarr") and not importlib.util.find_spec("bioio_ome_zarr"):
         print("[DEBUG] Base 'zarr' is installed, but 'bioio-ome-zarr' plugin is missing!")
 
+#: まとめて読む1ブロックの上限バイト数。RAM に載るのはこの1ブロックぶんだけ。
+_STREAM_BLOCK_BYTES = 256 * 1024**2
+
+#: 1ブロックを読むときの同時読み取り数。ネットワークドライブでは1ファイルの時間は
+#: ほぼ往復の待ちなので (実測: ヘッダ読みは CPU 0.23 ms に対し実時間 320 ms)、
+#: 並べれば件数ぶんの時間はかからない。CPU 数ではなく待ちの数で決める値なので、
+#: dask の既定 (CPU 数) より大きくとる。
+_STREAM_READERS = 32
+
+
+def _read_block(block):
+    """遅延ブロックを実体化する。dask なら **同時に** 読む。
+
+    ``np.asarray`` (= ``compute()``) の既定スケジューラはワーカ数が CPU 数なので、
+    待ちが支配的なネットワーク読みでは並列度が足りない。ここだけ明示的に増やす。
+    """
+    if _da is not None and isinstance(block, _da.Array):
+        return block.compute(scheduler="threads", num_workers=_STREAM_READERS)
+    return np.asarray(block)
+
+
 class BioIOWriter:
     """
     Low-level export engine.
@@ -208,11 +229,19 @@ class BioIOWriter:
             metadata["Channel"] = {"Name": list(channel_names)}
 
         plane_bytes = max(Y * X * dtype.itemsize, 1)
-        block = max(1, (256 * 1024**2) // plane_bytes)  # ~256 MB worth of Z planes
+        # まとめて読む単位は「時点」で数える。以前は Z 方向だけをブロックにしていたが、
+        # Z=1 の取得 (連続撮影) ではブロックが 1 面になり、6000 面を **1 面ずつ順番に**
+        # 読むことになっていた。生データはネットワークドライブ上にあり、1 ファイル開くのに
+        # 往復が数回 (実測 ~320 ms) かかるので、直列だと 6000 x 0.32 = 32 分かかる。
+        # 実際に 2.5 面/秒・ETA 2350 秒で走っていた。
+        #
+        # 時点をまとめて 1 回で読めば、その中のファイルは dask のスケジューラが同時に
+        # 読む。待ち時間なので重ねられる (ヘッダ読みと同じ理屈)。
+        t_block = max(1, (_STREAM_BLOCK_BYTES) // (max(C * Z, 1) * plane_bytes))
 
         print(f"[BioIOWriter] Streaming OME-TIFF "
               f"(T={T},C={C},Z={Z},Y={Y},X={X}, {dtype}, ~{nbytes / 1024**3:.1f} GiB, "
-              f"bigtiff={bigtiff}, zblock={block}) → {out_file}")
+              f"bigtiff={bigtiff}, tblock={t_block}) → {out_file}")
 
         # 遅延配列の画素を実際に読むのはここ (np.asarray) なので、取り込み全体の中で
         # 最も長く、入力(生データ)と出力の両方がネットワークドライブ越しになる。数十分
@@ -221,15 +250,16 @@ class BioIOWriter:
                         target=str(out_file), n_bytes=nbytes) as step:
 
             def planes():
-                for t in range(T):
-                    for c in range(C):
-                        for z0 in range(0, Z, block):
-                            z1 = min(z0 + block, Z)
-                            # 読む前に記録する。止まったときに掴んだままのブロックが分かる。
-                            step.advance(z1 - z0, item=f"T={t} C={c} Z={z0}:{z1}")
-                            chunk = np.asarray(data[t, c, z0:z1])  # (z1-z0, Y, X), bounded
-                            for k in range(z1 - z0):
-                                yield chunk[k]
+                for t0 in range(0, T, t_block):
+                    t1 = min(t0 + t_block, T)
+                    # 読む前に記録する。止まったときに掴んだままのブロックが分かる。
+                    step.advance(0, item=f"reading T={t0}:{t1}")
+                    chunk = _read_block(data[t0:t1])    # (t1-t0, C, Z, Y, X), bounded
+                    for i in range(t1 - t0):
+                        for c in range(C):
+                            for z in range(Z):
+                                step.advance(item=f"T={t0 + i} C={c} Z={z}")
+                                yield chunk[i, c, z]
 
             with tifffile.TiffWriter(out_file, bigtiff=bigtiff, ome=True) as tif:
                 tif.write(

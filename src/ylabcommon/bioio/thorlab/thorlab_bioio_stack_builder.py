@@ -342,10 +342,19 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     return arr.astype(dtype, copy=False)
 
 
-#: ヘッダ読みの同時実行数。ネットワークドライブでは1件あたりの時間はほぼ待ち時間
-#: (往復のレイテンシ) なので、並べれば件数ぶんの時間はかからない。上げすぎると
-#: SMB のセッションを圧迫するため、待ちを埋められる程度に留める。
-_PROBE_WORKERS = 16
+#: ヘッダ読みの同時実行数。
+#:
+#: 1件あたりの内訳を実測した (ローカル・キャッシュ済みで計ると I/O 待ちが消えるので、
+#: 残るのが Python の処理時間になる):
+#:
+#: - Python の処理: **0.23 ms** (ヘッダ数百バイトの解釈だけ。画素は読まない)
+#: - SMB 越しの実時間: **約 320 ms** (`\\yg-storage4` で 50 件/秒 x 16 並列から逆算)
+#:
+#: つまり 99.9% が往復の待ちで、CPU も RAM もほとんど使っていない。1ファイル開くのに
+#: SMB は CREATE / QUERY_INFO / READ x n / CLOSE と往復するので、こうなる。
+#: 待ちは並べれば重なるから、同時実行数がそのまま実時間に効く。
+#: 3001 枚 x 2ch で 16 並列だと 2 分、64 並列なら 30 秒ほど。
+_PROBE_WORKERS = 64
 
 
 def _page_counts(files, layout, target):
