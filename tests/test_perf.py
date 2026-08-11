@@ -281,6 +281,9 @@ def test_heartbeat_does_not_flag_a_long_step_that_keeps_progressing(sent):
     with perf.timed_step("ometiff.stream_write", total=100) as step:
         step.started = time.perf_counter() - 3600   # 1時間動いているが
         step.advance(item="T=5 C=0 Z=0:8")          # 進捗は今あった
+        # 進捗ログの直後は heartbeat を省くので、その窓を抜けた状態にする
+        # (省く挙動そのものは下のテストで確かめる)。
+        step.last_log_at = time.perf_counter() - 3 * perf.DEFAULT_HEARTBEAT_INTERVAL_SEC
         sent.clear()
         perf._emit_heartbeat(stall_after_sec=600)
         emitted = list(sent)
@@ -289,6 +292,78 @@ def test_heartbeat_does_not_flag_a_long_step_that_keeps_progressing(sent):
     assert level == "info"
     assert fields["stalled"] is False
     assert fields["elapsed_sec"] >= 3600
+
+
+def test_the_heartbeat_stays_quiet_right_after_a_progress_log(sent):
+    """進捗ログを出した直後の工程には heartbeat を重ねない。
+
+    heartbeat が言えることは「生きている・どこまで進んだ」で、進捗ログと同じ内容に
+    なる。実データでは 1 秒違いで同じ数字が 2 行並び、端末が同じ行の繰り返しで
+    埋まっていた。生存確認は進捗ログが出ていること自体で足りる。
+    """
+    with perf.timed_step("ometiff.stream_write", total=100) as step:
+        step.started = time.perf_counter() - 3600
+        step.advance(item="T=5 C=0 Z=0")            # ここで進捗ログが出る
+        assert step.last_log_at is not None
+        sent.clear()
+        perf._emit_heartbeat(stall_after_sec=600)
+        emitted = list(sent)                        # 工程の完了ログが入る前に見る
+
+    assert emitted == [], emitted
+
+
+def test_a_stalled_step_is_named_even_right_after_a_progress_log(sent):
+    """止まっている工程は、直前に進捗ログが出ていても黙らせない。
+
+    重複を避けるための省略が、**名指ししたい唯一の場面** まで消してはいけない。
+    """
+    with perf.timed_step("ometiff.stream_write", total=100,
+                         progress_interval_sec=0) as step:
+        step.advance(item="T=5 C=0 Z=0")                # 進捗ログが実際に出る
+        assert step.last_log_at is not None
+        # そのあと 700 秒 何も起きなかった状態にする。進捗ログを出せるのは advance()
+        # の中だけなので、実際にはこの2つは必ず一緒に古くなる。
+        stale = time.perf_counter() - 700
+        step.progress_at = step.last_log_at = stale
+        sent.clear()
+        perf._emit_heartbeat(stall_after_sec=600)
+        emitted = list(sent)
+
+    (level, message, fields), = emitted
+    assert level == "warning"
+    assert fields["stalled"] is True
+    assert "T=5 C=0 Z=0" in message
+
+
+def test_a_step_that_never_reports_progress_still_gets_a_heartbeat(sent):
+    """進捗を報告しない工程 (total を渡さない) は必ず heartbeat に出る。
+
+    回帰: 省略の判定を「開始時刻」で初期化していたため、1 行も進捗を出さない工程が
+    永久に飛ばされていた。長く沈黙する工程こそ生存確認が要る。
+    """
+    with perf.timed_step("load_image") as step:
+        step.started = time.perf_counter() - 120
+        sent.clear()
+        perf._emit_heartbeat(stall_after_sec=600)
+        emitted = list(sent)
+
+    (level, _message, fields), = emitted
+    assert level == "info"
+    assert fields["step"] == "load_image"
+
+
+def test_the_first_progress_line_waits_for_the_interval(sent):
+    """1 行目も間隔を空けてから出す。
+
+    着手直後は rate が 0 件/秒で「ETA 334891 s」のような無意味な数字しか出せない。
+    """
+    with perf.timed_step("ometiff.stream_write", total=12000) as step:
+        sent.clear()
+        step.advance(item="T=0 C=0 Z=0")
+        assert sent == [], sent                     # 1 件目では出さない
+        step.started = time.perf_counter() - 2 * perf.DEFAULT_PROGRESS_INTERVAL_SEC
+        step.advance(item="T=1 C=0 Z=0")
+        assert len(sent) == 1
 
 
 def test_heartbeat_flags_a_step_without_progress_reporting_by_elapsed_time(sent):
