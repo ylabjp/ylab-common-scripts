@@ -27,6 +27,18 @@ def clean_registry():
     perf._active_steps.clear()
 
 
+@pytest.fixture(autouse=True)
+def report_every_step(monkeypatch):
+    """このファイルは「計装が入っているか」を見るので、短い工程の間引きを外す。
+
+    本番では QUIET_UNDER_SEC 未満の工程を報告しない (Better Stack が
+    1工程2件で溢れるため)。テストのデータは一瞬で終わるので、そのままだと
+    ``with timed_step(...)`` を消しても気付けない。間引き自体は
+    test_perf_quiet_steps.py が別に見る。
+    """
+    monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.0)
+
+
 @pytest.fixture
 def steps(monkeypatch):
     """perf の送信を捕まえて (step, event, fields) で集める。"""

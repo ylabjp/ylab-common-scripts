@@ -48,6 +48,24 @@ def _check_size_t_tolerant(xml_size_t, image_size_t):
     return False, None, f"xml={xml_size_t} img={image_size_t} (more timepoints than XML)"
 
 
+def describe_z_extent(n_planes: int, step_um: float) -> str:
+    """取得した Z 方向の広がりを1行で説明する。
+
+    深さは **面の中心どうしの間隔** で数える (``(N-1) x step``)。ThorImage で
+    「30 um を 61 段」と設定すると step は 30/60 = 0.5 um になるので、この数え方で
+    設定した 30 um に戻る (面の厚みまで足す ``N x step`` だと 30.5 um になる)。
+    どちらの規約かは読み手には分からないので、面数と刻みも一緒に出して迷わせない。
+
+    単一平面 (XYT 取得) には深さという量が無い。``(N-1) x step`` は 0 になるが、
+    それを「Total volume depth: 0.0 microns」と出すと壊れた値に見える
+    (実際そう報告された)。単一平面であることをそのまま書く。
+    """
+    if n_planes <= 1:
+        return "Z extent: single plane (XYT acquisition, no Z stack)"
+    return ("Z extent: %.3g um (%d planes x %.3g um step, measured centre to centre)"
+            % (step_um * (n_planes - 1), n_planes, step_um))
+
+
 class ThorlabBioioBuilder:
     """
     Full reconstruction pipeline:
@@ -129,9 +147,8 @@ class ThorlabBioioBuilder:
 
         # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
         # params + slice count, not from the pixels.
-        nz = stacked_data.shape[2]
-        dz = get_thorlabs_params.get("PixelSizeZ", 1.0)
-        print(f"Total volume depth: {dz * max(nz - 1, 0)} microns")
+        print(describe_z_extent(stacked_data.shape[2],
+                                get_thorlabs_params.get("PixelSizeZ", 1.0)))
 
         # Return the LAZY (dask-backed) stack. Pixels are read exactly once,
         # streamed to disk, at write time.

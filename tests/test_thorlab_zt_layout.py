@@ -24,6 +24,8 @@ ThorLabs の生ファイルは ``ChanA_<X>_<Y>_<Z>_<T>.tif`` で、取得の実�
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 import tifffile
@@ -367,3 +369,95 @@ def warnings_as_errors():
             return ctx.__exit__(*exc)
 
     return _Ctx()
+
+
+# ---- 面数の違うファイルが1枚混ざる場合 ----------------------------------------
+
+def test_a_stray_multipage_file_is_cut_at_build_time_not_at_compute_time(tmp_path):
+    """時点ごとの面数が揃わないものは、組み立ての時点で落とす。
+
+    回帰: 3001 枚の XYT 取得に 004 だけ 6000 ページのファイルが混ざっていた
+    (取り違えて置かれた別物とみられる)。先頭と末尾しか見ていなかったので気付かず、
+    グラフは 1 ページ前提で組まれ、267 秒走ったあとの compute 時にようやく
+    ``Page count mismatch`` で落ちていた。
+
+    サイズは探索時の列挙で全件分持っているので、追加の往復なしで外れ値を見つけ、
+    そのファイルだけヘッダを確かめれば組み立ての時点で判断できる。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 9):
+        _write(d, "ChanA", 1, t, t)
+    # 1枚だけ大量ページ (他は 8x8 の1ページ)
+    tifffile.imwrite(d / "ChanA_001_001_001_004.tif",
+                     np.zeros((60, 8, 8), dtype=np.uint16),
+                     photometric="minisblack")
+    files = sorted(str(p) for p in d.glob("*.tif"))
+    sizes = {f: os.path.getsize(f) for f in files}
+
+    with pytest.warns(UserWarning, match="do not hold 1 plane"):
+        stacked, _ = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("T", size_z=1, size_t=8),
+            min_kb=0, sizes=sizes)
+
+    # 混入した時点だけ落ち、残りはそのまま積める
+    assert stacked.shape == (7, 1, 1, 8, 8)
+    # 画素まで通しても落ちない (組み立ての時点で除いてある)
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 5, 6, 7, 8]
+
+
+def test_the_size_outlier_is_found_without_reading_every_header(tmp_path):
+    """外れ値の検出に、全ファイルのヘッダ読みを増やさないこと。
+
+    ここが O(N) になると、SMB 越しの 3001 枚で往復が元に戻る。
+    """
+    import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as m
+
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 21):
+        _write(d, "ChanA", 1, t, t)
+    files = sorted(str(p) for p in d.glob("*.tif"))
+    sizes = {f: os.path.getsize(f) for f in files}
+
+    probed = []
+    real = m.probe_plane_layout
+    m.probe_plane_layout = lambda p: (probed.append(str(p)), real(p))[1]
+    try:
+        stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("T", size_z=1, size_t=20),
+            min_kb=0, sizes=sizes)
+    finally:
+        m.probe_plane_layout = real
+
+    # 先頭 + 末尾のみ。20 枚あっても増えない。
+    assert len(probed) == 2, probed
+
+
+def test_a_size_outlier_gets_its_header_read(tmp_path):
+    """サイズが外れているファイルはヘッダを確かめる (でも全件は読まない)。"""
+    import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as m
+
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 21):
+        _write(d, "ChanA", 1, t, t)
+    odd = d / "ChanA_001_001_001_007.tif"
+    tifffile.imwrite(odd, np.zeros((60, 8, 8), dtype=np.uint16),
+                     photometric="minisblack")
+    files = sorted(str(p) for p in d.glob("*.tif"))
+    sizes = {f: os.path.getsize(f) for f in files}
+
+    probed = []
+    real = m.probe_plane_layout
+    m.probe_plane_layout = lambda p: (probed.append(str(p)), real(p))[1]
+    try:
+        with pytest.warns(UserWarning):
+            stack_thorlab_with_bioio_calibrated(
+                files, d / "Experiment.xml", _params("T", size_z=1, size_t=20),
+                min_kb=0, sizes=sizes)
+    finally:
+        m.probe_plane_layout = real
+
+    assert str(odd) in probed, "サイズの外れ値を確かめていない"
+    assert len(probed) < len(files), "全件読みに戻っている"
