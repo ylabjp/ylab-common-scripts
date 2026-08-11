@@ -25,6 +25,7 @@ ThorLabs の生ファイルは ``ChanA_<X>_<Y>_<Z>_<T>.tif`` で、取得の実�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -117,11 +118,11 @@ def test_names_without_sequence_numbers_are_cut_not_fatal():
     回帰: 以前は1枚でも読めないとチャンネル全体を諦めて XML の mode へ退避し、
     3000 枚から得られた正しい配置を丸ごと捨てていた。
     """
-    files = _names([1], range(1, 5)) + ["ChanA_Preview.tif"]
+    files = _names([1], range(1, 5)) + ["ChanA_reference.tif"]
     frame = _fill_frame(files, max_t=4, max_z=1)
 
     assert frame.t_keep == [1, 2, 3, 4]       # 残りは通常どおり埋まる
-    assert frame.unreadable == ["ChanA_Preview.tif"]
+    assert frame.unreadable == ["ChanA_reference.tif"]
 
 
 def test_the_largest_complete_block_wins():
@@ -325,7 +326,7 @@ def test_names_without_sequence_numbers_are_cut_and_reported(tmp_path, capsys):
     d.mkdir()
     for t in range(1, 5):
         _write(d, "ChanA", 1, t, t)
-    tifffile.imwrite(d / "ChanA_Preview.tif",       # 連番の無い紛れ込み
+    tifffile.imwrite(d / "ChanA_reference.tif",     # 連番の無い紛れ込み
                      np.zeros((8, 8), dtype=np.uint16))
     files = sorted(str(p) for p in d.glob("*.tif"))
 
@@ -339,6 +340,72 @@ def test_names_without_sequence_numbers_are_cut_and_reported(tmp_path, capsys):
     # 何がどれだけ落ちたかが分かる
     out = capsys.readouterr().out
     assert "filled 4/5 file(s)" in out
+
+
+# ---- ThorImage のプレビュー ---------------------------------------------------
+
+@pytest.mark.parametrize("name", [
+    "ChanA_Preview.tif", "ChanB_Preview.tif", "Preview.tif",
+    "Image_ChanA_Preview.tif",
+])
+def test_previews_are_dropped_without_a_warning(tmp_path, capsys, name):
+    """プレビューは **どの取得にも必ずある** ので、警告ではなく DEBUG で落とす。
+
+    ThorImage は表示用に ``ChanA_Preview.tif`` を書き出す。面ではないので落とすのは
+    正しいが、これを「連番の読めない不明なファイル」として警告すると毎回必ず鳴り、
+    本当に見てほしい警告まで読み飛ばされるようになる。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 5):
+        _write(d, "ChanA", 1, t, t)
+    tifffile.imwrite(d / name, np.zeros((8, 8), dtype=np.uint16))
+    files = sorted(str(p) for p in d.glob("*.tif"))
+
+    with warnings_as_errors():                  # 警告が1つでも出たら失敗する
+        stacked, used = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("Z", size_z=1, size_t=4), min_kb=0)
+
+    assert stacked.shape == (4, 1, 1, 8, 8)
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4]
+    assert not any(Path(f).name == name for f in used)   # 使ったファイルにも残らない
+
+    out = capsys.readouterr().out
+    assert f"Skipped 1 ThorImage preview file(s) ({name})" in out
+    assert "filled 4/4 file(s)" in out          # 枠の勘定にも入らない
+
+
+def test_a_preview_does_not_get_probed_as_an_odd_sized_file(tmp_path, monkeypatch):
+    """プレビューはヘッダの抜き取り検査に当たらない。
+
+    プレビューは名前の並びで最後に来るので、以前は :func:`_page_counts` が
+    「末尾のファイル」として必ずヘッダを読んでいた。面数もサイズも他と違うため
+    「面数が食い違う」と判定され、サイズの分からないファイルが1つでもあれば
+    全件のヘッダを読みに行っていた (数千往復)。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 6):
+        _write(d, "ChanA", 1, t, t)
+    tifffile.imwrite(d / "ChanA_Preview.tif",   # 面数もサイズも他と違う
+                     np.zeros((6, 8, 8), dtype=np.uint16), photometric="minisblack")
+    files = sorted(str(p) for p in d.glob("*.tif"))
+
+    opened = []
+    real_tifffile = tifffile.TiffFile
+
+    def _spy(path, *a, **kw):
+        opened.append(os.path.basename(str(path)))
+        return real_tifffile(path, *a, **kw)
+
+    monkeypatch.setattr(tifffile, "TiffFile", _spy)
+
+    stacked, _ = stack_thorlab_with_bioio_calibrated(
+        files, d / "Experiment.xml", _params("Z", size_z=1, size_t=5),
+        min_kb=0, sizes={})              # サイズ不明: 全件読みの経路に入りうる
+
+    assert stacked.shape == (5, 1, 1, 8, 8)
+    assert "ChanA_Preview.tif" not in opened
 
 
 def test_a_matching_z_stack_is_not_flagged(tmp_path):

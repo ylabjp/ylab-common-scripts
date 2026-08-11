@@ -104,6 +104,15 @@ def _thorlabs_zt(path):
     return int(nums[-2]), int(nums[-1])
 
 
+def _is_preview(path):
+    """ThorImage が取得ごとに書き出す表示用ファイル (``ChanA_Preview.tif``) か。
+
+    取得中の画面表示のためのもので、面ではない。XML の
+    ``<Streaming previewIndex="1"/>`` に対応し、**どの取得にも必ず出る**。
+    """
+    return Path(path).stem.lower().split("_")[-1] == "preview"
+
+
 def _fill_frame(files, max_t, max_z) -> FilledFrame:
     """XML が決めた枠 ``(max_t, max_z)`` をファイルで埋め、埋まらない分を落とす。
 
@@ -400,6 +409,27 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
     # 計測ログの target は取得ディレクトリ (img*) に揃える。sorter 側の load_image と
     # 同じ値になるので、Better Stack 上で工程をまたいで突き合わせられる。
     target = str(Path(xml_path).parent)
+
+    # 表示用のプレビューを最初に外す。ThorImage はどの取得でも ``ChanA_Preview.tif``
+    # を書き出すので、これを「連番が読めない不明なファイル」として警告すると
+    # **毎回必ず鳴る警告** になり、本当に見てほしい警告まで読まれなくなる。
+    # 落とすこと自体は変わらないので、DEBUG に1行残すだけにする。
+    #
+    # 先に外すのには実利もある。プレビューは名前の並びで最後に来るため、
+    # ヘッダの抜き取り検査 (:func:`_page_counts` は末尾のファイルを見る) が
+    # プレビューに当たっていた。面数もサイズも他と違うので「面数が食い違う」と
+    # 判定され、サイズの分からないファイルが1つでもあると全件のヘッダを読みに行く。
+    previews = [f for f in tiff_files if _is_preview(f)]
+    if previews:
+        tiff_files = [f for f in tiff_files if not _is_preview(f)]
+        print(f"DEBUG: Skipped {len(previews)} ThorImage preview file(s) "
+              f"({_examples(previews)}) — display copies, not image planes.")
+        if not tiff_files:
+            raise RuntimeError(
+                "Only ThorImage preview file(s) were found in this acquisition "
+                "(%s), so there are no image planes to stack."
+                % _examples(previews)
+            )
 
     # Size filter (NOT a pixel read). ``tiff_files`` is already sorted by
     # collect_valid_tiffs; honor the ``min_kb`` parameter.
