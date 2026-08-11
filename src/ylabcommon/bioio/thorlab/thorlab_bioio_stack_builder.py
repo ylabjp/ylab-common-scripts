@@ -578,8 +578,11 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
             % (dict(zip(channel_keys, (len(t) for t in kept_t))), len(common_t)),
             stacklevel=2,
         )
-        channel_stacks = [s[[t.index(v) for v in common_t]]
-                          for s, t in zip(channel_stacks, kept_t)]
+        aligned = []
+        for s, t_keep in zip(channel_stacks, kept_t):
+            at = {t: i for i, t in enumerate(t_keep)}   # 3001 時点なので線形探索にしない
+            aligned.append(s[[at[t] for t in common_t]])
+        channel_stacks = aligned
 
     # 面数が揃わないのは「取得が途中で終わった」ときで、欠けるのは必ず後ろ側なので
     # 枚数で切ってよい (時点と違って、面には共通の番号が振れない — 多ページの
