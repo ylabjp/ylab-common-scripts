@@ -108,13 +108,13 @@ def xyt_dir(tmp_path):
 # 1. 往復が実際に減っている
 # ==========================================================================
 
-def test_the_whole_stack_build_reads_a_constant_number_of_headers(xyt_dir):
-    """入口から出口まで通しても、open 回数がファイル数に比例しない。
+def test_the_whole_stack_build_opens_each_file_about_once(xyt_dir):
+    """入口から出口まで通しても、1 ファイルにつき open は 1 回で済む。
 
     ここが本番。個々の関数が速くても、``find_tiff_files`` の ``resolve()`` や
-    サイズフィルタの stat が残っていれば往復は減らない。
-    ヘッダは先頭と末尾の 2 枚だけ読むので、8 ファイルでも 3001 ファイルでも
-    open は数回で頭打ちになる。
+    サイズフィルタの stat が残っていれば往復はファイル数の何倍にもなる。
+    面数はヘッダにしか無いので全件のヘッダは読むが、それ以外に 1 ファイルあたりの
+    往復を足さない (以前は ``BioImage(f)`` が 1 ファイルにつき複数回開いていた)。
     """
     probe_plane_layout(str(next(xyt_dir.glob("*.tif"))))     # import/キャッシュを温め
 
@@ -124,16 +124,18 @@ def test_the_whole_stack_build_reads_a_constant_number_of_headers(xyt_dir):
             files, xyt_dir / "Experiment.xml", PARAMS_T, min_kb=0)
 
     assert len(kept) == 8
-    # 先頭と末尾のヘッダ 2 枚 + ディレクトリ側の定数回。ファイル数には比例しない。
-    assert c.n <= 6, "opens=%d for %d files" % (c.n, len(kept))
+    # 全件のヘッダ (8) + 縦横/画素型を決める 1 枚 + ディレクトリ側の定数回。
+    assert c.n <= len(kept) + 5, "opens=%d for %d files" % (c.n, len(kept))
     assert isinstance(stacked, da.Array)
 
 
-def test_header_reads_do_not_grow_with_the_file_count(tmp_path):
-    """ファイル数を 4 倍にしても、読むヘッダの枚数は変わらない。
+def test_header_reads_grow_by_exactly_one_per_file(tmp_path):
+    """ファイルが 1 枚増えたら、読むヘッダも 1 枚だけ増える。
 
-    「定数回」を 1 点の実測で主張すると、たまたま小さいだけの可能性が残る。
-    件数を変えて 2 回測り、増えないことを直接見る。
+    面数はヘッダにしか無いので全件読む。**その 1 枚を超えないこと** がここの契約で、
+    1 ファイルあたり 2 回開けば SMB 越しの 3001 枚では往復が倍になる。
+    1 点の実測では「たまたま」を排除できないので、件数を変えて 2 回測り、
+    増え方が 1 対 1 であることを直接見る。
     """
     def build(n):
         d = tmp_path / f"img{n:03d}"
@@ -152,7 +154,9 @@ def test_header_reads_do_not_grow_with_the_file_count(tmp_path):
             mod.probe_plane_layout = real
         return seen
 
-    assert len(build(5)) == len(build(20)) == 2
+    # 全件 + 縦横/画素型を決める 1 枚 (先頭は 2 回読まれる)
+    assert len(build(5)) == 5 + 1
+    assert len(build(20)) == 20 + 1
 
 
 def test_listing_resolves_the_directory_once_not_every_file(xyt_dir, monkeypatch):
@@ -364,11 +368,12 @@ def test_a_frame_size_mismatch_is_caught_and_names_the_file(tmp_path):
         np.asarray(stacked)
 
 
-def test_a_page_count_mismatch_is_caught_and_names_the_file(tmp_path):
-    """面数の食い違いも同じく、ファイル名つきで落ちる。
+def test_a_mid_sequence_page_count_difference_is_caught_before_compute(tmp_path):
+    """途中の 1 枚だけ面数が違っても、組み立ての時点で気付いて落とす。
 
-    先頭と末尾は面数を確かめているので、ここで漏れるのは **途中の** ファイルだけ。
-    その 1 枚が黙って通ると、Z=10 のはずのスタックに 3 面のプレーンが混ざる。
+    その 1 枚が黙って通ると、Z=4 のはずのスタックに 3 面の時点が混ざる。
+    以前は先頭と末尾しか面数を確かめていなかったので、途中の 1 枚は compute まで
+    見つからなかった (実データでは 267 秒走ったあとに落ちた)。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -381,24 +386,39 @@ def test_a_page_count_mismatch_is_caught_and_names_the_file(tmp_path):
                      photometric="minisblack")
     files = sorted(str(p) for p in d.glob("*.tif"))
 
-    stacked, _ = stack_thorlab_with_bioio_calibrated(
-        files, d / "Experiment.xml", _params("Z", 20), min_kb=0)
+    with pytest.warns(UserWarning, match="t=3 has 3"):
+        stacked, _ = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("Z", 20), min_kb=0)
+
+    assert stacked.shape == (4, 1, 4, 16, 16)   # 面数の違う時点だけ落ちる
+    np.asarray(stacked)                          # 画素まで通しても落ちない
+
+
+def test_a_file_that_changes_after_probing_still_names_itself(tmp_path):
+    """読み取り時に面数が宣言と違えば、ファイル名つきで落ちる。
+
+    ヘッダは全件確かめてから組み立てるので、ここまで来るのは「確かめたあとに
+    ファイルが変わった」ときだけ (取得と並行して走らせた場合など)。dask の
+    shape 不一致エラーはファイル名を持たないので、最後の砦としてここで名指しする。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    odd = d / "ChanA_001_001_001_001.tif"
+    tifffile.imwrite(odd, np.zeros((3, 16, 16), dtype=np.uint16),
+                     photometric="minisblack")
 
     with pytest.raises(ValueError, match="Page count mismatch"):
-        np.asarray(stacked)
+        mod._read_file_planes(str(odd), 4, 16, 16, np.uint16)
     with pytest.raises(ValueError, match=str(odd)):
-        np.asarray(stacked)
+        mod._read_file_planes(str(odd), 4, 16, 16, np.uint16)
 
 
-def test_an_uneven_tail_is_found_without_reading_every_header(tmp_path):
-    """先頭と末尾で面数が違えば、全ファイルを確かめなくても正しく組める。
+def test_an_uneven_tail_of_a_z_stack_is_kept_whole(tmp_path):
+    """途中で終わった Z スタックは、面数の違う末尾も含めて正しく積む。
 
-    「2 枚で済ませる」が効くのは形が揃っているときだけ。揃っていないと分かった
-    時点で仮定を捨てないと、取得が途中で終わった回で壊れた出力を作る。
-
-    ただし全件のヘッダを読み直す必要は無い。サイズは探索時の列挙で全件分
-    持っており、面数が違えばサイズも比例して違うので、怪しいファイルだけを
-    ヘッダで確かめれば足りる (SMB 越しの 3001 枚で往復を元に戻さない)。
+    1 時点の Z スタックは多ページと単一ページのファイルが混在してよいので、
+    面数が違うこと自体は異常ではない。全件のヘッダを読んでいるので、
+    末尾が 2 面しか無くても 4+4+4+2 = 14 面として正しく積める。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -424,8 +444,7 @@ def test_an_uneven_tail_is_found_without_reading_every_header(tmp_path):
     assert stacked.shape == (1, 1, 14, 8, 8)   # 4+4+4+2
     assert np.asarray(stacked)[0, 0, :, 0, 0].tolist() == \
         [1] * 4 + [2] * 4 + [3] * 4 + [4] * 2
-    assert files[-1] in seen, "面数の違うファイルを確かめていない"
-    assert len(set(seen)) < len(files), "全件読みに戻っている"
+    assert set(seen) == set(files), "全件のヘッダを確かめていない"
 
 
 # ==========================================================================
@@ -702,3 +721,122 @@ def test_the_size_filter_costs_no_extra_round_trip(xyt_dir, monkeypatch):
     assert statted == [], "getsize was called for %d file(s)" % len(statted)
     assert scanned == [], "the directory was scanned again"
     assert stacked.shape[0] == 8 and len(kept) == 8
+
+
+# ==========================================================================
+# 6. ヘッダの読み方と画素の読み方を一致させる
+# ==========================================================================
+
+def _write_with_thumbnail(f):
+    """縮小サムネイルを持つファイル。``len(tf.pages)`` は 2 だが読めるのは 1 面。"""
+    with tifffile.TiffWriter(f) as w:
+        w.write(np.zeros((8, 8), dtype=np.uint16))
+        w.write(np.zeros((4, 4), dtype=np.uint16), subfiletype=1)
+
+
+@pytest.mark.parametrize("label,write", [
+    ("plain", lambda f: tifffile.imwrite(f, np.zeros((8, 8), np.uint16))),
+    ("multipage", lambda f: tifffile.imwrite(
+        f, np.zeros((6, 8, 8), np.uint16), photometric="minisblack")),
+    ("thumbnail", _write_with_thumbnail),
+    ("ome", lambda f: tifffile.imwrite(
+        f, np.zeros((2, 3, 8, 8), np.uint16), metadata={"axes": "TZYX"})),
+])
+def test_the_probe_counts_planes_the_same_way_the_read_does(tmp_path, label, write):
+    """ヘッダから数えた面数と、実際に読んで得られる面数が必ず一致すること。
+
+    回帰: 検査側は ``len(tf.pages)``、読み取り側は ``tifffile.imread``
+    (= ``series[0]``) を見ており、この2つは食い違う。縮小サムネイルを持つ
+    ファイルは pages が 2 でも読めるのは 1 面、逆に IFD を1つしか持たず
+    記述子で「N 面ある」と宣言する形式では pages が 1 でも N 面読める。
+    食い違うと、全件のヘッダを読んでいても検査が素通りして compute の時点で
+    ``Page count mismatch`` になる — 検査の意味が無くなる。
+    """
+    f = tmp_path / f"{label}.tif"
+    write(f)
+
+    layout = mod.probe_plane_layout(f)
+    arr = mod._read_file_planes(str(f), layout.n_pages, layout.height,
+                                layout.width, layout.dtype)
+
+    assert arr.shape[0] == layout.n_pages
+    assert arr.shape[1:] == (layout.height, layout.width)
+
+
+# ==========================================================================
+# 7. OME-TIFF が兄弟ファイルを巻き込んで読まれないこと
+# ==========================================================================
+
+def _make_ome_multifile_dir(d, n=6):
+    """生ファイル n 枚。うち 4 枚目が「全部を束ねる」OME マスターになっている。"""
+    from ome_multifile_fixture import write_ome_master
+    names = [f"ChanA_001_001_001_{t:03d}.tif" for t in range(1, n + 1)]
+    for t, name in enumerate(names, 1):
+        tifffile.imwrite(d / name, np.full((8, 8), t, np.uint16))
+    write_ome_master(d / names[3], names, n)
+    return names
+
+
+def test_an_ome_master_is_read_as_its_own_single_plane(tmp_path):
+    """兄弟を指す OME マスターでも、読むのは自分の1面だけ。
+
+    回帰: OME-TIFF は 1 データセットが複数ファイルにまたがる形を持てる。先頭ファイルの
+    OME XML が ``<TiffData><UUID FileName="...">`` で兄弟を名前で指すと、tifffile は
+    それを追って同じフォルダのファイルを次々に開き、1 つの配列に組み上げて返す。
+
+    取得フォルダの生ファイル 1 枚にこの XML が入っていた (実データで起きた)。すると
+    その 1 枚を開くだけで取得全体が読まれ、``expected 1 page(s), got 6000`` になり、
+    しかも 1 枚読むのに数千往復かかっていた。この取り込みは面の配置をファイル名と
+    Experiment.xml で決めているので、tifffile に束ねてもらってはいけない。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    master = d / names[3]
+
+    # 束ねる指定が効いていれば (6,8,8) になる = 兄弟を巻き込んでいる
+    assert tifffile.imread(master).shape == (6, 8, 8)
+
+    layout = mod.probe_plane_layout(master)
+    arr = mod._read_file_planes(str(master), layout.n_pages,
+                                layout.height, layout.width, layout.dtype)
+
+    assert layout.n_pages == 1
+    assert arr.shape == (1, 8, 8)
+    assert int(arr[0, 0, 0]) == 4, "自分の面 (t=4) ではなく兄弟の画素を読んでいる"
+
+
+def test_an_ome_master_does_not_open_its_siblings(tmp_path):
+    """マスターを1枚読んでも、開くファイルは1つ。
+
+    ここが O(N) に戻ると、3001 枚の取得では 1 枚読むたびに 3001 往復になる。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    master = d / names[3]
+
+    with count_opens() as c:
+        mod.probe_plane_layout(master)
+        opens_probe = c.n
+    with count_opens() as c:
+        mod._read_file_planes(str(master), 1, 8, 8, np.uint16)
+        opens_read = c.n
+
+    assert opens_probe == 1, "probe が兄弟を開いている (%d回)" % opens_probe
+    assert opens_read == 1, "read が兄弟を開いている (%d回)" % opens_read
+
+
+def test_the_whole_acquisition_survives_an_ome_master(tmp_path):
+    """OME マスターが混ざっていても、全時点をそのまま組める (1枚も落とさない)。"""
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    files = sorted(str(d / n) for n in names)
+
+    stacked, kept = stack_thorlab_with_bioio_calibrated(
+        files, d / "Experiment.xml", _params("T", 6), min_kb=0)
+
+    assert stacked.shape == (6, 1, 1, 8, 8)
+    assert len(kept) == 6
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5, 6]
