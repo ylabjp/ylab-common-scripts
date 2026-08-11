@@ -46,23 +46,25 @@ def events(records):
 
 # ---- timed_step: 正常系 ------------------------------------------------------
 
-def test_timed_step_logs_start_before_the_body_runs(sent):
-    """開始ログは本体より先に出る。
+def test_timed_step_does_not_log_until_the_body_finishes(sent, monkeypatch):
+    """開始ログは送らない (1工程1件に絞る)。
 
-    flush() は atexit 依存なので、OOM killer や強制終了ではキューの末尾が失われる。
-    開始を先に送っておかないと「最後に何をしていて落ちたか」が残らない。
+    以前は開始と完了の2件を送っており、取り込み1件で 26 件が並んで、時間を使った
+    工程がその中に埋もれていた。実行中であることは heartbeat がレジストリを読んで
+    名指しするので、開始ログが無くても「どこで止まったか」は分かる。
     """
     during = []
 
+    monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.0)
     with perf.timed_step("load_image"):
         during.append(len(sent))
 
-    assert during == [1]
-    assert sent[0][2]["event"] == "start"
-    assert sent[-1][2]["event"] == "done"
+    assert during == [0], "本体の実行中に送っている"
+    assert events(sent) == ["done"]
 
 
-def test_timed_step_reports_duration_on_success(sent):
+def test_timed_step_reports_duration_on_success(sent, monkeypatch):
+    monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.0)
     with perf.timed_step("z_projection"):
         pass
 
@@ -75,8 +77,8 @@ def test_timed_step_reports_duration_on_success(sent):
     assert "z_projection" in message
 
 
-def test_timed_step_passes_extra_fields_to_both_logs(sent):
-    """集計時に時間をサイズで正規化できるよう、付加フィールドは開始・完了の両方に付く。"""
+def test_timed_step_passes_extra_fields_to_the_log(sent):
+    """集計時に時間をサイズで正規化できるよう、付加フィールドを載せる。"""
     with perf.timed_step("drift3d", target="/mnt/v/raw/x", n_bytes=1234):
         pass
 
@@ -128,7 +130,7 @@ def test_timed_step_does_not_emit_done_when_the_body_fails(sent):
         with perf.timed_step("median_blur"):
             raise ValueError
 
-    assert events(sent) == ["start", "failed"]
+    assert events(sent) == ["failed"]
 
 
 # ---- 実行中工程レジストリ ----------------------------------------------------
@@ -209,8 +211,6 @@ def test_advance_throttles_by_time_not_by_count(sent):
             step.advance(item=f"f{i}")
 
     assert [f for _l, _m, f in sent if f.get("event") == "progress"] == []
-    # 間引いても最終的な件数は完了ログに残る
-    assert sent[-1][2]["done"] == 10_000
 
 
 def test_advance_without_total_still_reports_count(sent):
@@ -224,12 +224,13 @@ def test_advance_without_total_still_reports_count(sent):
     assert "eta_sec" not in last
 
 
-def test_total_is_reported_on_the_start_log(sent):
-    """開始時点で総件数が分かれば、止まったときに「何件中どこで」が言える。"""
-    with perf.timed_step("thorlab.filter_by_size", total=42):
-        pass
+def test_total_is_reported_on_the_completion_log(sent, monkeypatch):
+    """総件数は完了ログに載る (実行中の「何件中どこで」は heartbeat が出す)。"""
+    monkeypatch.setattr(perf, "QUIET_UNDER_SEC", 0.0)
+    with perf.timed_step("thorlab.filter_by_size", total=42) as step:
+        step.advance(n=42)
 
-    assert sent[0][2]["total"] == 42
+    assert sent[-1][2]["total"] == 42
 
 
 # ---- 生存確認 (heartbeat) ----------------------------------------------------
