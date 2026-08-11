@@ -53,6 +53,11 @@ _worker_lock = threading.Lock()
 _worker_started = False
 _warned_missing_token = False
 _flushed = False
+#: 送信失敗の累計。毎回 traceback を出すと本物のエラーが埋もれるので、間引く材料にする。
+_send_failures = 0
+#: 終了時にログを送り切るのを待つ上限 (秒)。送信先が落ちているときに、
+#: 解析が終わっているのにプロセスが終わらない、という事態を避ける。
+_FLUSH_TIMEOUT_SEC = 10.0
 _app_name: Optional[str] = None
 _initialized = False
 _runtime_ctx: Optional[dict] = None
@@ -204,11 +209,26 @@ def _worker() -> None:
                     method="POST",
                 )
                 urllib.request.urlopen(req, timeout=10).close()
-            except Exception:
-                # Better Stack への送信失敗でアプリ本体を止めない
-                traceback.print_exc()
+            except Exception as exc:
+                # Better Stack への送信失敗でアプリ本体を止めない。
+                # ただし毎回 traceback を出してはいけない。送信先が落ちている間は
+                # 数十行の traceback が延々と流れ、**本物のエラーがその中に埋もれる**。
+                # 落ちていること自体は 1 行あれば分かる。
+                _report_send_failure(exc)
         finally:
             _queue.task_done()
+
+
+def _report_send_failure(exc: BaseException) -> None:
+    """送信失敗を1行で知らせる。続けて失敗しても黙らないが、繰り返さない。
+
+    最初の1件と、以後 100 件ごとだけ出す。「送れていない」は伝わり、端末は埋まらない。
+    """
+    global _send_failures
+    _send_failures += 1
+    if _send_failures == 1 or _send_failures % 100 == 0:
+        print("[betterstack] log delivery failed (%d so far); the run is unaffected: "
+              "%s: %s" % (_send_failures, type(exc).__name__, exc))
 
 
 def _ensure_worker() -> None:
@@ -233,9 +253,16 @@ def flush() -> None:
     _flushed = True
     try:
         _queue.put_nowait(None)
-        _queue.join()
     except Exception:
         pass
+    # 送信先が落ちていると1件ずつタイムアウトを待つことになり、キューに数百件
+    # 溜まっていれば終了しなくなる。ログのために解析の終了を待たせない。
+    waiter = threading.Thread(target=_queue.join, daemon=True)
+    waiter.start()
+    waiter.join(_FLUSH_TIMEOUT_SEC)
+    if waiter.is_alive():
+        print("[betterstack] gave up flushing logs after %.0f s; "
+              "%d event(s) were not delivered." % (_FLUSH_TIMEOUT_SEC, _queue.qsize()))
 
 
 def send(
