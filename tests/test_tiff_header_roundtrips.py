@@ -761,3 +761,82 @@ def test_the_probe_counts_planes_the_same_way_the_read_does(tmp_path, label, wri
 
     assert arr.shape[0] == layout.n_pages
     assert arr.shape[1:] == (layout.height, layout.width)
+
+
+# ==========================================================================
+# 7. OME-TIFF が兄弟ファイルを巻き込んで読まれないこと
+# ==========================================================================
+
+def _make_ome_multifile_dir(d, n=6):
+    """生ファイル n 枚。うち 4 枚目が「全部を束ねる」OME マスターになっている。"""
+    from ome_multifile_fixture import write_ome_master
+    names = [f"ChanA_001_001_001_{t:03d}.tif" for t in range(1, n + 1)]
+    for t, name in enumerate(names, 1):
+        tifffile.imwrite(d / name, np.full((8, 8), t, np.uint16))
+    write_ome_master(d / names[3], names, n)
+    return names
+
+
+def test_an_ome_master_is_read_as_its_own_single_plane(tmp_path):
+    """兄弟を指す OME マスターでも、読むのは自分の1面だけ。
+
+    回帰: OME-TIFF は 1 データセットが複数ファイルにまたがる形を持てる。先頭ファイルの
+    OME XML が ``<TiffData><UUID FileName="...">`` で兄弟を名前で指すと、tifffile は
+    それを追って同じフォルダのファイルを次々に開き、1 つの配列に組み上げて返す。
+
+    取得フォルダの生ファイル 1 枚にこの XML が入っていた (実データで起きた)。すると
+    その 1 枚を開くだけで取得全体が読まれ、``expected 1 page(s), got 6000`` になり、
+    しかも 1 枚読むのに数千往復かかっていた。この取り込みは面の配置をファイル名と
+    Experiment.xml で決めているので、tifffile に束ねてもらってはいけない。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    master = d / names[3]
+
+    # 束ねる指定が効いていれば (6,8,8) になる = 兄弟を巻き込んでいる
+    assert tifffile.imread(master).shape == (6, 8, 8)
+
+    layout = mod.probe_plane_layout(master)
+    arr = mod._read_file_planes(str(master), layout.n_pages,
+                                layout.height, layout.width, layout.dtype)
+
+    assert layout.n_pages == 1
+    assert arr.shape == (1, 8, 8)
+    assert int(arr[0, 0, 0]) == 4, "自分の面 (t=4) ではなく兄弟の画素を読んでいる"
+
+
+def test_an_ome_master_does_not_open_its_siblings(tmp_path):
+    """マスターを1枚読んでも、開くファイルは1つ。
+
+    ここが O(N) に戻ると、3001 枚の取得では 1 枚読むたびに 3001 往復になる。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    master = d / names[3]
+
+    with count_opens() as c:
+        mod.probe_plane_layout(master)
+        opens_probe = c.n
+    with count_opens() as c:
+        mod._read_file_planes(str(master), 1, 8, 8, np.uint16)
+        opens_read = c.n
+
+    assert opens_probe == 1, "probe が兄弟を開いている (%d回)" % opens_probe
+    assert opens_read == 1, "read が兄弟を開いている (%d回)" % opens_read
+
+
+def test_the_whole_acquisition_survives_an_ome_master(tmp_path):
+    """OME マスターが混ざっていても、全時点をそのまま組める (1枚も落とさない)。"""
+    d = tmp_path / "img01"
+    d.mkdir()
+    names = _make_ome_multifile_dir(d)
+    files = sorted(str(d / n) for n in names)
+
+    stacked, kept = stack_thorlab_with_bioio_calibrated(
+        files, d / "Experiment.xml", _params("T", 6), min_kb=0)
+
+    assert stacked.shape == (6, 1, 1, 8, 8)
+    assert len(kept) == 6
+    assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 4, 5, 6]

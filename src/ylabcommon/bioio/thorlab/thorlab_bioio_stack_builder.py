@@ -253,6 +253,30 @@ def _report_cuts(ch, ch_files, frame, max_t, max_z) -> None:
         )
 
 
+#: TIFF を開くときは必ずこれを付ける。:data:`_ONE_FILE_ONLY` の説明を読むこと。
+#:
+#: OME-TIFF は「1つのデータセットが複数ファイルにまたがる」形を持てる。先頭ファイルの
+#: OME XML が ``<TiffData><UUID FileName="ChanA_..._0002.tif">`` のように **兄弟ファイルを
+#: 名前で指し**、tifffile はそれを追って同じフォルダのファイルを次々に開き、1つの配列に
+#: 組み上げて返す。取得フォルダの生ファイル1枚にこの XML が入っていると、そのファイルを
+#: 開くだけで取得全体 (3001 枚 x 2ch) が読まれる。
+#:
+#: 実測 (兄弟6枚を指す OME マスターを1枚読む):
+#:
+#: ===================  ==========  ==============  ==============
+#: 設定                 開いた tif  imread の shape  返る画素
+#: ===================  ==========  ==============  ==============
+#: 既定 (multifile)     6 個        (6, 8, 8)       兄弟6枚の中身
+#: ``_multifile=False`` 1 個        (8, 8)          自分の1面だけ
+#: ===================  ==========  ==============  ==============
+#:
+#: この取り込みでは面の配置をファイル名と Experiment.xml で決めているので、tifffile に
+#: 束ねてもらう必要は無い。束ねられると (a) 1枚読むのに数千往復かかり、(b) 宣言された
+#: 面数と自分の面数が食い違って ``Page count mismatch`` になる。**1ファイルは1ファイルとして
+#: 読む** のが正しい。
+_ONE_FILE_ONLY = {"_multifile": False}
+
+
 def probe_plane_layout(path) -> PlaneLayout:
     """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。画素は読まない。
 
@@ -261,13 +285,10 @@ def probe_plane_layout(path) -> PlaneLayout:
     **ここで数える対象を読み取り側と一致させないと、組み立て時の検査が素通りする**。
 
     この2つは実際に食い違う。縮小サムネイルを持つファイルは ``len(tf.pages)`` が 2 でも
-    読めるのは 1 面、逆に IFD を1つしか持たず記述子で「N 面ある」と宣言する形式
-    (ImageJ の連続ハイパースタックなど) では ``len(tf.pages)`` が 1 でも N 面読める。
-    後者に当たると、ヘッダを全件読んでいても「1 面」と判断してグラフを組み、
-    compute の時点で ``Page count mismatch`` になる。
+    読めるのは 1 面である。
     """
     try:
-        with tifffile.TiffFile(str(path)) as tf:
+        with tifffile.TiffFile(str(path), **_ONE_FILE_ONLY) as tf:
             series = tf.series[0]
             shape = tuple(series.shape)
             if len(shape) < 2:
@@ -290,7 +311,7 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     (dask の shape 不一致エラーはファイル名を持たないため)。
     """
     try:
-        arr = tifffile.imread(str(path))
+        arr = tifffile.imread(str(path), **_ONE_FILE_ONLY)
     except OSError as e:
         # ネットワークドライブが落ちたときに、どのファイルで落ちたかを残す。読むのは
         # compute 時 (書き出しや解析側) なので、呼び出し側の try では捕まえきれない。
