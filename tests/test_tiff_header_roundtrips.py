@@ -721,3 +721,43 @@ def test_the_size_filter_costs_no_extra_round_trip(xyt_dir, monkeypatch):
     assert statted == [], "getsize was called for %d file(s)" % len(statted)
     assert scanned == [], "the directory was scanned again"
     assert stacked.shape[0] == 8 and len(kept) == 8
+
+
+# ==========================================================================
+# 6. ヘッダの読み方と画素の読み方を一致させる
+# ==========================================================================
+
+def _write_with_thumbnail(f):
+    """縮小サムネイルを持つファイル。``len(tf.pages)`` は 2 だが読めるのは 1 面。"""
+    with tifffile.TiffWriter(f) as w:
+        w.write(np.zeros((8, 8), dtype=np.uint16))
+        w.write(np.zeros((4, 4), dtype=np.uint16), subfiletype=1)
+
+
+@pytest.mark.parametrize("label,write", [
+    ("plain", lambda f: tifffile.imwrite(f, np.zeros((8, 8), np.uint16))),
+    ("multipage", lambda f: tifffile.imwrite(
+        f, np.zeros((6, 8, 8), np.uint16), photometric="minisblack")),
+    ("thumbnail", _write_with_thumbnail),
+    ("ome", lambda f: tifffile.imwrite(
+        f, np.zeros((2, 3, 8, 8), np.uint16), metadata={"axes": "TZYX"})),
+])
+def test_the_probe_counts_planes_the_same_way_the_read_does(tmp_path, label, write):
+    """ヘッダから数えた面数と、実際に読んで得られる面数が必ず一致すること。
+
+    回帰: 検査側は ``len(tf.pages)``、読み取り側は ``tifffile.imread``
+    (= ``series[0]``) を見ており、この2つは食い違う。縮小サムネイルを持つ
+    ファイルは pages が 2 でも読めるのは 1 面、逆に IFD を1つしか持たず
+    記述子で「N 面ある」と宣言する形式では pages が 1 でも N 面読める。
+    食い違うと、全件のヘッダを読んでいても検査が素通りして compute の時点で
+    ``Page count mismatch`` になる — 検査の意味が無くなる。
+    """
+    f = tmp_path / f"{label}.tif"
+    write(f)
+
+    layout = mod.probe_plane_layout(f)
+    arr = mod._read_file_planes(str(f), layout.n_pages, layout.height,
+                                layout.width, layout.dtype)
+
+    assert arr.shape[0] == layout.n_pages
+    assert arr.shape[1:] == (layout.height, layout.width)

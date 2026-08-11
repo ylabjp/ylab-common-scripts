@@ -254,21 +254,29 @@ def _report_cuts(ch, ch_files, frame, max_t, max_z) -> None:
 
 
 def probe_plane_layout(path) -> PlaneLayout:
-    """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。
+    """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。画素は読まない。
 
-    XML から分からないのはこの3つだけなので、同一取得であれば1枚読めば全ファイルに
-    ついて分かる。画素は読まない。
+    数えるのは ``tf.series[0]`` の面数であって ``len(tf.pages)`` ではない。読み取り側
+    (:func:`_read_file_planes`) が使う ``tifffile.imread`` が返すのは series[0] なので、
+    **ここで数える対象を読み取り側と一致させないと、組み立て時の検査が素通りする**。
+
+    この2つは実際に食い違う。縮小サムネイルを持つファイルは ``len(tf.pages)`` が 2 でも
+    読めるのは 1 面、逆に IFD を1つしか持たず記述子で「N 面ある」と宣言する形式
+    (ImageJ の連続ハイパースタックなど) では ``len(tf.pages)`` が 1 でも N 面読める。
+    後者に当たると、ヘッダを全件読んでいても「1 面」と判断してグラフを組み、
+    compute の時点で ``Page count mismatch`` になる。
     """
     try:
         with tifffile.TiffFile(str(path)) as tf:
-            page = tf.pages[0]
-            shape = tuple(page.shape)
+            series = tf.series[0]
+            shape = tuple(series.shape)
             if len(shape) < 2:
                 raise RuntimeError(
-                    f"Unexpected TIFF page shape {shape} in {path}; expected at least 2D."
+                    f"Unexpected TIFF shape {shape} in {path}; expected at least 2D."
                 )
-            return PlaneLayout(len(tf.pages), int(shape[-2]), int(shape[-1]),
-                               np.dtype(page.dtype))
+            n_planes = int(np.prod(shape[:-2])) if len(shape) > 2 else 1
+            return PlaneLayout(n_planes, int(shape[-2]), int(shape[-1]),
+                               np.dtype(series.dtype))
     except BaseException as e:
         _note_file(e, "while reading the TIFF header of: %s" % path)
         raise
