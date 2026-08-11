@@ -390,11 +390,15 @@ def test_a_page_count_mismatch_is_caught_and_names_the_file(tmp_path):
         np.asarray(stacked)
 
 
-def test_an_uneven_tail_falls_back_to_probing_every_file(tmp_path):
-    """先頭と末尾で面数が違えば、そのときだけ全ファイルのヘッダを読む。
+def test_an_uneven_tail_is_found_without_reading_every_header(tmp_path):
+    """先頭と末尾で面数が違えば、全ファイルを確かめなくても正しく組める。
 
     「2 枚で済ませる」が効くのは形が揃っているときだけ。揃っていないと分かった
     時点で仮定を捨てないと、取得が途中で終わった回で壊れた出力を作る。
+
+    ただし全件のヘッダを読み直す必要は無い。サイズは探索時の列挙で全件分
+    持っており、面数が違えばサイズも比例して違うので、怪しいファイルだけを
+    ヘッダで確かめれば足りる (SMB 越しの 3001 枚で往復を元に戻さない)。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -406,20 +410,22 @@ def test_an_uneven_tail_falls_back_to_probing_every_file(tmp_path):
                      np.full((2, 8, 8), 4, dtype=np.uint16),
                      photometric="minisblack")
     files = sorted(str(p) for p in d.glob("*.tif"))
+    sizes = {f: os.path.getsize(f) for f in files}
 
     seen = []
     real = mod.probe_plane_layout
     mod.probe_plane_layout = lambda p: (seen.append(str(p)), real(p))[1]
     try:
         stacked, _ = stack_thorlab_with_bioio_calibrated(
-            files, d / "Experiment.xml", _params("Z", 14), min_kb=0)
+            files, d / "Experiment.xml", _params("Z", 14), min_kb=0, sizes=sizes)
     finally:
         mod.probe_plane_layout = real
 
-    assert sorted(set(seen)) == files          # 全ファイルを確かめに行った
     assert stacked.shape == (1, 1, 14, 8, 8)   # 4+4+4+2
     assert np.asarray(stacked)[0, 0, :, 0, 0].tolist() == \
         [1] * 4 + [2] * 4 + [3] * 4 + [4] * 2
+    assert files[-1] in seen, "面数の違うファイルを確かめていない"
+    assert len(set(seen)) < len(files), "全件読みに戻っている"
 
 
 # ==========================================================================

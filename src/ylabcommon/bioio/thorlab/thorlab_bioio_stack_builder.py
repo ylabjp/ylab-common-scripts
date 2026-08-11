@@ -165,6 +165,40 @@ def _fill_frame(files, max_t, max_z) -> FilledFrame:
     return FilledFrame(slots, t_keep, z_keep, unreadable, outside, ragged)
 
 
+def _drop_odd_depths(ch, t_values, per_t):
+    """面数が多数派と違う時点を落とし、``(t_values, per_t)`` を返す。
+
+    枠の枡が揃っていても、多ページのファイルが1枚混ざればその時点だけ面数が変わる。
+    そのままだと ``da.stack`` が組めない (組めてしまうと形が壊れる)。
+    黙って落とさず、時点・面数・多数派の面数を添えて報告する。
+
+    「ファイルごとの面数」ではなく「時点ごとの面数」で見るのが要点。単一時点の
+    Z スタックは多ページと単一ページのファイルが混在してよく (10ページ1枚 +
+    1ページ30枚 = Z=40)、そこを止めてはいけない。
+    """
+    depths = [int(v.shape[0]) for v in per_t]
+    if len(set(depths)) <= 1:
+        return t_values, per_t
+
+    tally = defaultdict(int)
+    for d in depths:
+        tally[d] += 1
+    normal = max(tally, key=lambda d: (tally[d], -d))
+
+    dropped = [(t, d) for t, d in zip(t_values, depths) if d != normal]
+    warnings.warn(
+        "[thorlab] Channel %s: %d of %d timepoint(s) do not hold %d plane(s) and were "
+        "cut — they cannot be stacked with the rest. Found %s. A timepoint with far "
+        "more planes than the others is usually a file that does not belong to this "
+        "acquisition."
+        % (ch, len(dropped), len(depths), normal,
+           ", ".join("t=%d has %d" % (t, d) for t, d in dropped[:5])),
+        stacklevel=2,
+    )
+    kept = [(t, v) for t, v, d in zip(t_values, per_t, depths) if d == normal]
+    return [t for t, _v in kept], [v for _t, v in kept]
+
+
 def _examples(files, n=3):
     return ", ".join(Path(f).name for f in files[:n]) + (" ..." if len(files) > n else "")
 
@@ -267,30 +301,83 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     return arr.astype(dtype, copy=False)
 
 
-def _page_counts(files, layout, target):
+#: サイズがこの倍率を外れたファイルは「面数が違うかもしれない」とみなしてヘッダを見る。
+#: 生の ThorLabs TIFF は無圧縮なのでサイズは面数にほぼ比例する。面数の違いは最小でも
+#: 2倍 (1面 vs 2面) なので、1.5 を境にすれば取りこぼさず、ヘッダ長のゆらぎ程度では
+#: 引っかからない。2.0 だと「4面 vs 2面」がちょうど境界に乗って抜ける。
+_SIZE_OUTLIER_RATIO = 1.5
+
+
+def _suspect_files(files, sizes):
+    """面数が他と違いそうなファイルを、**追加の往復なしで** 選び出す。
+
+    面数が違えばファイルサイズもほぼ比例して違う。サイズは探索時のディレクトリ列挙で
+    既に全件分得ているので (:func:`scan_tiff_dir`)、それを使えば「怪しいファイル」を
+    ヘッダを読まずに絞り込める。
+
+    これが無いと、先頭と末尾しか見ていないので **途中の1枚** だけ面数が違う取得を
+    取りこぼす。実データで起きた: 3001 枚のうち 004 だけが 6000 ページで、
+    グラフは 1 ページ前提で組まれ、267 秒走ったあとの compute 時にようやく
+    ``Page count mismatch`` で落ちた。
+    """
+    known = [sizes[f] for f in files if f in sizes]
+    if len(known) < 3:
+        return []
+    known.sort()
+    typical = known[len(known) // 2]        # 中央値: 少数の外れ値に引きずられない
+    if typical <= 0:
+        return []
+    return [f for f in files
+            if f in sizes
+            and not (typical / _SIZE_OUTLIER_RATIO
+                     <= sizes[f] <= typical * _SIZE_OUTLIER_RATIO)]
+
+
+def _page_counts(files, layout, target, sizes=None):
     """各ファイルの面数を返す。
 
-    ほぼすべての取得は「全ファイルが同じ面数」なので、先頭と末尾の2枚だけ確かめて
-    済ませる (取得が途中で終わったときに欠けるのは末尾のファイルなので、この2枚で
-    現実的な不揃いは捕まえられる)。それでも食い違ったときだけ全ファイルを開く。
+    ほぼすべての取得は「全ファイルが同じ面数」なので、全ファイルのヘッダは読まない。
+    見るのは先頭・末尾と、**サイズが他と大きく違うファイル** だけ
+    (:func:`_suspect_files`)。正常な取得では追加の往復は 1 回 (末尾) で済む。
+
+    基準にするのは「サイズが典型的な」ファイルであって先頭ではない。先頭そのものが
+    混入だった場合に、その面数を全体へ広げてしまわないため
+    (10ページ1枚 + 1ページ30枚 の取得で、先頭を基準にすると全部が10ページ扱いになる)。
+
+    サイズが全ファイル分そろっていれば、それ以上は読まない。面数が違えばサイズも
+    比例して違うので、サイズの検査を通ったファイルは典型的な面数だと分かるためである。
+    サイズが欠けているファイルがあるときだけ、面数が食い違った時点で全件を確かめる
+    (欠けている分を「典型的」と決めつけると、混入を取りこぼす)。
     """
     if len(files) == 1:
         return [layout.n_pages]
 
-    tail = probe_plane_layout(files[-1])
-    if tail.n_pages == layout.n_pages:
-        return [layout.n_pages] * len(files)
+    sizes = sizes or {}
+    suspect = [f for f in _suspect_files(files, sizes)]
+    typical = next((f for f in files if f not in set(suspect)), files[0])
 
-    # 不揃いが確定した。ここだけは1ファイルずつ確かめるしかない (それでも
-    # 読むのはヘッダだけで、BioImage を通すより桁で軽い)。
-    print(f"[Stack] Page count differs between first ({layout.n_pages}) and last "
-          f"({tail.n_pages}) file; probing every file's header.")
+    to_probe = [f for f in dict.fromkeys([typical, files[-1]] + suspect)
+                if f != files[0]]
+    counts = {files[0]: layout.n_pages}
+    with timed_step("thorlab.probe_tiffs", total=len(to_probe), target=target) as step:
+        for f in to_probe:
+            step.advance(item=f)
+            counts[f] = probe_plane_layout(f).n_pages
+
+    normal = counts[typical]
+    if len(set(counts.values())) == 1 or all(f in sizes for f in files):
+        return [counts.get(f, normal) for f in files]
+
+    # 面数が食い違ううえ、サイズで絞り込めないファイルがある。ここだけは1枚ずつ
+    # 確かめるしかない (それでも読むのはヘッダだけ)。
+    print(f"[Stack] Page counts differ ({sorted(set(counts.values()))}) and some "
+          f"file sizes are unknown; probing every file's header.")
     with timed_step("thorlab.probe_tiffs", total=len(files), target=target) as step:
-        counts = []
         for f in files:
             step.advance(item=f)
-            counts.append(probe_plane_layout(f).n_pages)
-    return counts
+            if f not in counts:
+                counts[f] = probe_plane_layout(f).n_pages
+    return [counts[f] for f in files]
 
 
 def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
@@ -429,7 +516,7 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
     channel_stacks = []
     for ch in channel_keys:
         ch_files = by_channel[ch]
-        counts = _page_counts(ch_files, layout, target)
+        counts = _page_counts(ch_files, layout, target, sizes=scanned_sizes)
 
         # ここは遅延グラフを組み立てるだけで I/O は起きない。以前はこのループが
         # 1ファイルずつ BioImage を開いており、取り込みで最も長い工程だった。
@@ -465,6 +552,15 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
         for t in frame.t_keep:
             zs = [blocks[frame.slots[(t, z)]] for z in frame.z_keep]
             per_t.append(zs[0] if len(zs) == 1 else da.concatenate(zs, axis=0))
+
+        # 時点ごとの面数が揃っていないと (T, Z, Y, X) に積めない。枡の数が同じでも、
+        # 多ページのファイルが1枚混ざれば面数は変わる。
+        #
+        # 実データで、3001 枚のうち 004 だけが 6000 ページだった (取り違えて置かれた
+        # 別物とみられる)。以前はこれをグラフに組み込んでしまい、267 秒走ったあとの
+        # compute 時に Page count mismatch で落ちていた。落とすこと自体は正しいので、
+        # それを **組み立ての時点で** 言えば済む。
+        t_keep, per_t = _drop_odd_depths(ch, frame.t_keep, per_t)
         vol = da.stack(per_t, axis=0)                   # (T, Z, Y, X)
 
         channel_stacks.append(vol)
