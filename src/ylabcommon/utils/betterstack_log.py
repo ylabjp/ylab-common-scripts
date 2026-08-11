@@ -326,13 +326,22 @@ def log_info(message: str, *, console: bool = True, **fields) -> None:
 
 
 def log_warning(message: str, *, console: bool = True, **fields) -> None:
+    """警告。端末では黄色、Better Stack へは素のまま送る。
+
+    色は **端末に出す文字にだけ** 付ける。制御文字を message に混ぜると、そのまま
+    Better Stack のログ本文に入って検索も表示も汚れる。
+    """
     if console:
-        print(f"[WARNING] {message}")
+        from ylabcommon.utils.util import PromptColor, colorize
+
+        print(colorize(f"[WARNING] {message}", PromptColor.YELLOW))
     send("warning", message, **fields)
 
 
 def log_error(message: str, *, error: Optional[BaseException] = None, **fields) -> None:
-    print(f"[ERROR] {message}")
+    from ylabcommon.utils.util import PromptColor, colorize
+
+    print(colorize(f"[ERROR] {message}", PromptColor.RED))
     send("error", message, error=error, **fields)
 
 

@@ -45,6 +45,57 @@ class PromptColor:
     RESET = "\033[0m"  # 全てリセット
 
 
+def supports_color(stream=None) -> bool:
+    """この出力先に色を付けてよいか。
+
+    付けてはいけない場合に付けると、``←[33m`` のような制御文字がそのまま見えて
+    かえって読めなくなる。判定は3つ。
+
+    - ``NO_COLOR`` が設定されていれば付けない (慣習)
+    - 端末でない (ファイルへリダイレクト、パイプ) なら付けない
+    - Windows のコンソールは既定で制御文字を解釈しないので、解釈を有効にできた
+      ときだけ付ける
+    """
+    import sys
+
+    if os.environ.get("NO_COLOR"):
+        return False
+    stream = stream if stream is not None else sys.stdout
+    try:
+        if not stream.isatty():
+            return False
+    except Exception:
+        return False
+    if os.name == "nt":
+        return _enable_windows_vt(stream)
+    return True
+
+
+def _enable_windows_vt(stream) -> bool:
+    """Windows コンソールで ANSI 制御文字の解釈を有効にする。できなければ False。"""
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.GetStdHandle(-11)   # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+            return True
+        return bool(ctypes.windll.kernel32.SetConsoleMode(
+            handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    except Exception:
+        return False
+
+
+def colorize(text: str, color: str) -> str:
+    """端末が対応しているときだけ色を付ける。対応していなければ素の文字列を返す。"""
+    if not color or not supports_color():
+        return text
+    return f"{color}{text}{PromptColor.RESET}"
+
+
 
 class MixedStyleDumper(yaml.Dumper):
     def represent_sequence(self, tag, sequence, flow_style=None):
