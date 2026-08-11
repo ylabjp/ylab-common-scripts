@@ -328,3 +328,46 @@ def test_an_io_error_survives_dask_with_its_errno_and_filename(tmp_path, monkeyp
 
     assert excinfo.value.errno == errno.EIO       # sorter の EIO 判定が効く
     assert "ChanA_001_001_001_" in str(excinfo.value)   # どのファイルかが残る
+
+
+# ---- Z 方向の広がりの表示 ----------------------------------------------------
+
+def test_a_single_plane_is_not_reported_as_zero_depth():
+    """XYT 取得 (Z=1) に深さという量は無い。
+
+    回帰: ``(N-1) x step`` をそのまま出していたので「Total volume depth:
+    0.0 microns」と表示され、壊れた値に見えた (実際そう報告された)。
+    """
+    from ylabcommon.bioio.thorlab.builder import describe_z_extent
+
+    msg = describe_z_extent(1, 0.5)
+    assert "single plane" in msg
+    assert "0.0" not in msg and "0 um" not in msg
+
+
+def test_the_z_extent_is_measured_centre_to_centre():
+    """深さは面の中心どうしの間隔 ``(N-1) x step``。
+
+    ThorImage で「30 um を 61 段」と設定すると step は 30/60 = 0.5 um になるので、
+    この数え方で設定値に戻る (面の厚みまで足す ``N x step`` だと 30.5 um)。
+    """
+    from ylabcommon.bioio.thorlab.builder import describe_z_extent
+
+    assert "30 um" in describe_z_extent(61, 0.5)
+    assert "60 um" in describe_z_extent(41, 1.5)
+
+
+def test_the_z_extent_shows_the_plane_count_and_the_step():
+    """どちらの規約か読み手が判断できるよう、面数と刻みも出す。"""
+    from ylabcommon.bioio.thorlab.builder import describe_z_extent
+
+    msg = describe_z_extent(61, 0.5)
+    assert "61 planes" in msg
+    assert "0.5 um step" in msg
+
+
+def test_a_degenerate_plane_count_does_not_produce_a_negative_extent():
+    """0 面でも負の深さを出さない (異常なメタデータで壊れない)。"""
+    from ylabcommon.bioio.thorlab.builder import describe_z_extent
+
+    assert "single plane" in describe_z_extent(0, 0.5)
