@@ -448,8 +448,7 @@ def test_a_stray_multipage_file_is_cut_at_build_time_not_at_compute_time(tmp_pat
     グラフは 1 ページ前提で組まれ、267 秒走ったあとの compute 時にようやく
     ``Page count mismatch`` で落ちていた。
 
-    サイズは探索時の列挙で全件分持っているので、追加の往復なしで外れ値を見つけ、
-    そのファイルだけヘッダを確かめれば組み立ての時点で判断できる。
+    面数はファイルのヘッダにしか無いので、全件のヘッダを読んで確かめる。
     """
     d = tmp_path / "img01"
     d.mkdir()
@@ -473,10 +472,43 @@ def test_a_stray_multipage_file_is_cut_at_build_time_not_at_compute_time(tmp_pat
     assert np.asarray(stacked)[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 5, 6, 7, 8]
 
 
-def test_the_size_outlier_is_found_without_reading_every_header(tmp_path):
-    """外れ値の検出に、全ファイルのヘッダ読みを増やさないこと。
+def test_a_stray_file_of_the_same_size_is_still_found(tmp_path):
+    """**サイズが他と変わらなくても** 面数の違うファイルを見つけること。
 
-    ここが O(N) になると、SMB 越しの 3001 枚で往復が元に戻る。
+    回帰: 以前はファイルサイズで「怪しいファイル」を絞り込み、そこだけヘッダを
+    読んでいた。「生の ThorLabs TIFF は無圧縮だからサイズは面数に比例する」という
+    前提だったが、実データで破れた。3001 枚のうち 004 だけが 6000 面なのに
+    サイズは他と変わらず (圧縮された別物が置かれていたとみられる)、素通りして
+    compute 時に ``Page count mismatch`` で落ちていた。
+
+    サイズが当てにならない以上、サイズで絞り込む限りこの取りこぼしは無くならない。
+    """
+    d = tmp_path / "img01"
+    d.mkdir()
+    for t in range(1, 21):
+        _write(d, "ChanA", 1, t, t)
+    odd = d / "ChanA_001_001_001_007.tif"
+    tifffile.imwrite(odd, np.zeros((60, 8, 8), dtype=np.uint16),
+                     photometric="minisblack")
+    files = sorted(str(p) for p in d.glob("*.tif"))
+    # サイズは全件同じ、と呼び出し側が伝えてくる状況。実データではファイルが
+    # 圧縮されていてこうなった。サイズからは何の手がかりも得られない。
+    sizes = {f: 1000 for f in files}
+
+    with pytest.warns(UserWarning, match="do not hold 1 plane"):
+        stacked, _ = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", _params("T", size_z=1, size_t=20),
+            min_kb=0, sizes=sizes)
+
+    assert stacked.shape == (19, 1, 1, 8, 8)        # 混入した時点だけ落ちる
+    assert 7 not in np.asarray(stacked)[:, 0, 0, 0, 0].tolist()
+
+
+def test_every_header_is_read_exactly_once(tmp_path):
+    """ヘッダは全件読むが、1ファイルにつき1回だけ。
+
+    面数はヘッダにしか無いので全件読むのは避けられない。避けられるのは
+    **同じファイルを何度も読むこと** で、SMB 越しではそれがそのまま往復になる。
     """
     import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as m
 
@@ -497,34 +529,39 @@ def test_the_size_outlier_is_found_without_reading_every_header(tmp_path):
     finally:
         m.probe_plane_layout = real
 
-    # 先頭 + 末尾のみ。20 枚あっても増えない。
-    assert len(probed) == 2, probed
+    # 縦横/画素型を決める1枚 (先頭) だけが2回。それ以外は1回ずつ。
+    assert sorted(set(probed)) == sorted(files)
+    assert len(probed) == len(files) + 1, probed
 
 
-def test_a_size_outlier_gets_its_header_read(tmp_path):
-    """サイズが外れているファイルはヘッダを確かめる (でも全件は読まない)。"""
-    import ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder as m
+def test_dropping_a_timepoint_from_one_channel_does_not_shift_the_other(tmp_path):
+    """片方のチャンネルから時点が落ちても、チャンネル同士を時間でずらさない。
 
+    回帰: 落ちたあとは「時点数の少ない方に合わせて先頭から切る」実装だった。
+    ChanA から t=4 が落ちた状態で両方を先頭 7 枚に切ると、ChanA の 4 枚目は t=5、
+    ChanB の 4 枚目は t=4 になり、**チャンネルが 1 フレームずれたまま** 以降の
+    位置合わせと解析に流れる。2 チャンネル同時取得ではこれが黙って起きると
+    (蛍光指示薬と構造マーカーの対応が壊れるので) 結果が読めなくなる。
+
+    揃えるのは枚数ではなく時点そのもの。全チャンネルに揃っている時点だけを残す。
+    """
     d = tmp_path / "img01"
     d.mkdir()
-    for t in range(1, 21):
-        _write(d, "ChanA", 1, t, t)
-    odd = d / "ChanA_001_001_001_007.tif"
-    tifffile.imwrite(odd, np.zeros((60, 8, 8), dtype=np.uint16),
-                     photometric="minisblack")
+    for ch in ("ChanA", "ChanB"):
+        for t in range(1, 9):
+            tifffile.imwrite(d / f"{ch}_001_001_001_{t:03d}.tif",
+                             np.full((4, 4), t, np.uint16))
+    # ChanA の t=4 だけ面数が違う (混入)。ChanB の t=4 は正常。
+    tifffile.imwrite(d / "ChanA_001_001_001_004.tif",
+                     np.zeros((60, 4, 4), np.uint16), photometric="minisblack")
     files = sorted(str(p) for p in d.glob("*.tif"))
-    sizes = {f: os.path.getsize(f) for f in files}
+    params = dict(_params("T", size_z=1, size_t=8), SizeY=4, SizeX=4)
 
-    probed = []
-    real = m.probe_plane_layout
-    m.probe_plane_layout = lambda p: (probed.append(str(p)), real(p))[1]
-    try:
-        with pytest.warns(UserWarning):
-            stack_thorlab_with_bioio_calibrated(
-                files, d / "Experiment.xml", _params("T", size_z=1, size_t=20),
-                min_kb=0, sizes=sizes)
-    finally:
-        m.probe_plane_layout = real
+    with pytest.warns(UserWarning, match="do not hold the same timepoints"):
+        stacked, _ = stack_thorlab_with_bioio_calibrated(
+            files, d / "Experiment.xml", params, min_kb=0)
 
-    assert str(odd) in probed, "サイズの外れ値を確かめていない"
-    assert len(probed) < len(files), "全件読みに戻っている"
+    arr = np.asarray(stacked)
+    # 画素値が時点番号なので、両チャンネルが同じ時点を指しているか直接見える
+    assert arr[:, 0, 0, 0, 0].tolist() == [1, 2, 3, 5, 6, 7, 8]
+    assert arr[:, 1, 0, 0, 0].tolist() == [1, 2, 3, 5, 6, 7, 8]

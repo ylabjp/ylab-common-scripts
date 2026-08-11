@@ -3,10 +3,12 @@
 設計方針:
 
 **入力側は BioImage を使わない。** 生データの形は Experiment.xml とファイル名で
-決まっており、画素の型と1ファイルあたりの面数だけが XML から分からない。したがって
-必要なヘッダ読みは「取得ごとに1枚」で足りる。以前は ``BioImage(f)`` を全ファイルに対して
-呼んでいたが、遅延なのは画素だけでヘッダは1ファイルずつ読むため、数万ファイルを
-ネットワークドライブ越しに開くことになり取り込みの中で最も長い工程になっていた。
+決まっており、画素の型と1ファイルあたりの面数だけが XML から分からない。読むのは
+その2つを得るための TIFF ヘッダだけで、画素には触れない。以前は ``BioImage(f)`` を
+全ファイルに対して呼んでいたが、遅延なのは画素だけでヘッダは1ファイルずつ順に読むため、
+数万ファイルをネットワークドライブ越しに開くことになり取り込みの中で最も長い工程に
+なっていた。面数は取得ごとに1枚では決まらない (:func:`_page_counts`) ので全件読むが、
+読むのはヘッダだけで、しかも並行して読む。
 
 **組み立ては最初から最後まで dask。** ``dask.delayed`` した読み取りを
 :func:`dask.array.from_delayed` で束ねるので、グラフ構築の時点では I/O が一切起きない。
@@ -17,6 +19,7 @@
 
 from pathlib import Path
 from collections import defaultdict, namedtuple
+from concurrent.futures import ThreadPoolExecutor
 import os
 import warnings
 
@@ -310,83 +313,45 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     return arr.astype(dtype, copy=False)
 
 
-#: サイズがこの倍率を外れたファイルは「面数が違うかもしれない」とみなしてヘッダを見る。
-#: 生の ThorLabs TIFF は無圧縮なのでサイズは面数にほぼ比例する。面数の違いは最小でも
-#: 2倍 (1面 vs 2面) なので、1.5 を境にすれば取りこぼさず、ヘッダ長のゆらぎ程度では
-#: 引っかからない。2.0 だと「4面 vs 2面」がちょうど境界に乗って抜ける。
-_SIZE_OUTLIER_RATIO = 1.5
+#: ヘッダ読みの同時実行数。ネットワークドライブでは1件あたりの時間はほぼ待ち時間
+#: (往復のレイテンシ) なので、並べれば件数ぶんの時間はかからない。上げすぎると
+#: SMB のセッションを圧迫するため、待ちを埋められる程度に留める。
+_PROBE_WORKERS = 16
 
 
-def _suspect_files(files, sizes):
-    """面数が他と違いそうなファイルを、**追加の往復なしで** 選び出す。
+def _page_counts(files, layout, target):
+    """各ファイルの面数を、**全ファイルのヘッダを読んで** 返す。
 
-    面数が違えばファイルサイズもほぼ比例して違う。サイズは探索時のディレクトリ列挙で
-    既に全件分得ているので (:func:`scan_tiff_dir`)、それを使えば「怪しいファイル」を
-    ヘッダを読まずに絞り込める。
+    以前はファイルサイズで「怪しいファイル」を絞り込み、そこだけヘッダを読んでいた。
+    生の ThorLabs TIFF は無圧縮なのでサイズは面数にほぼ比例する、という前提だった。
+    **この前提は実データで破れた**: 3001 枚のうち 004 だけが 6000 面なのに、
+    サイズは他と変わらなかった (圧縮された別物が置かれていたとみられる)。サイズが
+    当てにならない以上、サイズで絞り込む限りこの取りこぼしは無くならない。
 
-    これが無いと、先頭と末尾しか見ていないので **途中の1枚** だけ面数が違う取得を
-    取りこぼす。実データで起きた: 3001 枚のうち 004 だけが 6000 ページで、
-    グラフは 1 ページ前提で組まれ、267 秒走ったあとの compute 時にようやく
-    ``Page count mismatch`` で落ちた。
-    """
-    known = [sizes[f] for f in files if f in sizes]
-    if len(known) < 3:
-        return []
-    known.sort()
-    typical = known[len(known) // 2]        # 中央値: 少数の外れ値に引きずられない
-    if typical <= 0:
-        return []
-    return [f for f in files
-            if f in sizes
-            and not (typical / _SIZE_OUTLIER_RATIO
-                     <= sizes[f] <= typical * _SIZE_OUTLIER_RATIO)]
+    絞り込みをやめて全件読むと往復は N 回になるが、1件あたりはヘッダ数 KB の
+    読み取りで、時間のほとんどは往復の待ちである。待ちは並べれば重なるので、
+    :data:`_PROBE_WORKERS` 本で読めば実時間は N/16 件ぶんの往復で済む。
+    取りこぼして 267 秒走ったあとに落ちるより安い。
 
-
-def _page_counts(files, layout, target, sizes=None):
-    """各ファイルの面数を返す。
-
-    ほぼすべての取得は「全ファイルが同じ面数」なので、全ファイルのヘッダは読まない。
-    見るのは先頭・末尾と、**サイズが他と大きく違うファイル** だけ
-    (:func:`_suspect_files`)。正常な取得では追加の往復は 1 回 (末尾) で済む。
-
-    基準にするのは「サイズが典型的な」ファイルであって先頭ではない。先頭そのものが
-    混入だった場合に、その面数を全体へ広げてしまわないため
-    (10ページ1枚 + 1ページ30枚 の取得で、先頭を基準にすると全部が10ページ扱いになる)。
-
-    サイズが全ファイル分そろっていれば、それ以上は読まない。面数が違えばサイズも
-    比例して違うので、サイズの検査を通ったファイルは典型的な面数だと分かるためである。
-    サイズが欠けているファイルがあるときだけ、面数が食い違った時点で全件を確かめる
-    (欠けている分を「典型的」と決めつけると、混入を取りこぼす)。
+    面数が食い違ったときにどう扱うかはここでは決めない。時点ごとに揃っているかを
+    :func:`_drop_odd_depths` が見て、多数派と違う時点を報告して落とす。
     """
     if len(files) == 1:
         return [layout.n_pages]
 
-    sizes = sizes or {}
-    suspect = [f for f in _suspect_files(files, sizes)]
-    typical = next((f for f in files if f not in set(suspect)), files[0])
-
-    to_probe = [f for f in dict.fromkeys([typical, files[-1]] + suspect)
-                if f != files[0]]
-    counts = {files[0]: layout.n_pages}
-    with timed_step("thorlab.probe_tiffs", total=len(to_probe), target=target) as step:
-        for f in to_probe:
-            step.advance(item=f)
-            counts[f] = probe_plane_layout(f).n_pages
-
-    normal = counts[typical]
-    if len(set(counts.values())) == 1 or all(f in sizes for f in files):
-        return [counts.get(f, normal) for f in files]
-
-    # 面数が食い違ううえ、サイズで絞り込めないファイルがある。ここだけは1枚ずつ
-    # 確かめるしかない (それでも読むのはヘッダだけ)。
-    print(f"[Stack] Page counts differ ({sorted(set(counts.values()))}) and some "
-          f"file sizes are unknown; probing every file's header.")
+    counts = {}
     with timed_step("thorlab.probe_tiffs", total=len(files), target=target) as step:
-        for f in files:
-            step.advance(item=f)
-            if f not in counts:
-                counts[f] = probe_plane_layout(f).n_pages
+        with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as pool:
+            # 進捗は結果を受け取る側 (このスレッド) だけが触る。map は投入順に
+            # 返すので、item はいま読み終わったファイルを指す。
+            for f, n_pages in zip(files, pool.map(_probe_n_pages, files)):
+                step.advance(item=f)
+                counts[f] = n_pages
     return [counts[f] for f in files]
+
+
+def _probe_n_pages(path):
+    return probe_plane_layout(path).n_pages
 
 
 def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
@@ -514,7 +479,7 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
     # XML の Wavelength 順と対応が崩れてチャンネル名がずれる。
     channel_keys = sorted(by_channel, key=natural_sort_key)
 
-    # ヘッダを読むのは「取得ごとに1枚」で足りる。XML が面の縦横 (pixelX/pixelY) を、
+    # 縦横と画素の型は取得ごとに1枚で決まる。XML が面の縦横 (pixelX/pixelY) を、
     # ファイル名が並び順を決めており、ここでしか分からないのは画素の型と
     # 1ファイルあたりの面数だけだから。
     with timed_step("thorlab.probe_layout", target=target) as step:
@@ -540,13 +505,13 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
     max_t = max(int(params.get("SizeT") or 1), 1)
     max_z = max(int(params.get("SizeZ") or 1), 1)
 
-    # 1ファイル = 1面 が圧倒的多数。そうでないときだけ面数を確かめに行く。
+    # 面数だけは1枚では決まらないので、チャンネルごとに全件のヘッダを読む。
     read_planes = dask.delayed(_read_file_planes, pure=True)
 
-    channel_stacks = []
+    channel_stacks, kept_t = [], []
     for ch in channel_keys:
         ch_files = by_channel[ch]
-        counts = _page_counts(ch_files, layout, target, sizes=scanned_sizes)
+        counts = _page_counts(ch_files, layout, target)
 
         # ここは遅延グラフを組み立てるだけで I/O は起きない。以前はこのループが
         # 1ファイルずつ BioImage を開いており、取り込みで最も長い工程だった。
@@ -594,24 +559,41 @@ def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
         vol = da.stack(per_t, axis=0)                   # (T, Z, Y, X)
 
         channel_stacks.append(vol)
+        kept_t.append(t_keep)
         print(f"DEBUG: Channel {ch}: {len(ch_files)} file(s) → "
               f"T={vol.shape[0]} Z={vol.shape[1]}")
 
-    # 取得が途中で終わると、チャンネルによって時点数 (または面数) が1つ違うことがある。
-    # バッチ全体を落とさず、揃っている分だけを使う。T 側と Z 側のどちらがずれるかは
-    # 取得の切れ方で変わるので両方見る。
-    for axis, label in ((0, "timepoints"), (1, "planes")):
-        counts = [int(s.shape[axis]) for s in channel_stacks]
-        if len(set(counts)) > 1:
-            keep = min(counts)
-            warnings.warn(
-                "[thorlab] The channels do not have the same number of %s (%s); the "
-                "acquisition probably ended mid-frame. Continuing with the common %d."
-                % (label, dict(zip(channel_keys, counts)), keep),
-                stacklevel=2,
-            )
-            channel_stacks = [s[:keep] if axis == 0 else s[:, :keep]
-                              for s in channel_stacks]
+    # チャンネルごとに落ちた時点が違うことがある (混入したファイルは片方の
+    # チャンネルにしか無い)。ここで **枚数を揃えてはいけない**: ChanA から t=4 が
+    # 落ちた状態で両方を先頭 19 枚に切ると、ChanA の 4 枚目は t=5、ChanB の
+    # 4 枚目は t=4 になり、チャンネルが 1 フレームずれたまま以降の位置合わせや
+    # 解析に流れる。揃えるのは **時点そのもの** で、全チャンネルに揃っている
+    # 時点だけを残す。
+    common_t = sorted(set(kept_t[0]).intersection(*kept_t[1:]))
+    if any(len(t) != len(common_t) for t in kept_t):
+        warnings.warn(
+            "[thorlab] The channels do not hold the same timepoints (%s); keeping "
+            "the %d present in every channel. Dropping a timepoint from one channel "
+            "only would shift the channels against each other in time."
+            % (dict(zip(channel_keys, (len(t) for t in kept_t))), len(common_t)),
+            stacklevel=2,
+        )
+        channel_stacks = [s[[t.index(v) for v in common_t]]
+                          for s, t in zip(channel_stacks, kept_t)]
+
+    # 面数が揃わないのは「取得が途中で終わった」ときで、欠けるのは必ず後ろ側なので
+    # 枚数で切ってよい (時点と違って、面には共通の番号が振れない — 多ページの
+    # ファイルが混ざると1面ずつに番号が対応しないため)。
+    z_counts = [int(s.shape[1]) for s in channel_stacks]
+    if len(set(z_counts)) > 1:
+        keep = min(z_counts)
+        warnings.warn(
+            "[thorlab] The channels do not have the same number of planes (%s); the "
+            "acquisition probably ended mid-stack. Continuing with the common %d."
+            % (dict(zip(channel_keys, z_counts)), keep),
+            stacklevel=2,
+        )
+        channel_stacks = [s[:, :keep] for s in channel_stacks]
 
     # (T, Z, Y, X) へ C を挿して TCZYX にする。単一チャンネルでも 5D になる。
     channel_stacks = [s[:, np.newaxis] for s in channel_stacks]
