@@ -9,7 +9,10 @@ from ylabcommon.bioio.core.bioio_writer import BioIOWriter
 from ylabcommon.bioio.thorlab.thorlab_metadata_extractor import ThorlabMetadataExtractor
 from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import stack_thorlab_with_bioio_calibrated
 
-from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
+from ylabcommon.bioio.thorlab.xml_parser import (
+    ExperimentXMLParser,
+    warn_if_scan_offset,
+)
 
 ## Main script for loading the files
 
@@ -289,6 +292,8 @@ class ThorlabBioioBuilder:
             # ここでファイルを読み直すことはない。
             with timed_step("thorlab.parse_xml", target=str(self.xml_file)):
                 xml_meta = self._get_xml().extract_metadata()
+            # 取得ごとに1回だけ知らせる (extract_metadata は他からも呼ばれる)。
+            warn_if_scan_offset(xml_meta, self.xml_file)
 
         problems = self._validate_thorlab_stack(xml_meta, image_meta)
 
