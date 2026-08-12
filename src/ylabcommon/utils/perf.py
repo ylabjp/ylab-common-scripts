@@ -49,7 +49,13 @@ DEFAULT_HEARTBEAT_INTERVAL_SEC = 60.0
 # 600 秒: ネットワークドライブが不安定なときの一時的な待ちと、本当の停止を区別できる長さ。
 DEFAULT_STALL_AFTER_SEC = 600.0
 # 進捗ログの最短間隔。ファイル単位で送るとキューを溢れさせるので時間で間引く。
-DEFAULT_PROGRESS_INTERVAL_SEC = 5.0
+#
+# 60 秒: 書き出しは 10 分以上かかるので、5 秒だと 1 工程で 100 行を超える。しかも
+# heartbeat が同じ内容を 60 秒ごとに出すため、端末は同じ数字の繰り返しで埋まり、
+# その中に紛れた本物の警告が読み飛ばされる。1 分に 1 行あれば「進んでいるか」も
+# 「どのくらい残っているか」も分かる。止まったときの検出は heartbeat 側の
+# 無進捗判定 (STALL_AFTER) が担当していて、この間隔とは無関係。
+DEFAULT_PROGRESS_INTERVAL_SEC = 60.0
 # これ未満で終わった工程は報告しない (端末にも Better Stack にも)。
 #
 # 取り込み1件で timed_step は十数回走るが、そのほとんどは 0.0 s で終わる。
@@ -105,7 +111,7 @@ class StepHandle:
 
     __slots__ = (
         "name", "fields", "started", "total", "done", "item",
-        "progress_at", "tracked", "_interval", "_last_log",
+        "progress_at", "tracked", "_interval", "last_log_at",
     )
 
     def __init__(self, name: str, fields: dict, total: Optional[int],
@@ -121,7 +127,13 @@ class StepHandle:
         self.progress_at = self.started
         self.tracked = total is not None
         self._interval = progress_interval_sec
-        self._last_log = self.started
+        # 最後に進捗ログを **実際に出した** 時刻。まだ1行も出していなければ None。
+        #
+        # heartbeat が重複を避けるために読む。「開始時刻」で初期化してはいけない。
+        # 進捗を報告しない工程 (total を渡さない load_image など) は 1 行も出さない
+        # ので、開始時刻が入っていると heartbeat に永久に飛ばされる — 長く沈黙する
+        # 工程こそ生存確認が要るのに、そこだけ見えなくなる。
+        self.last_log_at: Optional[float] = None
 
     def advance(self, n: int = 1, item=None) -> None:
         """ループ1件分の進捗を記録し、必要なら進捗ログを送る。
@@ -139,9 +151,12 @@ class StepHandle:
             self.item = str(item)
         self.progress_at = now
         self.tracked = True
-        if now - self._last_log < self._interval:
+        # 1行目も間隔を空けてから出す。着手直後は rate が 0 件/秒で
+        # 「ETA 334891 s」のような無意味な数字しか出せない。
+        gate = self.last_log_at if self.last_log_at is not None else self.started
+        if now - gate < self._interval:
             return
-        self._last_log = now
+        self.last_log_at = now
         payload = dict(self.fields)
         payload.update(self.progress_fields(now))
         payload["step"] = self.name
@@ -311,6 +326,15 @@ _hb_started_at: Optional[float] = None
 _hb_atexit_registered = False
 
 
+def _quiet_after_progress_sec() -> float:
+    """この秒数以内に進捗ログを出した工程は、heartbeat を省く。
+
+    heartbeat の間隔に合わせる。つまり「前回の heartbeat 以降に進捗ログが1行でも
+    出ていれば、heartbeat は黙る」という意味になる。
+    """
+    return _env_float(HEARTBEAT_INTERVAL_ENV, DEFAULT_HEARTBEAT_INTERVAL_SEC)
+
+
 def _emit_heartbeat(stall_after_sec: float) -> None:
     """実行中の工程それぞれについて生存確認を1件送る (工程が無ければ idle を1件)。"""
     now = time.perf_counter()
@@ -333,6 +357,20 @@ def _emit_heartbeat(stall_after_sec: float) -> None:
         # 停止を判定する。長いが着実に進んでいる工程を停止と誤判定しないため。
         idle_for = (now - inner.progress_at) if inner.tracked else elapsed
         stalled = stall_after_sec > 0 and idle_for >= stall_after_sec
+
+        # 直前に進捗ログを出した工程は飛ばす。heartbeat が言えることは
+        # 「生きている・どこまで進んだ」で、進捗ログと同じ内容になる。実データでは
+        # 1 秒違いで同じ数字が 2 行並んでいた。生存確認は進捗ログが出ていること
+        # そのもので足りる。
+        #
+        # 止まった工程がこれで消えることはない。進捗ログを出せるのは advance() の
+        # 中だけで、そこでは progress_at も同時に更新されるので
+        # ``last_log_at <= progress_at`` が常に成り立つ。停止判定は progress_at が
+        # 停止判定時間 (既定 600 秒) 以上前であることなので、そのとき last_log_at も
+        # 同じだけ前にあり、下の窓 (既定 60 秒) には入らない。
+        if (inner.last_log_at is not None
+                and (now - inner.last_log_at) < _quiet_after_progress_sec()):
+            continue
 
         payload = dict(inner.fields)
         payload.update(inner.progress_fields(now))
