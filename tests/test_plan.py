@@ -59,7 +59,7 @@ def _sample_plan() -> ExperimentPlan:
                 mice=[
                     PlanMouse(prj="prj27-3-5", mouse_id="m1", sex="m",
                               ear_tag="R1L2", mating_id="mat-7", cond="DEM-Cumin",
-                              birth_date="251201", termination="260430", fail=True,
+                              birth_date=date(2025, 12, 1), termination=date(2026, 4, 30), fail=True,
                               age_day_2=54, actual_bw_day_2=22.1,
                               bench={"day1": "B10", "day2": "B10", "day3": "B10"},
                               bw_before={"day1": 23.4}, bw_after={"day1": 24.1},
@@ -103,8 +103,8 @@ def test_round_trip():
     # basic-info fields round-trip
     assert p0.mice[0].ear_tag == "R1L2"
     assert p0.mice[0].mating_id == "mat-7"
-    assert p0.mice[0].birth_date == "251201"
-    assert p0.mice[0].termination == "260430"
+    assert p0.mice[0].birth_date == date(2025, 12, 1)      # ISO date, like period.start
+    assert p0.mice[0].termination == date(2026, 4, 30)
     assert p0.mice[0].fail is True
     assert p0.mice[0].age_day_2 == 54
     assert p0.mice[0].actual_bw_day_2 == 22.1
@@ -154,6 +154,23 @@ def test_legacy_periods_key_loads_as_trials():
         text = open(p, encoding="utf-8").read()
         assert "trials:" in text and "periods:" not in text
         assert load_plan(p).trials[0].mice[0].bench["day1"] == "B10"
+
+
+def test_legacy_yymmdd_dates_load_as_iso():
+    """旧形式の ``YYMMDD`` 文字列は ISO 日付として読み、保存も ISO で揃う。"""
+    m = PlanMouse.model_validate({"mouse_id": "m", "birth_date": "250426",
+                                  "termination": "250716"})
+    assert m.birth_date == date(2025, 4, 26) and m.termination == date(2025, 7, 16)
+    assert PlanMouse.model_validate({"birth_date": ""}).birth_date is None
+    assert PlanMouse.model_validate({"birth_date": "2025-04-26"}).birth_date == date(2025, 4, 26)
+    plan = ExperimentPlan(trials=[ExperimentTrial(name="t", mice=[m])])
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "x.yaml")
+        save_plan(plan, f)
+        text = open(f, encoding="utf-8").read()
+        assert "birth_date: 2025-04-26" in text        # ISO, unquoted like period.start
+        assert "'250426'" not in text
+        assert load_plan(f).trials[0].mice[0].birth_date == date(2025, 4, 26)
 
 
 def test_none_and_defaults_omitted_in_yaml():

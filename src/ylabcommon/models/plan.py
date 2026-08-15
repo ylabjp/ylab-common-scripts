@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # YAML の読み書きは libyaml (C 実装) があればそれを使う。計画ファイル約100件
 # (5.4MB) の一括読み込みで実測 約5倍 (20.7s -> 4.2s)。Occupancy の全件スキャンや
@@ -215,8 +215,10 @@ class PlanMouse(BaseModel):
     個体の基礎情報:
     - ``ear_tag``: 耳パンチ識別 (R1/L1/... の組み合わせ)。候補は settings.yaml。
     - ``mating_id``: 交配 ID (文字列)。
-    - ``birth_date`` / ``termination``: 生年月日 / 終了日 (共に ``YYMMDD`` 文字列)。
-      日齢は保存せず、GUI 側で termination(無ければ当日) - birth_date として算出する。
+    - ``birth_date`` / ``termination``: 生年月日 / 終了日。``period.start`` と同じ
+      ISO 日付 (``2025-04-26``) で持つ。旧形式の ``YYMMDD`` 文字列 (``'250426'``) も
+      読み込め、``20YY`` として解釈する。日齢は保存せず、GUI 側で
+      termination(無ければ当日) - birth_date として算出する。
     - ``fail``: 実験失敗フラグ。
     - ``age_day_2`` / ``actual_bw_day_2``: day-2 時点の日齢 / 実測体重 (g)。
     """
@@ -229,11 +231,23 @@ class PlanMouse(BaseModel):
     sex: Optional[str] = None
     mouse_id: Optional[str] = None
     mating_id: Optional[str] = None
-    birth_date: Optional[str] = None       # YYMMDD
-    termination: Optional[str] = None      # YYMMDD
+    birth_date: Optional[DateType] = None      # ISO 日付 (period.start と同じ形式)
+    termination: Optional[DateType] = None     # ISO 日付。実験継続中なら未設定
     fail: bool = False
     age_day_2: Optional[int] = None
     actual_bw_day_2: Optional[float] = None
+    @field_validator("birth_date", "termination", mode="before")
+    @classmethod
+    def _yymmdd_to_date(cls, v):
+        """旧形式の ``YYMMDD`` 文字列を ISO 日付に変換して読む(YY -> 20YY)。"""
+        if isinstance(v, str):
+            t = v.strip()
+            if not t:
+                return None
+            if len(t) == 6 and t.isdigit():
+                return DateType(2000 + int(t[0:2]), int(t[2:4]), int(t[4:6]))
+        return v
+
     bench: Dict[str, str] = Field(default_factory=dict)
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
