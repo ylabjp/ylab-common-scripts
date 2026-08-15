@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # YAML の読み書きは libyaml (C 実装) があればそれを使う。計画ファイル約100件
 # (5.4MB) の一括読み込みで実測 約5倍 (20.7s -> 4.2s)。Occupancy の全件スキャンや
@@ -34,6 +34,23 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
     from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
     USING_LIBYAML = False
 
+# マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
+# (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
+_PERDAY_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "task_param",
+                "photometry_param", "within_factor", "user")
+
+
+class _FlowMap(dict):
+    """1 行(フロー形式)で書き出す辞書。"""
+
+
+def _represent_flow_map(dumper, data):
+    return dumper.represent_mapping("tag:yaml.org,2002:map", data, flow_style=True)
+
+
+_YamlDumper.add_representer(_FlowMap, _represent_flow_map)
+
+
 __all__ = [
     "PLAN_DIR_NAME",
     "PLAN_FILE_GLOB",
@@ -41,6 +58,8 @@ __all__ = [
     "Period",
     "CCConfig",
     "PlanDay",
+    "ProgramStep",
+    "ResolvedDay",
     "PlanMouse",
     "ExperimentTrial",
     "ExperimentPeriod",
@@ -101,66 +120,96 @@ class CCConfig(BaseModel):
     config_dir: str = ""
 
 
-class PlanDay(BaseModel):
-    """スケジュール 1 日分。CC 参照の中核。
+class ProgramStep(BaseModel):
+    """実験プログラムの 1 ステップ。Plan 直下 (:attr:`ExperimentPlan.program`)。
 
-    Schedule は Period 非依存の上位概念(:class:`ExperimentPlan` の ``days``)。
-    実施日は ``day``(1 始まりの通日。day 1 = Period 開始日)で持ち、具体的な日付は
-    ``Period.start + (day - 1)`` で算出する(:func:`resolve_day_date`)。baseline 計量日は
-    day 0 / day -1 のように 0・負値で表す。
-
-    - ``day``: 1 始まりの通日 (day 1 = Period 開始日)。マウスの日ごと辞書のキーは
-      ``f"day{day}"``(例 ``day1`` / ``day-1``)。``offset``(= day - 1)は後方互換の
-      プロパティとして提供する。
-    - ``phase``: フェーズ。数字または ``5-5`` のような文字列。
-    - ``session``: 同一 phase 内の session 番号。未指定なら GUI / :func:`default_sessions`
-      が同一 phase の累積(出現順)を既定として補完する。
-    - ``task_param``: この日の標準 task パラメータ名 (config_dir/param_files_task/ 以下)。
-      個体ごとの上書きは :class:`PlanMouse` の ``task_param`` を参照。
-    - ``photometry_param``: この日の標準 photometry パラメータ名 (task_param と並列)。
-      個体ごとの上書きは :class:`PlanMouse` の ``photometry_param`` を参照。
-    - ``skip``: 実験を行わない日(土日・祝日など)。phase / session / task は付かず、
-      :func:`default_sessions` も数えないので、以降の phase・session の割り当ては
-      自動的に順延する。**体重管理は day 単位で続く**ので、skip の日も
-      :class:`PlanMouse` の ``bw_before`` などのキーとしてはそのまま残る。
-      これにより Schedule は「実験プログラムの並び」と「休みの位置」を分けて持てる
-      ため、Trial の開始曜日を選ばない(旧来は土日を空行として埋め込んでいたので
-      月曜開始しかできなかった)。
-
-    後方互換: 旧形式の ``{label, offset}`` を読み込むと ``day = offset + 1``
-    (offset 省略時は 0 -> day 1)に変換する。
+    プログラムは「何を・どの順で」だけを持ち、**日付も day 番号も持たない**。
+    配列の index が実施順そのもの。実時間への割り当ては Trial が行う
+    (:meth:`ExperimentPlan.resolve_trial`)。
     """
 
-    day: int
     phase: str = ""
     session: Optional[int] = None
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
-    skip: bool = False
     note: Optional[str] = None
+
+
+class PlanDay(BaseModel):
+    """Trial の 1 日 = プログラムを実時間へ割り当てる枠 (:attr:`ExperimentTrial.days`)。
+
+    Trial は「モデルの実時間への適応」なので ``day`` が必須。具体的な日付は
+    ``Period.start + (day - 1)`` (:func:`resolve_day_date`)。
+
+    - ``day``: 通日 (day 1 = Trial 開始日)。マウスの日ごと辞書のキーは ``f"day{day}"``。
+    - ``skip``: プログラムのステップを割り当てない日。ステップを消費しないので以降が
+      順延する。baseline(計量のみの前日程。day <= 0)も会期中の休みも同じ扱いで、
+      違うのは day 番号だけ。体重管理は day 単位なので、skip の日も
+      :class:`PlanMouse` の ``bw_before`` などのキーとしては残る。
+    - ``step``: **その日に実施した内容を確定(凍結)**したもの。入っている日は Plan の
+      ``program`` を参照せず(消費もせず)この値を使う。実施期間を終えた Trial は
+      :meth:`ExperimentPlan.freeze_trial` で凍結し、**あとから Plan を書き換えても
+      過去の記録が変わらない**ようにする。
+    """
+
+    day: int
+    skip: bool = False
+    step: Optional["ProgramStep"] = None    # 確定した実施内容(凍結)
+    note: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
     @model_validator(mode="before")
     @classmethod
     def _from_legacy(cls, data):
-        if isinstance(data, dict) and "day" not in data and (
-                "offset" in data or "label" in data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "day" not in data and ("offset" in data or "label" in data):
             if data.get("offset") is not None:
-                day = int(data["offset"]) + 1
+                data["day"] = int(data["offset"]) + 1
             else:
                 n = _label_number(data.get("label"))
-                day = n if n is not None else 1
-            data = {k: v for k, v in data.items() if k not in ("label", "offset")}
-            data["day"] = day
+                data["day"] = n if n is not None else 1
+        data.pop("label", None)
+        data.pop("offset", None)
         return data
 
     @property
+    def consumes_step(self) -> bool:
+        """プログラムのステップを 1 つ消費する日か(``skip`` の否定)。"""
+        return not self.skip
+
+    @property
     def offset(self) -> int:
-        """Period 開始日からの日数(= day - 1)。日付解決に使う。"""
         return self.day - 1
 
     @property
     def label(self) -> str:
-        """マウスの日ごと辞書のキー(``f"day{day}"``)。"""
+        return f"day{self.day}"
+
+
+class ResolvedDay(BaseModel):
+    """Trial の 1 日に、割り当てられたステップを重ねたもの。
+
+    既存の利用側(GUI / CC / 週シート)は「day と phase/task を併せ持つ 1 日」を
+    前提にしているので、:meth:`ExperimentPlan.resolve_trial` はこの形で返す。
+    """
+
+    day: int
+    skip: bool = False
+    phase: str = ""
+    session: Optional[int] = None
+    task_param: Optional[str] = None
+    photometry_param: Optional[str] = None
+    note: Optional[str] = None
+
+    @property
+    def offset(self) -> int:
+        return self.day - 1
+
+    @property
+    def label(self) -> str:
         return f"day{self.day}"
 
 
@@ -188,8 +237,10 @@ class PlanMouse(BaseModel):
     個体の基礎情報:
     - ``ear_tag``: 耳パンチ識別 (R1/L1/... の組み合わせ)。候補は settings.yaml。
     - ``mating_id``: 交配 ID (文字列)。
-    - ``birth_date`` / ``termination``: 生年月日 / 終了日 (共に ``YYMMDD`` 文字列)。
-      日齢は保存せず、GUI 側で termination(無ければ当日) - birth_date として算出する。
+    - ``birth_date`` / ``termination``: 生年月日 / 終了日。``period.start`` と同じ
+      ISO 日付 (``2025-04-26``) で持つ。旧形式の ``YYMMDD`` 文字列 (``'250426'``) も
+      読み込め、``20YY`` として解釈する。日齢は保存せず、GUI 側で
+      termination(無ければ当日) - birth_date として算出する。
     - ``fail``: 実験失敗フラグ。
     - ``age_day_2`` / ``actual_bw_day_2``: day-2 時点の日齢 / 実測体重 (g)。
     """
@@ -202,11 +253,23 @@ class PlanMouse(BaseModel):
     sex: Optional[str] = None
     mouse_id: Optional[str] = None
     mating_id: Optional[str] = None
-    birth_date: Optional[str] = None       # YYMMDD
-    termination: Optional[str] = None      # YYMMDD
+    birth_date: Optional[DateType] = None      # ISO 日付 (period.start と同じ形式)
+    termination: Optional[DateType] = None     # ISO 日付。実験継続中なら未設定
     fail: bool = False
     age_day_2: Optional[int] = None
     actual_bw_day_2: Optional[float] = None
+    @field_validator("birth_date", "termination", mode="before")
+    @classmethod
+    def _yymmdd_to_date(cls, v):
+        """旧形式の ``YYMMDD`` 文字列を ISO 日付に変換して読む(YY -> 20YY)。"""
+        if isinstance(v, str):
+            t = v.strip()
+            if not t:
+                return None
+            if len(t) == 6 and t.isdigit():
+                return DateType(2000 + int(t[0:2]), int(t[2:4]), int(t[4:6]))
+        return v
+
     bench: Dict[str, str] = Field(default_factory=dict)
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
@@ -232,7 +295,8 @@ class ExperimentTrial(BaseModel):
 
     name: str = ""
     period: Optional[Period] = None
-    days: List[PlanDay] = Field(default_factory=list)   # 空 -> Plan 共有の days を使う
+    # 実時間への適応。空なら「開始日から連続で program を割り当て(休み無し)」。
+    days: List[PlanDay] = Field(default_factory=list)
     mice: List[PlanMouse] = Field(default_factory=list)
 
 
@@ -268,7 +332,7 @@ class ExperimentPlan(BaseModel):
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
-    days: List[PlanDay] = Field(default_factory=list)
+    program: List[ProgramStep] = Field(default_factory=list)
     # 読み込みは trials: / periods: の両方を受ける(旧ファイル互換)。書き出しは trials:。
     trials: List[ExperimentTrial] = Field(
         default_factory=list, validation_alias=AliasChoices("trials", "periods"))
@@ -278,13 +342,111 @@ class ExperimentPlan(BaseModel):
         """旧名。``trials`` と同じリストを返す(``plan.periods[0]`` 等の既存コード用)。"""
         return self.trials
 
-    def days_for(self, trial: "ExperimentTrial") -> List[PlanDay]:
-        """その Trial に適用される Schedule。専用の ``days`` があればそれ、無ければ共有。"""
-        return trial.days or self.days
+    @model_validator(mode="before")
+    @classmethod
+    def _split_legacy_days(cls, data):
+        """旧形式(plan 直下の ``days`` に day と phase が同居)を分解して読む。
 
-    @property
-    def day_labels(self) -> List[str]:
-        return [d.label for d in self.days]
+        ``days`` の各要素から、ステップを持つ日を :attr:`program` の並びへ、日付の
+        枠(day / baseline / skip)を各 Trial の ``days`` へ移す。全 Trial が同じ
+        ``days`` を共有していたので、自前の ``days`` を持たない Trial にそれを配る。
+        """
+        if not isinstance(data, dict) or "program" in data or "days" not in data:
+            return data
+        data = dict(data)
+        legacy = [d for d in (data.pop("days", None) or []) if isinstance(d, dict)]
+        program, frames = [], []
+        for raw in legacy:
+            day = PlanDay.model_validate(raw)
+            # Plan level has no skip flag: a step simply exists when the day was
+            # given an assignment. "skip" in the old files is exactly "no task
+            # assigned", so absence of an assignment is what makes a day a frame.
+            has_step = bool(raw.get("task_param") or (raw.get("phase") or "").strip())
+            if not has_step:
+                # 割り当ての無い日 = ステップを消費しない日。baseline(day <= 0 の
+                # 計量日)も会期中の休みも同じ扱いで、違うのは day 番号だけ。
+                day.skip = True
+            else:
+                day.skip = False
+                program.append(ProgramStep(
+                    phase=raw.get("phase") or "", session=raw.get("session"),
+                    task_param=raw.get("task_param"), photometry_param=raw.get("photometry_param"),
+                    note=raw.get("note")))
+            frames.append({"day": day.day, "skip": day.skip})
+        data["program"] = program
+        key = "trials" if "trials" in data else ("periods" if "periods" in data else None)
+        if key:
+            data[key] = [t if (not isinstance(t, dict) or t.get("days")) else {**t, "days": frames}
+                         for t in (data.get(key) or [])]
+        return data
+
+    def resolve_trial(self, trial: "ExperimentTrial") -> List[ResolvedDay]:
+        """Trial の各日に program のステップを順に割り当てた結果を返す。
+
+        ``program`` の日だけがステップを 1 つ消費するので、baseline / skip を挟むと
+        以降のステップは自動的に順延する。``trial.days`` が空なら、開始日から
+        program を連続で割り当てる(休み無し)。
+        """
+        days = list(trial.days) or [PlanDay(day=i + 1) for i in range(len(self.program))]
+        # session の既定は「同一 phase の累積」。消費しない日は数えない。
+        steps = iter(self.program)
+        out: List[ResolvedDay] = []
+        counts: Dict[str, int] = {}
+        for d in days:
+            if not d.consumes_step:
+                out.append(ResolvedDay(day=d.day, skip=True, note=d.note))
+                continue
+            if d.step is not None:
+                # 凍結済み: program は参照も消費もしない(過去の記録は不変)
+                out.append(ResolvedDay(
+                    day=d.day, phase=d.step.phase, session=d.step.session,
+                    task_param=d.step.task_param,
+                    photometry_param=d.step.photometry_param,
+                    note=d.note or d.step.note))
+                continue
+            st = next(steps, None)
+            if st is None:
+                out.append(ResolvedDay(day=d.day, skip=True, note=d.note))
+                continue
+            sess = st.session
+            if sess is None and (st.phase or "").strip():
+                counts[st.phase] = counts.get(st.phase, 0) + 1
+                sess = counts[st.phase]
+            elif (st.phase or "").strip():
+                counts[st.phase] = counts.get(st.phase, 0) + 1
+            out.append(ResolvedDay(
+                day=d.day, phase=st.phase, session=sess,
+                task_param=st.task_param, photometry_param=st.photometry_param,
+                note=d.note or st.note))
+        return out
+
+    def freeze_trial(self, trial: "ExperimentTrial") -> int:
+        """Trial の実施内容を確定させ、以後 Plan の変更を受けないようにする。
+
+        現在 :meth:`resolve_trial` が返す内容を各日の :attr:`PlanDay.step` に焼き付ける。
+        Plan の ``program`` は今後も編集され得るが、凍結した Trial の記録は動かない。
+        戻り値は凍結した日数。既に凍結済みの日はそのまま。
+        """
+        n = 0
+        for day, r in zip(trial.days, self.resolve_trial(trial)):
+            if day.skip or day.step is not None:
+                continue
+            if not (r.phase or r.task_param or r.photometry_param or r.session):
+                continue
+            day.step = ProgramStep(
+                phase=r.phase, session=r.session, task_param=r.task_param,
+                photometry_param=r.photometry_param)
+            n += 1
+        return n
+
+    def is_frozen(self, trial: "ExperimentTrial") -> bool:
+        """実施日のすべてが凍結済みか。"""
+        work = [d for d in trial.days if not d.skip]
+        return bool(work) and all(d.step is not None for d in work)
+
+    def days_for(self, trial: "ExperimentTrial") -> List[ResolvedDay]:
+        """後方互換の別名。:meth:`resolve_trial` と同じ。"""
+        return self.resolve_trial(trial)
 
     def resolve_photometry_param(self, day: PlanDay) -> Optional[str]:
         """その day の photometry パラメータ (plan 既定は廃止)。"""
@@ -380,6 +542,14 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # exclude_defaults: 空の periods / days / mice や未設定項目を書かず簡潔に保つ。
     data = plan.model_dump(mode="python", exclude_defaults=True)
+    # 日ごとの辞書は 1 行にまとめる。1 日 1 行だと 1 個体で数百行になり、
+    # 実験内容より体重表のほうが長くなってしまうため(内容は一切変えない)。
+    for trial in data.get("trials", []) or []:
+        for mouse in (trial.get("mice") or []):
+            for key in _PERDAY_KEYS:
+                v = mouse.get(key)
+                if isinstance(v, dict) and v:
+                    mouse[key] = _FlowMap(v)
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(
             data,
@@ -388,6 +558,7 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
             allow_unicode=True,  # 日本語をそのまま出力
             sort_keys=False,     # モデル定義順を維持して可読性を保つ
             default_flow_style=False,
+            width=100,           # フロー辞書が長くなったら折り返す
         )
 
 
@@ -499,10 +670,9 @@ def find_scheduled_configs(
         plan_name = path.stem
         cc = plan.cc_config
         for period in plan.trials:
-            days = plan.days_for(period)          # Trial 専用 or 共有の日程
-            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
-            for i, day in enumerate(days):
-                if day.skip:          # 休みの日は実験しないので列挙しない
+            days = plan.resolve_trial(period)     # program を実時間へ割り当てた結果
+            for day in days:
+                if day.skip:          # ステップを持たない日は実験しないので列挙しない
                     continue
                 d = resolve_day_date(period, day)
                 if d is None:
@@ -511,7 +681,7 @@ def find_scheduled_configs(
                 if abs(offset) > window_days:
                     continue
                 rel_key, rel_label_ja = _rel_labels(offset)
-                session = day.session if day.session is not None else sess_def[i]
+                session = day.session
                 found.append(
                     ScheduledConfig(
                         offset=offset,
@@ -555,10 +725,9 @@ def find_scheduled_mice(
         plan_name = path.stem
         cc = plan.cc_config
         for period in plan.trials:
-            days = plan.days_for(period)          # Trial 専用 or 共有の日程
-            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
-            for i, day in enumerate(days):
-                if day.skip:          # 休みの日は実験しないので列挙しない
+            days = plan.resolve_trial(period)     # program を実時間へ割り当てた結果
+            for day in days:
+                if day.skip:          # ステップを持たない日は実験しないので列挙しない
                     continue
                 d = resolve_day_date(period, day)
                 if d is None:
@@ -568,7 +737,7 @@ def find_scheduled_mice(
                     continue
                 rel_key, rel_label_ja = _rel_labels(offset)
                 label = day.label
-                session = day.session if day.session is not None else sess_def[i]
+                session = day.session
                 day_code = format_day_code(day.day, day.phase, session)
                 for m in period.mice:
                     task = (m.task_param.get(label) if label else None) or day.task_param
