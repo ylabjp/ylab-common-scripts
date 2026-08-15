@@ -292,10 +292,10 @@ class ExperimentTrial(BaseModel):
     ``period.start``(実施期間)と ``mice``(名簿)を持ち、具体日付は start + offset。
     ``period`` は開始/終了日の範囲そのものなので名称を保つ。
 
-    Schedule(日程)は既定では Plan 直下の :attr:`ExperimentPlan.days` を全 Trial で
-    共有するが、``days`` を入れるとその Trial 専用の日程になる(:meth:`ExperimentPlan.days_for`
-    が解決する)。開始曜日が違えば休み(:attr:`PlanDay.skip`)の位置も変わるため、
-    Trial ごとに日程を分けられるようにしてある。空のままなら共有日程を使う。
+    Trial は Plan の ``program`` を実時間へ展開したものそのものなので、日程
+    (``days``)は必ず自分で持つ。開始曜日が違えば休み(:attr:`PlanDay.skip`)の
+    位置も変わるため、共有する日程というものは無い。空のときだけ
+    「開始日から休み無しで program を順に割り当てる」とみなす。
     """
 
     name: str = ""
