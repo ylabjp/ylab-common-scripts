@@ -23,6 +23,7 @@ from ylabcommon.models.plan import (  # noqa: E402
     Period,
     PlanDay,
     PlanMouse,
+    ProgramStep,
     default_sessions,
     find_scheduled_configs,
     find_scheduled_mice,
@@ -44,12 +45,12 @@ def _sample_plan() -> ExperimentPlan:
         water_restriction_ratio=0.85,
         daily_evaporation_ml=1.2,
         cc_config=CCConfig(config_dir="config_OFL_2025"),
-        days=[
-            PlanDay(day=1, phase="1", task_param="OAFC_shock_exposure.json",
-                    photometry_param="20Hz_470_405nm.json"),
-            PlanDay(day=2, phase="1", task_param="cond.json",
-                    photometry_param="20Hz_470_405nm.json"),
-            PlanDay(day=3, phase="2", task_param="test.json", photometry_param="no_stim.json"),
+        program=[
+            ProgramStep(phase="1", task_param="OAFC_shock_exposure.json",
+                        photometry_param="20Hz_470_405nm.json"),
+            ProgramStep(phase="1", task_param="cond.json",
+                        photometry_param="20Hz_470_405nm.json"),
+            ProgramStep(phase="2", task_param="test.json", photometry_param="no_stim.json"),
         ],
         trials=[
             ExperimentTrial(
@@ -84,9 +85,10 @@ def test_round_trip():
     assert loaded.water_restriction_ratio == 0.85
     assert loaded.daily_evaporation_ml == 1.2
     assert loaded.cc_config.config_dir == "config_OFL_2025"
-    assert len(loaded.days) == 3
-    assert loaded.days[1].day == 2 and loaded.days[1].offset == 1 and loaded.days[1].label == "day2"
-    assert loaded.days[1].task_param == "cond.json"
+    assert len(loaded.program) == 3
+    day2 = loaded.resolve_trial(loaded.trials[0])[1]
+    assert day2.day == 2 and day2.offset == 1 and day2.label == "day2"
+    assert day2.task_param == "cond.json"
     assert len(loaded.trials) == 1
     p0 = loaded.trials[0]
     assert p0.name == "cohort1"
@@ -123,9 +125,10 @@ def test_legacy_label_offset_loads_as_day():
         "periods": [{"name": "p", "period": {"start": "2026-04-26"}, "mice": []}],
     })
     assert not hasattr(ExperimentPlan, "protocol") or "protocol" not in plan.model_dump()
-    assert [d.day for d in plan.days] == [-1, 1, 2]
-    assert [d.label for d in plan.days] == ["day-1", "day1", "day2"]
-    assert resolve_day_date(plan.trials[0], plan.days[1]) == date(2026, 4, 26)   # day1 = start
+    days = plan.trials[0].days
+    assert [d.day for d in days] == [-1, 1, 2]
+    assert [d.label for d in days] == ["day-1", "day1", "day2"]
+    assert resolve_day_date(plan.trials[0], days[1]) == date(2026, 4, 26)   # day1 = start
 
 
 def test_legacy_periods_key_loads_as_trials():
@@ -162,13 +165,13 @@ def test_none_and_defaults_omitted_in_yaml():
     assert "null" not in text            # exclude_defaults + exclude_none
     assert "\\u" not in text             # 日本語などがエスケープされない
     assert "\n  date:" not in text       # schedule の各 day は具体日付を持たない(day のみ)
-    assert "\ndays:" in text and "\ntrials:" in text   # 旧 periods: から改名
+    assert "\nprogram:" in text and "\ntrials:" in text   # program / trials に分離
     assert "\nperiods:" not in text     # 保存は新キーのみ
     assert "\nmice:" not in text         # トップレベル mice は無い(trial 内のみ)
     assert text.startswith("within_factors:")  # protocol 削除で先頭が within_factors に
     assert "protocol:" not in text       # protocol はモデルから削除済み
     assert "label:" not in text and "offset:" not in text  # 統合された day のみ書き出す
-    assert "\n- day: 1" in text
+    assert "phase:" in text
     assert "daily_time:" not in text     # 廃止済みフィールドは書き出さない
     assert "mouse_list:" not in text
     assert "\nschedule:" not in text
@@ -177,10 +180,11 @@ def test_none_and_defaults_omitted_in_yaml():
 def test_offset_date_resolution():
     plan = _sample_plan()
     per = plan.trials[0]
-    assert resolve_day_date(per, plan.days[0]) == date(2026, 4, 26)   # day1 = start + 0
-    assert resolve_day_date(per, plan.days[2]) == date(2026, 4, 28)   # day3 = start + 2
+    days = plan.resolve_trial(per)
+    assert resolve_day_date(per, days[0]) == date(2026, 4, 26)   # day1 = start + 0
+    assert resolve_day_date(per, days[2]) == date(2026, 4, 28)   # day3 = start + 2
     # start 未設定 -> None
-    assert resolve_day_date(ExperimentTrial(name="x"), plan.days[0]) is None
+    assert resolve_day_date(ExperimentTrial(name="x"), days[0]) is None
 
 
 def test_format_day_code_and_default_sessions():
@@ -210,18 +214,20 @@ def test_default_sessions_defers_over_skipped_days():
 def test_skip_days_are_not_scheduled():
     """skip の日は CC への列挙(config / mice)から外れる。体重管理は day 単位で残る。"""
     plan = _sample_plan()
-    plan.days[1].skip = True          # day2 (4/27) を休みにする
+    # day2 (4/27) を休みにする -> その Trial の暦に枠を持たせる
+    plan.trials[0].days = [PlanDay(day=1), PlanDay(day=2, skip=True),
+                           PlanDay(day=3), PlanDay(day=4)]
     with tempfile.TemporaryDirectory() as d:
         save_plan(plan, os.path.join(d, "OFL_Holmes_2026.yaml"))
         reloaded = load_plan(os.path.join(d, "OFL_Holmes_2026.yaml"))
-        assert reloaded.days[1].skip is True          # skip は保存される
+        assert reloaded.trials[0].days[1].skip is True    # skip は保存される
         found = find_scheduled_configs(d, ref_date=date(2026, 4, 27))
         mice = find_scheduled_mice(d, ref_date=date(2026, 4, 27))
     # 4/27 は休みなので出てこない(前後の day1 / day3 のみ)
-    assert [s.day_label for s in found] == ["day1", "day3"]
+    assert [s.day_label for s in found] == ["day1", "day3"]  # day2 は休み
     assert all(s.day_label != "day2" for s in mice)
-    # day3 は phase "2" の 1 回目のまま(休みは数えない)
-    assert [s.session for s in found] == [1, 1]
+    # 休みは数えないので、day3 は phase "1" の 2 回目
+    assert [s.session for s in found] == [1, 2]
     # 体重は day2 のキーとして残っている
     assert reloaded.trials[0].mice[0].bw_before["day1"] == 23.4
 
@@ -230,31 +236,35 @@ def test_per_trial_schedule_overrides_the_shared_one():
     """Trial 専用の days があればそれを使い、無ければ共有 days を使う。"""
     plan = _sample_plan()
     shared = plan.trials[0]
+    # cohort2 は同じ program を、休みを 1 日挟んだ暦へ割り当てる
     own = ExperimentTrial(
         name="cohort2",
         period=Period(start=date(2026, 6, 1)),
-        days=[PlanDay(day=1, phase="9", task_param="own.json")],   # 専用日程
+        days=[PlanDay(day=1), PlanDay(day=2, skip=True), PlanDay(day=3), PlanDay(day=4)],
         mice=[PlanMouse(prj="p", mouse_id="x", bench={"day1": "B11"})],
     )
     plan.trials.append(own)
-    assert plan.days_for(shared) is plan.days            # 空 -> 共有
-    assert plan.days_for(own) == own.days                # 専用が勝つ
+    # 共有: days 未指定なら program を 1..N へ連続割り当て
+    assert [d.day for d in plan.resolve_trial(shared)] == [1, 2, 3]
+    # 専用: 休みを挟むので 3 ステップが day1 / day3 / day4 に載る
+    got = [(d.day, d.skip, d.phase) for d in plan.resolve_trial(own)]
+    assert got == [(1, False, "1"), (2, True, ""), (3, False, "1"), (4, False, "2")]
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "x.yaml")
         save_plan(plan, p)
         loaded = load_plan(p)
-        assert loaded.trials[1].days[0].phase == "9"     # 保存・再読込できる
+        assert [x.skip for x in loaded.trials[1].days] == [False, True, False, False]
         assert loaded.trials[0].days == []               # 共有のままの trial は空
-        # cohort2 は自前の 1 日だけ、その日付は自分の start 基準
         found = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
-    assert [(s.period_name, s.phase) for s in found] == [("cohort2", "9")]
-    assert found[0].task_param == "own.json"
+    assert [(s.period_name, s.phase) for s in found] == [("cohort2", "1")]
+    assert found[0].task_param == "OAFC_shock_exposure.json"
 
 
 def test_photometry_resolution():
     plan = _sample_plan()
-    assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # day 標準
-    assert plan.resolve_photometry_param(plan.days[2]) == "no_stim.json"          # day 標準(別値)
+    days = plan.resolve_trial(plan.trials[0])
+    assert days[0].photometry_param == "20Hz_470_405nm.json"   # step の標準
+    assert days[2].photometry_param == "no_stim.json"          # step の標準(別値)
 
 
 def test_find_today_yesterday_tomorrow():
@@ -320,7 +330,7 @@ def test_multiple_periods_share_schedule():
         # cohort2 の start(6/1) 基準で走査
         found = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
     assert len(loaded.trials) == 2
-    assert len(loaded.days) == 3            # Schedule は 1 つを共有
+    assert len(loaded.program) == 3         # program は 1 つを共有
     assert loaded.trials[1].mice[0].bench["day1"] == "B11"
     # 6/1 近傍は cohort2 のみ(cohort1 は 4 月で範囲外)
     assert {s.period_name for s in found} == {"cohort2"}
