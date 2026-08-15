@@ -34,6 +34,23 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
     from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
     USING_LIBYAML = False
 
+# マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
+# (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
+_PERDAY_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "task_param",
+                "photometry_param", "within_factor", "user")
+
+
+class _FlowMap(dict):
+    """1 行(フロー形式)で書き出す辞書。"""
+
+
+def _represent_flow_map(dumper, data):
+    return dumper.represent_mapping("tag:yaml.org,2002:map", data, flow_style=True)
+
+
+_YamlDumper.add_representer(_FlowMap, _represent_flow_map)
+
+
 __all__ = [
     "PLAN_DIR_NAME",
     "PLAN_FILE_GLOB",
@@ -488,6 +505,14 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # exclude_defaults: 空の periods / days / mice や未設定項目を書かず簡潔に保つ。
     data = plan.model_dump(mode="python", exclude_defaults=True)
+    # 日ごとの辞書は 1 行にまとめる。1 日 1 行だと 1 個体で数百行になり、
+    # 実験内容より体重表のほうが長くなってしまうため(内容は一切変えない)。
+    for trial in data.get("trials", []) or []:
+        for mouse in (trial.get("mice") or []):
+            for key in _PERDAY_KEYS:
+                v = mouse.get(key)
+                if isinstance(v, dict) and v:
+                    mouse[key] = _FlowMap(v)
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(
             data,
@@ -496,6 +521,7 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
             allow_unicode=True,  # 日本語をそのまま出力
             sort_keys=False,     # モデル定義順を維持して可読性を保つ
             default_flow_style=False,
+            width=100,           # フロー辞書が長くなったら折り返す
         )
 
 
