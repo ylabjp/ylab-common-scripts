@@ -221,13 +221,18 @@ class PlanMouse(BaseModel):
 class ExperimentTrial(BaseModel):
     """1 つの実験 Trial(旧称 Period)。1 ファイルに複数持てる。
 
-    ``period.start``(実施期間)と ``mice``(名簿)を持つ。Schedule(日程)は Plan 直下の
-    :attr:`ExperimentPlan.days` に 1 つ置いて全 Trial で共有し、具体日付は
-    start + offset で決める。``period`` は開始/終了日の範囲そのものなので名称を保つ。
+    ``period.start``(実施期間)と ``mice``(名簿)を持ち、具体日付は start + offset。
+    ``period`` は開始/終了日の範囲そのものなので名称を保つ。
+
+    Schedule(日程)は既定では Plan 直下の :attr:`ExperimentPlan.days` を全 Trial で
+    共有するが、``days`` を入れるとその Trial 専用の日程になる(:meth:`ExperimentPlan.days_for`
+    が解決する)。開始曜日が違えば休み(:attr:`PlanDay.skip`)の位置も変わるため、
+    Trial ごとに日程を分けられるようにしてある。空のままなら共有日程を使う。
     """
 
     name: str = ""
     period: Optional[Period] = None
+    days: List[PlanDay] = Field(default_factory=list)   # 空 -> Plan 共有の days を使う
     mice: List[PlanMouse] = Field(default_factory=list)
 
 
@@ -272,6 +277,10 @@ class ExperimentPlan(BaseModel):
     def periods(self) -> List[ExperimentTrial]:
         """旧名。``trials`` と同じリストを返す(``plan.periods[0]`` 等の既存コード用)。"""
         return self.trials
+
+    def days_for(self, trial: "ExperimentTrial") -> List[PlanDay]:
+        """その Trial に適用される Schedule。専用の ``days`` があればそれ、無ければ共有。"""
+        return trial.days or self.days
 
     @property
     def day_labels(self) -> List[str]:
@@ -489,10 +498,10 @@ def find_scheduled_configs(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days],
-                                    [d.skip for d in plan.days])
         for period in plan.trials:
-            for i, day in enumerate(plan.days):
+            days = plan.days_for(period)          # Trial 専用 or 共有の日程
+            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
+            for i, day in enumerate(days):
                 if day.skip:          # 休みの日は実験しないので列挙しない
                     continue
                 d = resolve_day_date(period, day)
@@ -545,10 +554,10 @@ def find_scheduled_mice(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days],
-                                    [d.skip for d in plan.days])
         for period in plan.trials:
-            for i, day in enumerate(plan.days):
+            days = plan.days_for(period)          # Trial 専用 or 共有の日程
+            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
+            for i, day in enumerate(days):
                 if day.skip:          # 休みの日は実験しないので列挙しない
                     continue
                 d = resolve_day_date(period, day)

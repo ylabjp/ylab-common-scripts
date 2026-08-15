@@ -226,6 +226,31 @@ def test_skip_days_are_not_scheduled():
     assert reloaded.trials[0].mice[0].bw_before["day1"] == 23.4
 
 
+def test_per_trial_schedule_overrides_the_shared_one():
+    """Trial 専用の days があればそれを使い、無ければ共有 days を使う。"""
+    plan = _sample_plan()
+    shared = plan.trials[0]
+    own = ExperimentTrial(
+        name="cohort2",
+        period=Period(start=date(2026, 6, 1)),
+        days=[PlanDay(day=1, phase="9", task_param="own.json")],   # 専用日程
+        mice=[PlanMouse(prj="p", mouse_id="x", bench={"day1": "B11"})],
+    )
+    plan.trials.append(own)
+    assert plan.days_for(shared) is plan.days            # 空 -> 共有
+    assert plan.days_for(own) == own.days                # 専用が勝つ
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.yaml")
+        save_plan(plan, p)
+        loaded = load_plan(p)
+        assert loaded.trials[1].days[0].phase == "9"     # 保存・再読込できる
+        assert loaded.trials[0].days == []               # 共有のままの trial は空
+        # cohort2 は自前の 1 日だけ、その日付は自分の start 基準
+        found = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
+    assert [(s.period_name, s.phase) for s in found] == [("cohort2", "9")]
+    assert found[0].task_param == "own.json"
+
+
 def test_photometry_resolution():
     plan = _sample_plan()
     assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # day 標準
