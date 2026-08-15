@@ -146,10 +146,15 @@ class PlanDay(BaseModel):
       順延する。baseline(計量のみの前日程。day <= 0)も会期中の休みも同じ扱いで、
       違うのは day 番号だけ。体重管理は day 単位なので、skip の日も
       :class:`PlanMouse` の ``bw_before`` などのキーとしては残る。
+    - ``step``: **その日に実施した内容を確定(凍結)**したもの。入っている日は Plan の
+      ``program`` を参照せず(消費もせず)この値を使う。実施期間を終えた Trial は
+      :meth:`ExperimentPlan.freeze_trial` で凍結し、**あとから Plan を書き換えても
+      過去の記録が変わらない**ようにする。
     """
 
     day: int
     skip: bool = False
+    step: Optional["ProgramStep"] = None    # 確定した実施内容(凍結)
     note: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
@@ -391,6 +396,14 @@ class ExperimentPlan(BaseModel):
             if not d.consumes_step:
                 out.append(ResolvedDay(day=d.day, skip=True, note=d.note))
                 continue
+            if d.step is not None:
+                # 凍結済み: program は参照も消費もしない(過去の記録は不変)
+                out.append(ResolvedDay(
+                    day=d.day, phase=d.step.phase, session=d.step.session,
+                    task_param=d.step.task_param,
+                    photometry_param=d.step.photometry_param,
+                    note=d.note or d.step.note))
+                continue
             st = next(steps, None)
             if st is None:
                 out.append(ResolvedDay(day=d.day, skip=True, note=d.note))
@@ -406,6 +419,30 @@ class ExperimentPlan(BaseModel):
                 task_param=st.task_param, photometry_param=st.photometry_param,
                 note=d.note or st.note))
         return out
+
+    def freeze_trial(self, trial: "ExperimentTrial") -> int:
+        """Trial の実施内容を確定させ、以後 Plan の変更を受けないようにする。
+
+        現在 :meth:`resolve_trial` が返す内容を各日の :attr:`PlanDay.step` に焼き付ける。
+        Plan の ``program`` は今後も編集され得るが、凍結した Trial の記録は動かない。
+        戻り値は凍結した日数。既に凍結済みの日はそのまま。
+        """
+        n = 0
+        for day, r in zip(trial.days, self.resolve_trial(trial)):
+            if day.skip or day.step is not None:
+                continue
+            if not (r.phase or r.task_param or r.photometry_param or r.session):
+                continue
+            day.step = ProgramStep(
+                phase=r.phase, session=r.session, task_param=r.task_param,
+                photometry_param=r.photometry_param)
+            n += 1
+        return n
+
+    def is_frozen(self, trial: "ExperimentTrial") -> bool:
+        """実施日のすべてが凍結済みか。"""
+        work = [d for d in trial.days if not d.skip]
+        return bool(work) and all(d.step is not None for d in work)
 
     def days_for(self, trial: "ExperimentTrial") -> List[ResolvedDay]:
         """後方互換の別名。:meth:`resolve_trial` と同じ。"""

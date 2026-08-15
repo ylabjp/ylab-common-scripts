@@ -173,6 +173,39 @@ def test_legacy_yymmdd_dates_load_as_iso():
         assert load_plan(f).trials[0].mice[0].birth_date == date(2025, 4, 26)
 
 
+def test_freezing_protects_a_finished_trial_from_plan_edits():
+    """実施を終えた Trial は凍結でき、以後 Plan を書き換えても記録が変わらない。"""
+    plan = _sample_plan()
+    past = plan.trials[0]
+    past.days = [PlanDay(day=1), PlanDay(day=2), PlanDay(day=3)]
+    running = ExperimentTrial(name="cohort2", period=Period(start=date(2026, 9, 1)),
+                              days=[PlanDay(day=1), PlanDay(day=2), PlanDay(day=3)])
+    plan.trials.append(running)
+
+    before = [(d.day, d.phase, d.session, d.task_param) for d in plan.resolve_trial(past)]
+    assert plan.freeze_trial(past) == 3 and plan.is_frozen(past)
+    assert not plan.is_frozen(running)
+
+    # Plan を書き換える(先頭にステップを挿入 + 末尾を削除)
+    plan.program.insert(0, ProgramStep(phase="0", task_param="new.json"))
+    plan.program.pop()
+
+    after = [(d.day, d.phase, d.session, d.task_param) for d in plan.resolve_trial(past)]
+    assert after == before, "凍結した Trial が Plan の編集で変わってしまった"
+    # 実施前の Trial には新しい program が反映される
+    assert plan.resolve_trial(running)[0].task_param == "new.json"
+
+    # 凍結は保存・再読込を越えて維持される
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "x.yaml")
+        save_plan(plan, f)
+        reloaded = load_plan(f)
+        assert reloaded.is_frozen(reloaded.trials[0])
+        assert [(x.day, x.phase, x.task_param)
+                for x in reloaded.resolve_trial(reloaded.trials[0])] == [
+            (b[0], b[1], b[3]) for b in before]
+
+
 def test_none_and_defaults_omitted_in_yaml():
     plan = _sample_plan()
     with tempfile.TemporaryDirectory() as d:
