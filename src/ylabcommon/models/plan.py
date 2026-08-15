@@ -119,6 +119,13 @@ class PlanDay(BaseModel):
       個体ごとの上書きは :class:`PlanMouse` の ``task_param`` を参照。
     - ``photometry_param``: この日の標準 photometry パラメータ名 (task_param と並列)。
       個体ごとの上書きは :class:`PlanMouse` の ``photometry_param`` を参照。
+    - ``skip``: 実験を行わない日(土日・祝日など)。phase / session / task は付かず、
+      :func:`default_sessions` も数えないので、以降の phase・session の割り当ては
+      自動的に順延する。**体重管理は day 単位で続く**ので、skip の日も
+      :class:`PlanMouse` の ``bw_before`` などのキーとしてはそのまま残る。
+      これにより Schedule は「実験プログラムの並び」と「休みの位置」を分けて持てる
+      ため、Trial の開始曜日を選ばない(旧来は土日を空行として埋め込んでいたので
+      月曜開始しかできなかった)。
 
     後方互換: 旧形式の ``{label, offset}`` を読み込むと ``day = offset + 1``
     (offset 省略時は 0 -> day 1)に変換する。
@@ -129,6 +136,7 @@ class PlanDay(BaseModel):
     session: Optional[int] = None
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
+    skip: bool = False
     note: Optional[str] = None
 
     @model_validator(mode="before")
@@ -426,14 +434,21 @@ def format_day_code(day: int, phase: str = "", session: Optional[int] = None) ->
     return code
 
 
-def default_sessions(phases: List[str]) -> List[Optional[int]]:
+def default_sessions(phases: List[str],
+                     skips: Optional[List[bool]] = None) -> List[Optional[int]]:
     """phase 列 -> 各日の既定 session(同一 phase の出現順の累積)。
 
     phase が空の日は None。例: ``["1","1","2","1"]`` -> ``[1, 2, 1, 3]``。
+    ``skips`` を渡すと ``True`` の日(:attr:`PlanDay.skip`)は数えず None を返すので、
+    休みを挟んでも session 番号は順延する(``["1","1","1"], [False, True, False]``
+    -> ``[1, None, 2]``)。
     """
     out: List[Optional[int]] = []
     counts: Dict[str, int] = {}
-    for ph in phases:
+    for i, ph in enumerate(phases):
+        if skips is not None and i < len(skips) and skips[i]:
+            out.append(None)          # 休みの日は数えない -> 以降が順延する
+            continue
         p = (ph or "").strip()
         if not p:
             out.append(None)
@@ -474,9 +489,12 @@ def find_scheduled_configs(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days])
+        sess_def = default_sessions([d.phase for d in plan.days],
+                                    [d.skip for d in plan.days])
         for period in plan.trials:
             for i, day in enumerate(plan.days):
+                if day.skip:          # 休みの日は実験しないので列挙しない
+                    continue
                 d = resolve_day_date(period, day)
                 if d is None:
                     continue
@@ -527,9 +545,12 @@ def find_scheduled_mice(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days])
+        sess_def = default_sessions([d.phase for d in plan.days],
+                                    [d.skip for d in plan.days])
         for period in plan.trials:
             for i, day in enumerate(plan.days):
+                if day.skip:          # 休みの日は実験しないので列挙しない
+                    continue
                 d = resolve_day_date(period, day)
                 if d is None:
                     continue

@@ -191,6 +191,41 @@ def test_format_day_code_and_default_sessions():
     assert default_sessions(["1", "", "4"]) == [1, None, 1]
 
 
+def test_default_sessions_defers_over_skipped_days():
+    """skip の日は数えないので、以降の session 割り当てが順延する。"""
+    # 休み無し: 素直な累積
+    assert default_sessions(["1", "1", "1"]) == [1, 2, 3]
+    # 真ん中が休み -> その日は None、次の日が 2 番目になる(順延)
+    assert default_sessions(["1", "1", "1"], [False, True, False]) == [1, None, 2]
+    # 週末 2 日を挟む: 1,2 のあと休み休み、再開して 3,4
+    phases = ["1"] * 6
+    skips = [False, False, True, True, False, False]
+    assert default_sessions(phases, skips) == [1, 2, None, None, 3, 4]
+    # phase が変わっても休みは数えない
+    assert default_sessions(["1", "2", "2"], [False, True, False]) == [1, None, 1]
+    # skips を渡さなければ従来どおり
+    assert default_sessions(["1", "", "4"]) == [1, None, 1]
+
+
+def test_skip_days_are_not_scheduled():
+    """skip の日は CC への列挙(config / mice)から外れる。体重管理は day 単位で残る。"""
+    plan = _sample_plan()
+    plan.days[1].skip = True          # day2 (4/27) を休みにする
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "OFL_Holmes_2026.yaml"))
+        reloaded = load_plan(os.path.join(d, "OFL_Holmes_2026.yaml"))
+        assert reloaded.days[1].skip is True          # skip は保存される
+        found = find_scheduled_configs(d, ref_date=date(2026, 4, 27))
+        mice = find_scheduled_mice(d, ref_date=date(2026, 4, 27))
+    # 4/27 は休みなので出てこない(前後の day1 / day3 のみ)
+    assert [s.day_label for s in found] == ["day1", "day3"]
+    assert all(s.day_label != "day2" for s in mice)
+    # day3 は phase "2" の 1 回目のまま(休みは数えない)
+    assert [s.session for s in found] == [1, 1]
+    # 体重は day2 のキーとして残っている
+    assert reloaded.trials[0].mice[0].bw_before["day1"] == 23.4
+
+
 def test_photometry_resolution():
     plan = _sample_plan()
     assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # day 標準
