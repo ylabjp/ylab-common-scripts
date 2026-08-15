@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 # YAML の読み書きは libyaml (C 実装) があればそれを使う。計画ファイル約100件
 # (5.4MB) の一括読み込みで実測 約5倍 (20.7s -> 4.2s)。Occupancy の全件スキャンや
@@ -42,6 +42,7 @@ __all__ = [
     "CCConfig",
     "PlanDay",
     "PlanMouse",
+    "ExperimentTrial",
     "ExperimentPeriod",
     "ExperimentPlan",
     "ScheduledConfig",
@@ -209,17 +210,21 @@ class PlanMouse(BaseModel):
     note: Optional[str] = None
 
 
-class ExperimentPeriod(BaseModel):
-    """1 つの実験期間(Period)。1 ファイルに複数持てる。
+class ExperimentTrial(BaseModel):
+    """1 つの実験 Trial(旧称 Period)。1 ファイルに複数持てる。
 
-    ``period.start`` と ``mice``(名簿)を持つ。Schedule(日程)は Plan 直下の
-    :attr:`ExperimentPlan.days` に 1 つ置いて全 Period で共有し、具体日付は
-    start + offset で決める。
+    ``period.start``(実施期間)と ``mice``(名簿)を持つ。Schedule(日程)は Plan 直下の
+    :attr:`ExperimentPlan.days` に 1 つ置いて全 Trial で共有し、具体日付は
+    start + offset で決める。``period`` は開始/終了日の範囲そのものなので名称を保つ。
     """
 
     name: str = ""
     period: Optional[Period] = None
     mice: List[PlanMouse] = Field(default_factory=list)
+
+
+#: 旧名。``periods:`` 時代のコードを壊さないための別名。
+ExperimentPeriod = ExperimentTrial
 
 
 class ExperimentPlan(BaseModel):
@@ -229,8 +234,10 @@ class ExperimentPlan(BaseModel):
     旧ファイルの ``protocol:`` など未知のトップレベルキーは ``extra="ignore"`` で
     読み飛ばす(移行後の再保存で消える)。
 
-    ``days`` は全 Period 共通の Schedule(各日は 1 始まりの ``day`` を持つ)。``periods``
+    ``days`` は全 Trial 共通の Schedule(各日は 1 始まりの ``day`` を持つ)。``trials``
     は それぞれ ``start`` と名簿を持ち、具体日付は ``start + (day - 1)`` で決まる。
+    旧キー ``periods:`` も読み込めるが(:attr:`trials` の別名)、保存時は ``trials:``
+    で書き出す。旧コード向けに ``plan.periods`` プロパティも残してある。
     ``within_factors`` は within-subject 因子の候補リスト。Per-day で各個体・各日の
     :attr:`PlanMouse.within_factor` を選ぶときの選択肢になる。
 
@@ -242,14 +249,21 @@ class ExperimentPlan(BaseModel):
     求める(算出は GUI 側。標準体重データが behavior-config にあるため)。
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     within_factors: List[str] = Field(default_factory=list)
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
     days: List[PlanDay] = Field(default_factory=list)
-    periods: List[ExperimentPeriod] = Field(default_factory=list)
+    # 読み込みは trials: / periods: の両方を受ける(旧ファイル互換)。書き出しは trials:。
+    trials: List[ExperimentTrial] = Field(
+        default_factory=list, validation_alias=AliasChoices("trials", "periods"))
+
+    @property
+    def periods(self) -> List[ExperimentTrial]:
+        """旧名。``trials`` と同じリストを返す(``plan.periods[0]`` 等の既存コード用)。"""
+        return self.trials
 
     @property
     def day_labels(self) -> List[str]:
@@ -430,7 +444,7 @@ def default_sessions(phases: List[str]) -> List[Optional[int]]:
 
 
 def resolve_day_date(
-    period: "ExperimentPeriod", day: PlanDay
+    period: "ExperimentTrial", day: PlanDay
 ) -> Optional[DateType]:
     """具体日付 = Period.start + day.offset。start 未設定なら None。"""
     start = period.period.start if period.period else None
@@ -461,7 +475,7 @@ def find_scheduled_configs(
         plan_name = path.stem
         cc = plan.cc_config
         sess_def = default_sessions([d.phase for d in plan.days])
-        for period in plan.periods:
+        for period in plan.trials:
             for i, day in enumerate(plan.days):
                 d = resolve_day_date(period, day)
                 if d is None:
@@ -514,7 +528,7 @@ def find_scheduled_mice(
         plan_name = path.stem
         cc = plan.cc_config
         sess_def = default_sessions([d.phase for d in plan.days])
-        for period in plan.periods:
+        for period in plan.trials:
             for i, day in enumerate(plan.days):
                 d = resolve_day_date(period, day)
                 if d is None:
