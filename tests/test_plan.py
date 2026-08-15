@@ -310,6 +310,26 @@ def test_per_trial_schedule_overrides_the_shared_one():
     assert found[0].task_param == "OAFC_shock_exposure.json"
 
 
+def test_per_mouse_phase_session_override():
+    """同じ日でも個体ごとに phase / session をずらせる。"""
+    plan = ExperimentPlan(
+        program=[ProgramStep(phase="1", session=1, task_param="a.json")],
+        trials=[ExperimentTrial(name="t", period=Period(start=date(2026, 4, 26)),
+                                days=[PlanDay(day=1)], mice=[
+            PlanMouse(mouse_id="m1", bench={"day1": "B10"}),
+            PlanMouse(mouse_id="m2", bench={"day1": "B11"},
+                      phase={"day1": "2"}, session={"day1": 5})])])
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "x.yaml"))
+        found = {s.mouse_id: s for s in find_scheduled_mice(d, ref_date=date(2026, 4, 26))}
+        reloaded = load_plan(os.path.join(d, "x.yaml"))
+    assert (found["m1"].phase, found["m1"].session) == ("1", 1)      # step の標準
+    assert (found["m2"].phase, found["m2"].session) == ("2", 5)      # 個体で上書き
+    assert found["m2"].day_code == "day01-phase02S05"                # 転送用コードにも効く
+    assert reloaded.trials[0].mice[1].phase == {"day1": "2"}
+    assert reloaded.trials[0].mice[1].session == {"day1": 5}
+
+
 def test_photometry_resolution():
     plan = _sample_plan()
     days = plan.resolve_trial(plan.trials[0])
