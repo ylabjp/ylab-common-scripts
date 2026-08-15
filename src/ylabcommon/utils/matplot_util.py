@@ -19,9 +19,9 @@ matplotlib.rcParams["ps.fonttype"] = 42
 class STANDARD_FIGURE_SIZE:
     LINE_WIDTH = 0.75
     LINE_WIDTH_THIN = 0.5
-    FONT_SIZE_L = 7
+    FONT_SIZE_L = 7   # タイトル / 目盛ラベル / 凡例
     FONT_SIZE_M = 6
-    FONT_SIZE_S = 5  # Legend, pval
+    FONT_SIZE_S = 5   # pval など、他より一段小さく出したい文字
     BAR_WIDTH = 0.5
     # 図全体で統一する単一値(散らばった独自指定をやめ、統一感を出すため)。
     MARKER_SIZE = 3   # dot / scatter / plot marker のサイズ(swarm の size= 含む)
@@ -294,8 +294,8 @@ def set_axis_properties(ax: plt.Axes) -> None:
     ax.tick_params(axis='both', which='major', pad=1)
     # Shorten the tick length
     ax.tick_params(axis='both', which='both', length=2)
-    ax.tick_params(axis='y', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_S)
-    ax.tick_params(axis='x', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_S)
+    ax.tick_params(axis='y', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_L)
+    ax.tick_params(axis='x', labelsize=STANDARD_FIGURE_SIZE.FONT_SIZE_L)
     # Ensure that all plot elements are not clipped
     for artist in ax.get_children():
         artist.set_clip_on(False)
