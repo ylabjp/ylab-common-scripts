@@ -119,6 +119,13 @@ class PlanDay(BaseModel):
       個体ごとの上書きは :class:`PlanMouse` の ``task_param`` を参照。
     - ``photometry_param``: この日の標準 photometry パラメータ名 (task_param と並列)。
       個体ごとの上書きは :class:`PlanMouse` の ``photometry_param`` を参照。
+    - ``skip``: 実験を行わない日(土日・祝日など)。phase / session / task は付かず、
+      :func:`default_sessions` も数えないので、以降の phase・session の割り当ては
+      自動的に順延する。**体重管理は day 単位で続く**ので、skip の日も
+      :class:`PlanMouse` の ``bw_before`` などのキーとしてはそのまま残る。
+      これにより Schedule は「実験プログラムの並び」と「休みの位置」を分けて持てる
+      ため、Trial の開始曜日を選ばない(旧来は土日を空行として埋め込んでいたので
+      月曜開始しかできなかった)。
 
     後方互換: 旧形式の ``{label, offset}`` を読み込むと ``day = offset + 1``
     (offset 省略時は 0 -> day 1)に変換する。
@@ -129,6 +136,7 @@ class PlanDay(BaseModel):
     session: Optional[int] = None
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
+    skip: bool = False
     note: Optional[str] = None
 
     @model_validator(mode="before")
@@ -213,13 +221,18 @@ class PlanMouse(BaseModel):
 class ExperimentTrial(BaseModel):
     """1 つの実験 Trial(旧称 Period)。1 ファイルに複数持てる。
 
-    ``period.start``(実施期間)と ``mice``(名簿)を持つ。Schedule(日程)は Plan 直下の
-    :attr:`ExperimentPlan.days` に 1 つ置いて全 Trial で共有し、具体日付は
-    start + offset で決める。``period`` は開始/終了日の範囲そのものなので名称を保つ。
+    ``period.start``(実施期間)と ``mice``(名簿)を持ち、具体日付は start + offset。
+    ``period`` は開始/終了日の範囲そのものなので名称を保つ。
+
+    Schedule(日程)は既定では Plan 直下の :attr:`ExperimentPlan.days` を全 Trial で
+    共有するが、``days`` を入れるとその Trial 専用の日程になる(:meth:`ExperimentPlan.days_for`
+    が解決する)。開始曜日が違えば休み(:attr:`PlanDay.skip`)の位置も変わるため、
+    Trial ごとに日程を分けられるようにしてある。空のままなら共有日程を使う。
     """
 
     name: str = ""
     period: Optional[Period] = None
+    days: List[PlanDay] = Field(default_factory=list)   # 空 -> Plan 共有の days を使う
     mice: List[PlanMouse] = Field(default_factory=list)
 
 
@@ -264,6 +277,10 @@ class ExperimentPlan(BaseModel):
     def periods(self) -> List[ExperimentTrial]:
         """旧名。``trials`` と同じリストを返す(``plan.periods[0]`` 等の既存コード用)。"""
         return self.trials
+
+    def days_for(self, trial: "ExperimentTrial") -> List[PlanDay]:
+        """その Trial に適用される Schedule。専用の ``days`` があればそれ、無ければ共有。"""
+        return trial.days or self.days
 
     @property
     def day_labels(self) -> List[str]:
@@ -426,14 +443,21 @@ def format_day_code(day: int, phase: str = "", session: Optional[int] = None) ->
     return code
 
 
-def default_sessions(phases: List[str]) -> List[Optional[int]]:
+def default_sessions(phases: List[str],
+                     skips: Optional[List[bool]] = None) -> List[Optional[int]]:
     """phase 列 -> 各日の既定 session(同一 phase の出現順の累積)。
 
     phase が空の日は None。例: ``["1","1","2","1"]`` -> ``[1, 2, 1, 3]``。
+    ``skips`` を渡すと ``True`` の日(:attr:`PlanDay.skip`)は数えず None を返すので、
+    休みを挟んでも session 番号は順延する(``["1","1","1"], [False, True, False]``
+    -> ``[1, None, 2]``)。
     """
     out: List[Optional[int]] = []
     counts: Dict[str, int] = {}
-    for ph in phases:
+    for i, ph in enumerate(phases):
+        if skips is not None and i < len(skips) and skips[i]:
+            out.append(None)          # 休みの日は数えない -> 以降が順延する
+            continue
         p = (ph or "").strip()
         if not p:
             out.append(None)
@@ -474,9 +498,12 @@ def find_scheduled_configs(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days])
         for period in plan.trials:
-            for i, day in enumerate(plan.days):
+            days = plan.days_for(period)          # Trial 専用 or 共有の日程
+            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
+            for i, day in enumerate(days):
+                if day.skip:          # 休みの日は実験しないので列挙しない
+                    continue
                 d = resolve_day_date(period, day)
                 if d is None:
                     continue
@@ -527,9 +554,12 @@ def find_scheduled_mice(
     for path, plan in load_plans(plan_dir):
         plan_name = path.stem
         cc = plan.cc_config
-        sess_def = default_sessions([d.phase for d in plan.days])
         for period in plan.trials:
-            for i, day in enumerate(plan.days):
+            days = plan.days_for(period)          # Trial 専用 or 共有の日程
+            sess_def = default_sessions([d.phase for d in days], [d.skip for d in days])
+            for i, day in enumerate(days):
+                if day.skip:          # 休みの日は実験しないので列挙しない
+                    continue
                 d = resolve_day_date(period, day)
                 if d is None:
                     continue

@@ -191,6 +191,66 @@ def test_format_day_code_and_default_sessions():
     assert default_sessions(["1", "", "4"]) == [1, None, 1]
 
 
+def test_default_sessions_defers_over_skipped_days():
+    """skip の日は数えないので、以降の session 割り当てが順延する。"""
+    # 休み無し: 素直な累積
+    assert default_sessions(["1", "1", "1"]) == [1, 2, 3]
+    # 真ん中が休み -> その日は None、次の日が 2 番目になる(順延)
+    assert default_sessions(["1", "1", "1"], [False, True, False]) == [1, None, 2]
+    # 週末 2 日を挟む: 1,2 のあと休み休み、再開して 3,4
+    phases = ["1"] * 6
+    skips = [False, False, True, True, False, False]
+    assert default_sessions(phases, skips) == [1, 2, None, None, 3, 4]
+    # phase が変わっても休みは数えない
+    assert default_sessions(["1", "2", "2"], [False, True, False]) == [1, None, 1]
+    # skips を渡さなければ従来どおり
+    assert default_sessions(["1", "", "4"]) == [1, None, 1]
+
+
+def test_skip_days_are_not_scheduled():
+    """skip の日は CC への列挙(config / mice)から外れる。体重管理は day 単位で残る。"""
+    plan = _sample_plan()
+    plan.days[1].skip = True          # day2 (4/27) を休みにする
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "OFL_Holmes_2026.yaml"))
+        reloaded = load_plan(os.path.join(d, "OFL_Holmes_2026.yaml"))
+        assert reloaded.days[1].skip is True          # skip は保存される
+        found = find_scheduled_configs(d, ref_date=date(2026, 4, 27))
+        mice = find_scheduled_mice(d, ref_date=date(2026, 4, 27))
+    # 4/27 は休みなので出てこない(前後の day1 / day3 のみ)
+    assert [s.day_label for s in found] == ["day1", "day3"]
+    assert all(s.day_label != "day2" for s in mice)
+    # day3 は phase "2" の 1 回目のまま(休みは数えない)
+    assert [s.session for s in found] == [1, 1]
+    # 体重は day2 のキーとして残っている
+    assert reloaded.trials[0].mice[0].bw_before["day1"] == 23.4
+
+
+def test_per_trial_schedule_overrides_the_shared_one():
+    """Trial 専用の days があればそれを使い、無ければ共有 days を使う。"""
+    plan = _sample_plan()
+    shared = plan.trials[0]
+    own = ExperimentTrial(
+        name="cohort2",
+        period=Period(start=date(2026, 6, 1)),
+        days=[PlanDay(day=1, phase="9", task_param="own.json")],   # 専用日程
+        mice=[PlanMouse(prj="p", mouse_id="x", bench={"day1": "B11"})],
+    )
+    plan.trials.append(own)
+    assert plan.days_for(shared) is plan.days            # 空 -> 共有
+    assert plan.days_for(own) == own.days                # 専用が勝つ
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.yaml")
+        save_plan(plan, p)
+        loaded = load_plan(p)
+        assert loaded.trials[1].days[0].phase == "9"     # 保存・再読込できる
+        assert loaded.trials[0].days == []               # 共有のままの trial は空
+        # cohort2 は自前の 1 日だけ、その日付は自分の start 基準
+        found = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
+    assert [(s.period_name, s.phase) for s in found] == [("cohort2", "9")]
+    assert found[0].task_param == "own.json"
+
+
 def test_photometry_resolution():
     plan = _sample_plan()
     assert plan.resolve_photometry_param(plan.days[0]) == "20Hz_470_405nm.json"  # day 標準
