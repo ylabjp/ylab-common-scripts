@@ -18,7 +18,7 @@ if _SRC not in sys.path:
 
 from ylabcommon.models.plan import (  # noqa: E402
     CCConfig,
-    ExperimentPeriod,
+    ExperimentTrial,
     ExperimentPlan,
     Period,
     PlanDay,
@@ -51,8 +51,8 @@ def _sample_plan() -> ExperimentPlan:
                     photometry_param="20Hz_470_405nm.json"),
             PlanDay(day=3, phase="2", task_param="test.json", photometry_param="no_stim.json"),
         ],
-        periods=[
-            ExperimentPeriod(
+        trials=[
+            ExperimentTrial(
                 name="cohort1",
                 period=Period(start=date(2026, 4, 26), end=date(2026, 5, 5)),
                 mice=[
@@ -87,8 +87,8 @@ def test_round_trip():
     assert len(loaded.days) == 3
     assert loaded.days[1].day == 2 and loaded.days[1].offset == 1 and loaded.days[1].label == "day2"
     assert loaded.days[1].task_param == "cond.json"
-    assert len(loaded.periods) == 1
-    p0 = loaded.periods[0]
+    assert len(loaded.trials) == 1
+    p0 = loaded.trials[0]
     assert p0.name == "cohort1"
     assert p0.period.start == date(2026, 4, 26)
     assert p0.mice[0].sex == "m"
@@ -125,7 +125,32 @@ def test_legacy_label_offset_loads_as_day():
     assert not hasattr(ExperimentPlan, "protocol") or "protocol" not in plan.model_dump()
     assert [d.day for d in plan.days] == [-1, 1, 2]
     assert [d.label for d in plan.days] == ["day-1", "day1", "day2"]
-    assert resolve_day_date(plan.periods[0], plan.days[1]) == date(2026, 4, 26)   # day1 = start
+    assert resolve_day_date(plan.trials[0], plan.days[1]) == date(2026, 4, 26)   # day1 = start
+
+
+def test_legacy_periods_key_loads_as_trials():
+    """旧キー ``periods:`` も読める。保存は新キー ``trials:`` に統一される。"""
+    raw = {
+        "days": [{"day": 1}],
+        "periods": [{"name": "old", "period": {"start": "2026-04-26"},
+                     "mice": [{"mouse_id": "m1", "bench": {"day1": "B10"}}]}],
+    }
+    plan = ExperimentPlan.model_validate(raw)
+    assert len(plan.trials) == 1 and plan.trials[0].name == "old"
+    assert plan.trials[0].mice[0].bench["day1"] == "B10"
+    # 旧コード互換: plan.periods は同じリストを指す
+    assert plan.periods is plan.trials
+    # 新キーでも同じ結果
+    new = ExperimentPlan.model_validate({**{k: v for k, v in raw.items() if k != "periods"},
+                                         "trials": raw["periods"]})
+    assert new.trials[0].name == "old"
+    # 保存すると trials: だけになる
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.yaml")
+        save_plan(plan, p)
+        text = open(p, encoding="utf-8").read()
+        assert "trials:" in text and "periods:" not in text
+        assert load_plan(p).trials[0].mice[0].bench["day1"] == "B10"
 
 
 def test_none_and_defaults_omitted_in_yaml():
@@ -137,8 +162,9 @@ def test_none_and_defaults_omitted_in_yaml():
     assert "null" not in text            # exclude_defaults + exclude_none
     assert "\\u" not in text             # 日本語などがエスケープされない
     assert "\n  date:" not in text       # schedule の各 day は具体日付を持たない(day のみ)
-    assert "\ndays:" in text and "\nperiods:" in text
-    assert "\nmice:" not in text         # トップレベル mice は無い(period 内のみ)
+    assert "\ndays:" in text and "\ntrials:" in text   # 旧 periods: から改名
+    assert "\nperiods:" not in text     # 保存は新キーのみ
+    assert "\nmice:" not in text         # トップレベル mice は無い(trial 内のみ)
     assert text.startswith("within_factors:")  # protocol 削除で先頭が within_factors に
     assert "protocol:" not in text       # protocol はモデルから削除済み
     assert "label:" not in text and "offset:" not in text  # 統合された day のみ書き出す
@@ -150,11 +176,11 @@ def test_none_and_defaults_omitted_in_yaml():
 
 def test_offset_date_resolution():
     plan = _sample_plan()
-    per = plan.periods[0]
+    per = plan.trials[0]
     assert resolve_day_date(per, plan.days[0]) == date(2026, 4, 26)   # day1 = start + 0
     assert resolve_day_date(per, plan.days[2]) == date(2026, 4, 28)   # day3 = start + 2
     # start 未設定 -> None
-    assert resolve_day_date(ExperimentPeriod(name="x"), plan.days[0]) is None
+    assert resolve_day_date(ExperimentTrial(name="x"), plan.days[0]) is None
 
 
 def test_format_day_code_and_default_sessions():
@@ -222,7 +248,7 @@ def test_invalid_file_skipped():
 
 def test_multiple_periods_share_schedule():
     plan = _sample_plan()
-    plan.periods.append(ExperimentPeriod(
+    plan.trials.append(ExperimentTrial(
         name="cohort2",
         period=Period(start=date(2026, 6, 1)),
         mice=[PlanMouse(prj="p", mouse_id="x", bench={"day1": "B11"})],
@@ -233,9 +259,9 @@ def test_multiple_periods_share_schedule():
         loaded = load_plan(p)
         # cohort2 の start(6/1) 基準で走査
         found = find_scheduled_configs(d, ref_date=date(2026, 6, 1))
-    assert len(loaded.periods) == 2
+    assert len(loaded.trials) == 2
     assert len(loaded.days) == 3            # Schedule は 1 つを共有
-    assert loaded.periods[1].mice[0].bench["day1"] == "B11"
+    assert loaded.trials[1].mice[0].bench["day1"] == "B11"
     # 6/1 近傍は cohort2 のみ(cohort1 は 4 月で範囲外)
     assert {s.period_name for s in found} == {"cohort2"}
     today = [s for s in found if s.offset == 0][0]
@@ -247,9 +273,9 @@ def test_per_mouse_photometry_round_trip():
         p = os.path.join(d, "x.yaml")
         save_plan(_sample_plan(), p)
         loaded = load_plan(p)
-    assert loaded.periods[0].mice[0].photometry_param["day2"] == "mouse_405_override.json"
+    assert loaded.trials[0].mice[0].photometry_param["day2"] == "mouse_405_override.json"
     # a mouse with no override keeps an empty dict (default omitted in YAML)
-    assert loaded.periods[0].mice[1].photometry_param == {}
+    assert loaded.trials[0].mice[1].photometry_param == {}
 
 
 def test_find_scheduled_mice_resolves_overrides():
