@@ -36,8 +36,8 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
 
 # マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
 # (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
-_PERDAY_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "task_param",
-                "photometry_param", "within_factor", "user")
+_PERDAY_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
+                "task_param", "photometry_param", "within_factor", "user")
 
 
 class _FlowMap(dict):
@@ -222,6 +222,9 @@ class PlanMouse(BaseModel):
     ``water_adjust`` は day ラベル -> その日に実際に与えた水分量 ml の辞書
     (実績値。BodyWeight.Water_adjust 由来)。GUI が算出する推奨給水量とは別に保持する。
     標準体重 std_bw は保存せず日齢と settings.yaml から算出する。
+    ``phase`` / ``session`` は day ラベル -> その個体・その日の phase / session の辞書。
+    同じ日でも個体によって進度がずれることがあるので、その日の標準(ステップ)を
+    個体単位で上書きしたい日だけ入れる。
     ``task_param`` は day ラベル -> その個体・その日に使う task パラメータ名の辞書。
     day の標準 (:class:`PlanDay` の ``task_param``) を上書きしたい日だけ入れる
     (標準と同じ日は入れない)。``photometry_param`` も同様に day ラベル -> その個体・
@@ -274,6 +277,8 @@ class PlanMouse(BaseModel):
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
     water_adjust: Dict[str, float] = Field(default_factory=dict)
+    phase: Dict[str, str] = Field(default_factory=dict)
+    session: Dict[str, int] = Field(default_factory=dict)
     task_param: Dict[str, str] = Field(default_factory=dict)
     photometry_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
@@ -740,6 +745,11 @@ def find_scheduled_mice(
                 session = day.session
                 day_code = format_day_code(day.day, day.phase, session)
                 for m in period.mice:
+                    # 個体別の上書き -> その日の標準(ステップ)の順で解決する。
+                    m_phase = (m.phase.get(label) if label else None) or day.phase
+                    m_sess = (m.session.get(label) if label else None)
+                    if m_sess is None:
+                        m_sess = session
                     task = (m.task_param.get(label) if label else None) or day.task_param
                     photo = (
                         (m.photometry_param.get(label) if label else None)
@@ -752,9 +762,9 @@ def find_scheduled_mice(
                             rel_label_ja=rel_label_ja,
                             date=d,
                             day_label=label,
-                            day_code=day_code,
-                            phase=day.phase,
-                            session=session,
+                            day_code=format_day_code(day.day, m_phase, m_sess),
+                            phase=m_phase,
+                            session=m_sess,
                             plan_name=plan_name,
                             period_name=period.name,
                             config_dir=cc.config_dir,
