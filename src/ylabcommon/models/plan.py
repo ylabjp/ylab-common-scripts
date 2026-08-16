@@ -65,6 +65,7 @@ __all__ = [
     "ExperimentPeriod",
     "ExperimentPlan",
     "ScheduledConfig",
+    "DuplicateKeyError",
     "load_plan",
     "save_plan",
     "iter_plan_files",
@@ -533,11 +534,52 @@ class ScheduledMouse(BaseModel):
         )
 
 
+#: 計画ファイルだと判る(トップレベルの)キー。
+_PLAN_MARKER_KEYS = ("program:", "trials:", "periods:", "days:", "cc_config:")
+
+
+def _looks_like_plan(path: Path) -> bool:
+    """拡張子に頼らず、中身が計画ファイルらしいかを見る。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            head = f.read(4096)
+    except (OSError, UnicodeDecodeError):
+        return False
+    return any(head.startswith(k) or f"\n{k}" in head for k in _PLAN_MARKER_KEYS)
+
+
+class DuplicateKeyError(ValueError):
+    """同じキーが 2 度書かれている YAML。後勝ちで前が消えるため読まない。"""
+
+
+def _check_duplicate_keys(text: str, name: str) -> None:
+    """トップレベルのキー重複を検出して弾く。
+
+    YAML は同じキーが 2 度あると**後ろで上書き**する。``periods:`` が 2 つ
+    書かれた計画ファイルが実在し、前半の Trial(3 個体)がどのツールからも
+    見えないまま失われた。黙って半分だけ読むより読み込みを断る。
+    """
+    seen, dup = set(), []
+    for line in text.split("\n"):
+        m = re.match(r"^([A-Za-z_][\w-]*):", line)
+        if not m:
+            continue
+        key = m.group(1)
+        if key in seen and key not in dup:
+            dup.append(key)
+        seen.add(key)
+    if dup:
+        raise DuplicateKeyError(
+            f"{name}: トップレベルのキーが重複しています: {', '.join(dup)}。"
+            "YAML は後勝ちなので前の内容が失われます。統合してから読み込んでください。")
+
+
 def load_plan(path: Union[str, Path]) -> ExperimentPlan:
     """YAML の実験計画を読み込み :class:`ExperimentPlan` を返す。"""
     path = Path(path)
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.load(f, Loader=_YamlLoader) or {}
+    text = path.read_text(encoding="utf-8")
+    _check_duplicate_keys(text, path.name)
+    data = yaml.load(text, Loader=_YamlLoader) or {}
     return ExperimentPlan.model_validate(data)
 
 
@@ -568,16 +610,28 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
 
 
 def iter_plan_files(plan_dir: Union[str, Path]) -> List[Path]:
-    """予定ディレクトリ内の計画 YAML を(名前順に)列挙する。存在しなければ空。"""
+    """予定ディレクトリ内の計画 YAML を(名前順に)列挙する。存在しなければ空。
+
+    拡張子は ``.yaml`` と ``.yml`` の両方を拾う(``.yml`` の計画が実在する)。
+    拡張子の無いファイルは拾えないので、**計画に見えるのに拡張子が無い**
+    ものは警告する。実例として ``prjDA11-1_RV_CSstop``(32 個体)が拡張子
+    無しで置かれ、GUI からも CC からも見えないまま残っていた。
+    """
     plan_dir = Path(plan_dir)
     if not plan_dir.is_dir():
         return []
     # サブフォルダ(plans/ など)も許容しつつ、隠し/テンポラリを避ける。
-    files = [
-        p
-        for p in sorted(plan_dir.rglob(PLAN_FILE_GLOB))
-        if p.is_file() and not p.name.startswith((".", "_"))
-    ]
+    files, hidden = [], []
+    for p in sorted(plan_dir.rglob("*")):
+        if not p.is_file() or p.name.startswith((".", "_")):
+            continue
+        if p.suffix.lower() in (".yaml", ".yml"):
+            files.append(p)
+        elif _looks_like_plan(p):
+            hidden.append(p)
+    for p in hidden:
+        print(f"[ylabcommon.plan] 計画に見えますが拡張子が .yaml/.yml でないため"
+              f"読み込まれません: {p}")
     return files
 
 
