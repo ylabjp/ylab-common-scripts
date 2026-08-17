@@ -36,8 +36,8 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
 
 # マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
 # (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
-_PERDAY_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
-                "task_param", "photometry_param", "within_factor", "user")
+PERDAY_DICT_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
+                    "task_param", "photometry_param", "within_factor", "user")
 
 
 class _FlowMap(dict):
@@ -54,6 +54,8 @@ _YamlDumper.add_representer(_FlowMap, _represent_flow_map)
 __all__ = [
     "PLAN_DIR_NAME",
     "PLAN_FILE_GLOB",
+    "PERDAY_DICT_KEYS",
+    "day_label_number",
     "USING_LIBYAML",
     "Period",
     "CCConfig",
@@ -82,7 +84,7 @@ __all__ = [
 _DAY_LABEL_RE = re.compile(r"^day(-?\d+)$")
 
 
-def _label_number(label) -> Optional[int]:
+def day_label_number(label) -> Optional[int]:
     """``"day-1"`` -> -1, ``"day01"`` -> 1。パースできなければ None。"""
     if not isinstance(label, str):
         return None
@@ -170,7 +172,7 @@ class PlanDay(BaseModel):
             if data.get("offset") is not None:
                 data["day"] = int(data["offset"]) + 1
             else:
-                n = _label_number(data.get("label"))
+                n = day_label_number(data.get("label"))
                 data["day"] = n if n is not None else 1
         data.pop("label", None)
         data.pop("offset", None)
@@ -214,6 +216,10 @@ class ResolvedDay(BaseModel):
         return f"day{self.day}"
 
 
+#: 旧: day -2 固定を前提にした項目名 -> 基準日つきの項目名。
+_LEGACY_BASELINE = {"age_day_2": "baseline_age", "actual_bw_day_2": "baseline_bw"}
+
+
 class PlanMouse(BaseModel):
     """マウス 1 個体分の名簿と、日ごとの実験台(operant chamber)割当。
 
@@ -246,7 +252,12 @@ class PlanMouse(BaseModel):
       読み込め、``20YY`` として解釈する。日齢は保存せず、GUI 側で
       termination(無ければ当日) - birth_date として算出する。
     - ``fail``: 実験失敗フラグ。
-    - ``age_day_2`` / ``actual_bw_day_2``: day-2 時点の日齢 / 実測体重 (g)。
+    - ``baseline_day`` / ``baseline_age`` / ``baseline_bw``: 給水制限を始める前の
+      **基準計量**。「どの day に測ったか」(``baseline_day``)と、その日の日齢
+      (``baseline_age``)・実測体重 g (``baseline_bw``)。予測体重はこの 3 つを
+      起点にする(:meth:`age_on`)。旧形式の ``age_day_2`` / ``actual_bw_day_2``
+      は day -2 固定の書き方で、読み込み時に ``baseline_day: -2`` を補って変換する。
+      基準日が固定でなくなったので、Trial の day 軸は -2 始まりに縛られない。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -260,8 +271,38 @@ class PlanMouse(BaseModel):
     birth_date: Optional[DateType] = None      # ISO 日付 (period.start と同じ形式)
     termination: Optional[DateType] = None     # ISO 日付。実験継続中なら未設定
     fail: bool = False
-    age_day_2: Optional[int] = None
-    actual_bw_day_2: Optional[float] = None
+    baseline_day: Optional[int] = None         # 基準計量を行った day
+    baseline_age: Optional[int] = None         # その day の日齢
+    baseline_bw: Optional[float] = None        # その day の実測体重 (g)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _baseline_from_legacy(cls, data):
+        """``age_day_2`` / ``actual_bw_day_2`` を基準日つきの形へ移す。
+
+        旧項目名は「day -2 で測ったもの」という前提を名前に埋め込んでいた。
+        基準日を ``baseline_day`` として外に出し、旧形式は -2 として読む
+        (実データ 934 個体中 931 個体で ``age_day_2`` が day -2 の日齢と一致)。
+        """
+        if not isinstance(data, dict):
+            return data
+        if not any(k in data for k in _LEGACY_BASELINE):
+            return data
+        data = dict(data)
+        for old, new in _LEGACY_BASELINE.items():
+            v = data.pop(old, None)
+            if v is not None and data.get(new) is None:
+                data[new] = v
+        if data.get("baseline_day") is None:
+            data["baseline_day"] = -2
+        return data
+
+    def age_on(self, day: int) -> Optional[int]:
+        """その day の日齢。基準計量からの差分で出す。"""
+        if self.baseline_age is None or self.baseline_day is None:
+            return None
+        return self.baseline_age + (day - self.baseline_day)
+
     @field_validator("birth_date", "termination", mode="before")
     @classmethod
     def _yymmdd_to_date(cls, v):
@@ -327,8 +368,8 @@ class ExperimentPlan(BaseModel):
     給水(絶水)管理:
     - ``water_restriction_ratio``: 目標体重の割合 (例 0.85 = 予測自由摂取体重の 85%)。
     - ``daily_evaporation_ml``: 1 日あたりの水分蒸発量 (ml)。給水量の算出に加味する。
-    予測自由摂取体重は settings.yaml の標準体重に対し、day-2 の実測体重
-    (:attr:`PlanMouse.actual_bw_day_2` / :attr:`PlanMouse.age_day_2`) の比を掛けて
+    予測自由摂取体重は settings.yaml の標準体重に対し、基準計量
+    (:attr:`PlanMouse.baseline_bw` / :attr:`PlanMouse.baseline_age`) の比を掛けて
     求める(算出は GUI 側。標準体重データが behavior-config にあるため)。
     """
 
@@ -593,7 +634,7 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
     # 実験内容より体重表のほうが長くなってしまうため(内容は一切変えない)。
     for trial in data.get("trials", []) or []:
         for mouse in (trial.get("mice") or []):
-            for key in _PERDAY_KEYS:
+            for key in PERDAY_DICT_KEYS:
                 v = mouse.get(key)
                 if isinstance(v, dict) and v:
                     mouse[key] = _FlowMap(v)
