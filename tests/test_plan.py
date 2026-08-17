@@ -106,8 +106,10 @@ def test_round_trip():
     assert p0.mice[0].birth_date == date(2025, 12, 1)      # ISO date, like period.start
     assert p0.mice[0].termination == date(2026, 4, 30)
     assert p0.mice[0].fail is True
-    assert p0.mice[0].age_day_2 == 54
-    assert p0.mice[0].actual_bw_day_2 == 22.1
+    # the legacy day-2 field names come back as a baseline with its day written down
+    assert p0.mice[0].baseline_day == -2
+    assert p0.mice[0].baseline_age == 54
+    assert p0.mice[0].baseline_bw == 22.1
     # defaults stay omitted for the second mouse
     assert p0.mice[1].fail is False
     assert p0.mice[1].ear_tag is None
@@ -461,6 +463,25 @@ def test_find_scheduled_mice_window0_and_sort():
     assert m1.within_factor == "paired"
     # sort key (offset, slot, prj, mouse_id): same slot/prj -> m1 before m2
     assert [s.mouse_id for s in only_today] == ["m1", "m2"]
+
+
+def test_baseline_day_is_explicit_and_ages_from_it():
+    """The baseline weighing carries its own day instead of assuming day -2."""
+    legacy = PlanMouse.model_validate(
+        {"mouse_id": "m1", "age_day_2": 36, "actual_bw_day_2": 15.9})
+    assert (legacy.baseline_day, legacy.baseline_age, legacy.baseline_bw) == (-2, 36, 15.9)
+    assert not legacy.model_extra          # the old keys do not linger as extras
+    # age counts from the baseline day, so day -2 is the baseline age itself
+    assert [legacy.age_on(d) for d in (-2, -1, 0, 1)] == [36, 37, 38, 39]
+
+    # a trial that starts anywhere else states its own baseline day
+    late = PlanMouse(mouse_id="m2", baseline_day=11, baseline_age=50, baseline_bw=20.0)
+    assert late.age_on(11) == 50 and late.age_on(14) == 53
+    assert PlanMouse(mouse_id="m3").age_on(1) is None      # nothing to count from
+
+    # an explicit baseline_day wins over the -2 the legacy names imply
+    both = PlanMouse.model_validate({"mouse_id": "m4", "baseline_day": 0, "age_day_2": 40})
+    assert (both.baseline_day, both.baseline_age) == (0, 40)
 
 
 def _run_standalone() -> int:
