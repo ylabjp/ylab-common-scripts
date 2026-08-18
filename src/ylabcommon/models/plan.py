@@ -64,6 +64,7 @@ __all__ = [
     "ResolvedDay",
     "PlanMouse",
     "CustomColumn",
+    "RESERVED_CUSTOM_KEYS",
     "ExperimentTrial",
     "ExperimentPeriod",
     "ExperimentPlan",
@@ -223,6 +224,11 @@ _LEGACY_BASELINE = {"age_day_2": "baseline_age", "actual_bw_day_2": "baseline_bw
 #: :attr:`CustomColumn.type` に取れる値。
 CUSTOM_TEXT = "text"
 CUSTOM_CHOICE = "choice"
+
+#: 追加列のキーに使えない名前。日ごとの値の名前とぶつかると「どちらの列か」が
+#: 決まらなくなるので、名前空間で逃げずに**衝突させて弾く**(GUI が入力時に検査)。
+#: ``day`` / ``date`` / ``skip`` は day そのものの語なので併せて予約する。
+RESERVED_CUSTOM_KEYS = frozenset(PERDAY_DICT_KEYS) | {"day", "date", "skip", "note"}
 
 
 class CustomColumn(BaseModel):
