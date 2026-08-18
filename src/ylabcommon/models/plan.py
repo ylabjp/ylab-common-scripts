@@ -100,8 +100,9 @@ PLAN_DIR_NAME = "controller-expdata"
 # 予定ディレクトリ内で計画ファイルとして扱う glob パターン。
 PLAN_FILE_GLOB = "*.yaml"
 
-# 相対日ラベル(offset 日 -> 日本語表記)。
-_REL_LABEL_JA = {-2: "一昨日", -1: "昨日", 0: "今日", 1: "明日", 2: "明後日"}
+# 相対日ラベル(offset 日 -> 表示文字列)。表示は英語に統一している。
+_REL_LABEL = {-2: "2 days ago", -1: "yesterday", 0: "today",
+              1: "tomorrow", 2: "in 2 days"}
 _REL_KEY = {-1: "yesterday", 0: "today", 1: "tomorrow"}
 
 
@@ -559,7 +560,7 @@ class ScheduledConfig(BaseModel):
 
     offset: int  # 基準日からの日数 (-1=昨日, 0=今日, +1=明日)
     rel_key: str  # "yesterday" / "today" / "tomorrow" / "+N" など
-    rel_label_ja: str  # 昨日 / 今日 / 明日 など
+    rel_label: str     # yesterday / today / tomorrow など
     date: DateType
     day_label: str = ""  # マウス辞書キーと同じ ``dayN``
     day_code: str = ""   # day + phase + session を符号化 (例 ``day01-phase01S03``)。CC 転送用
@@ -571,13 +572,18 @@ class ScheduledConfig(BaseModel):
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
 
+    @property
+    def rel_label_ja(self) -> str:
+        """旧名。CC controller 側が読んでいるので残す(中身は英語)。"""
+        return self.rel_label
+
     def display_label(self) -> str:
-        """選択ダイアログ 1 行分の日本語表示文字列。"""
-        task = self.task_param or "(task未指定)"
+        """選択ダイアログ 1 行分の表示文字列(英語)。"""
+        task = self.task_param or "(no task)"
         code = (self.day_code + " ") if self.day_code else ""
         origin = self.plan_name + (f":{self.period_name}" if self.period_name else "")
         return (
-            f"【{self.rel_label_ja} {self.date.isoformat()}】 "
+            f"[{self.rel_label} {self.date.isoformat()}] "
             f"{code}{self.config_dir} / {task}  «{origin}»"
         )
 
@@ -594,7 +600,7 @@ class ScheduledMouse(BaseModel):
 
     offset: int
     rel_key: str
-    rel_label_ja: str
+    rel_label: str
     date: DateType
     day_label: str = ""
     day_code: str = ""        # day + phase + session を符号化 (例 ``day01-phase01S03``)。CC 転送用
@@ -614,14 +620,19 @@ class ScheduledMouse(BaseModel):
     ear_tag: str = ""
     within_factor: str = ""   # その day の水準
 
+    @property
+    def rel_label_ja(self) -> str:
+        """旧名。CC controller 側が読んでいるので残す(中身は英語)。"""
+        return self.rel_label
+
     def display_label(self) -> str:
-        """選択リスト 1 行分の日本語表示文字列。"""
+        """選択リスト 1 行分の表示文字列(英語)。"""
         who = self.mouse_id or "(no id)"
         slot = f"[{self.slot}] " if self.slot else ""
         cond = f"/{self.cond}" if self.cond else ""
-        task = self.task_param or "(task未指定)"
+        task = self.task_param or "(no task)"
         return (
-            f"【{self.rel_label_ja} {self.date.isoformat()}】 {slot}{who} "
+            f"[{self.rel_label} {self.date.isoformat()}] {slot}{who} "
             f"{self.prj}{cond} — {self.config_dir} / {task}"
         )
 
@@ -662,8 +673,9 @@ def _check_duplicate_keys(text: str, name: str) -> None:
         seen.add(key)
     if dup:
         raise DuplicateKeyError(
-            f"{name}: トップレベルのキーが重複しています: {', '.join(dup)}。"
-            "YAML は後勝ちなので前の内容が失われます。統合してから読み込んでください。")
+            f"{name}: duplicate top-level key(s): {', '.join(dup)}. "
+            "YAML keeps the last one, so the earlier content would be lost. "
+            "Merge them before loading.")
 
 
 def load_plan(path: Union[str, Path]) -> ExperimentPlan:
@@ -728,8 +740,8 @@ def iter_plan_files(plan_dir: Union[str, Path]) -> List[Path]:
         elif _looks_like_plan(p):
             hidden.append(p)
     for p in hidden:
-        print(f"[ylabcommon.plan] 計画に見えますが拡張子が .yaml/.yml でないため"
-              f"読み込まれません: {p}")
+        print(f"[ylabcommon.plan] looks like a plan but has no .yaml/.yml "
+              f"extension, so it is not loaded: {p}")
     return files
 
 
@@ -740,14 +752,14 @@ def load_plans(plan_dir: Union[str, Path]) -> List[Tuple[Path, ExperimentPlan]]:
         try:
             result.append((p, load_plan(p)))
         except Exception as e:  # noqa: BLE001 - 1 ファイルの破損で全体を止めない
-            print(f"[ylabcommon.plan] 計画ファイルの読み込みに失敗: {p}: {e}")
+            print(f"[ylabcommon.plan] failed to read plan file: {p}: {e}")
     return result
 
 
 def _rel_labels(offset: int) -> Tuple[str, str]:
-    """offset -> (rel_key, rel_label_ja)。"""
+    """offset -> (rel_key, rel_label)。"""
     key = _REL_KEY.get(offset, f"{offset:+d}")
-    label = _REL_LABEL_JA.get(offset, f"{offset:+d}日")
+    label = _REL_LABEL.get(offset, f"{offset:+d}d")
     return key, label
 
 
@@ -837,13 +849,13 @@ def find_scheduled_configs(
                 offset = (d - ref_date).days
                 if abs(offset) > window_days:
                     continue
-                rel_key, rel_label_ja = _rel_labels(offset)
+                rel_key, rel_label = _rel_labels(offset)
                 session = day.session
                 found.append(
                     ScheduledConfig(
                         offset=offset,
                         rel_key=rel_key,
-                        rel_label_ja=rel_label_ja,
+                        rel_label=rel_label,
                         date=d,
                         day_label=day.label,
                         day_code=format_day_code(day.day, day.phase, session),
@@ -892,7 +904,7 @@ def find_scheduled_mice(
                 offset = (d - ref_date).days
                 if abs(offset) > window_days:
                     continue
-                rel_key, rel_label_ja = _rel_labels(offset)
+                rel_key, rel_label = _rel_labels(offset)
                 label = day.label
                 session = day.session
                 day_code = format_day_code(day.day, day.phase, session)
@@ -911,7 +923,7 @@ def find_scheduled_mice(
                         ScheduledMouse(
                             offset=offset,
                             rel_key=rel_key,
-                            rel_label_ja=rel_label_ja,
+                            rel_label=rel_label,
                             date=d,
                             day_label=label,
                             day_code=format_day_code(day.day, m_phase, m_sess),

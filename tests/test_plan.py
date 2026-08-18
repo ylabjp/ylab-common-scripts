@@ -350,7 +350,8 @@ def test_find_today_yesterday_tomorrow():
     assert set(by_offset) == {-1, 0, 1}
     assert by_offset[0].day_label == "day2"
     assert by_offset[0].date == date(2026, 4, 27)
-    assert by_offset[0].rel_label_ja == "今日"
+    assert by_offset[0].rel_label == "today"
+    assert by_offset[0].rel_label_ja == "today"      # old name still reads
     assert by_offset[0].task_param == "cond.json"
     assert by_offset[0].config_dir == "config_OFL_2025"
     assert by_offset[0].period_name == "cohort1"
@@ -359,7 +360,7 @@ def test_find_today_yesterday_tomorrow():
     assert by_offset[0].day_code == "day02-phase01S02"
     assert by_offset[1].photometry_param == "no_stim.json"        # day3 標準
     assert by_offset[-1].photometry_param == "20Hz_470_405nm.json"  # day1 標準
-    assert "今日" in by_offset[0].display_label()
+    assert "today" in by_offset[0].display_label()
     assert "day02-phase01S02" in by_offset[0].display_label()
     assert "config_OFL_2025" in by_offset[0].display_label()
 
