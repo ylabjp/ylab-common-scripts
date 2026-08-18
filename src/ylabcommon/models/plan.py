@@ -63,6 +63,7 @@ __all__ = [
     "ProgramStep",
     "ResolvedDay",
     "PlanMouse",
+    "CustomColumn",
     "ExperimentTrial",
     "ExperimentPeriod",
     "ExperimentPlan",
@@ -219,6 +220,47 @@ class ResolvedDay(BaseModel):
 #: 旧: day -2 固定を前提にした項目名 -> 基準日つきの項目名。
 _LEGACY_BASELINE = {"age_day_2": "baseline_age", "actual_bw_day_2": "baseline_bw"}
 
+#: :attr:`CustomColumn.type` に取れる値。
+CUSTOM_TEXT = "text"
+CUSTOM_CHOICE = "choice"
+
+
+class CustomColumn(BaseModel):
+    """この Plan だけに足す、日ごとの自由記入欄 (:attr:`ExperimentPlan.custom_columns`)。
+
+    プロトコルによって記録したい項目は違うので、モデルに項目を増やすのではなく
+    **ファイル単位で列を宣言**する。値は個体の :attr:`PlanMouse.custom` に
+    ``{列キー: {day ラベル: 値}}`` で入り、他の日ごとの値と同じ扱いになる。
+
+    - ``key``: YAML に書かれる列キー。個体側の辞書のキーでもある。
+    - ``label``: 画面の見出し。省略時は ``key``。
+    - ``type``: ``text``(1 行フリーテキスト)または ``choice``(ドロップダウン)。
+    - ``options``: ``choice`` のときの選択肢。**この Plan の中だけで有効**。
+      空欄も選べるよう、GUI は先頭に空を足す。自由入力も許すので、
+      候補に無い値が既に入っていても失われない。
+    """
+
+    key: str
+    label: str = ""
+    type: str = CUSTOM_TEXT
+    options: List[str] = Field(default_factory=list)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _known_type(cls, v):
+        """未知の型は text 扱い(将来の型を書いたファイルでも読めなくならない)。"""
+        s = str(v or "").strip().lower()
+        return s if s in (CUSTOM_TEXT, CUSTOM_CHOICE) else CUSTOM_TEXT
+
+    @property
+    def title(self) -> str:
+        """画面に出す名前。"""
+        return self.label or self.key
+
+    @property
+    def is_choice(self) -> bool:
+        return self.type == CUSTOM_CHOICE
+
 
 class PlanMouse(BaseModel):
     """マウス 1 個体分の名簿と、日ごとの実験台(operant chamber)割当。
@@ -325,6 +367,8 @@ class PlanMouse(BaseModel):
     photometry_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
     user: Dict[str, str] = Field(default_factory=dict)
+    #: Plan が宣言した追加列の値。``{列キー: {day ラベル: 値}}``。
+    custom: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
@@ -376,6 +420,7 @@ class ExperimentPlan(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     within_factors: List[str] = Field(default_factory=list)
+    custom_columns: List["CustomColumn"] = Field(default_factory=list)
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
@@ -638,6 +683,12 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
                 v = mouse.get(key)
                 if isinstance(v, dict) and v:
                     mouse[key] = _FlowMap(v)
+            # custom は 1 段深い ({列キー: {day: 値}}) ので内側だけ 1 行にする。
+            custom = mouse.get("custom")
+            if isinstance(custom, dict):
+                for col, days in list(custom.items()):
+                    if isinstance(days, dict) and days:
+                        custom[col] = _FlowMap(days)
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(
             data,
