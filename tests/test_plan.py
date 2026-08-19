@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 from datetime import date
+from pathlib import Path
 
 # src レイアウトを直接 import できるようにする(インストール前でも検証可能に)。
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
@@ -349,7 +350,8 @@ def test_find_today_yesterday_tomorrow():
     assert set(by_offset) == {-1, 0, 1}
     assert by_offset[0].day_label == "day2"
     assert by_offset[0].date == date(2026, 4, 27)
-    assert by_offset[0].rel_label_ja == "今日"
+    assert by_offset[0].rel_label == "today"
+    assert by_offset[0].rel_label_ja == "today"      # old name still reads
     assert by_offset[0].task_param == "cond.json"
     assert by_offset[0].config_dir == "config_OFL_2025"
     assert by_offset[0].period_name == "cohort1"
@@ -358,7 +360,7 @@ def test_find_today_yesterday_tomorrow():
     assert by_offset[0].day_code == "day02-phase01S02"
     assert by_offset[1].photometry_param == "no_stim.json"        # day3 標準
     assert by_offset[-1].photometry_param == "20Hz_470_405nm.json"  # day1 標準
-    assert "今日" in by_offset[0].display_label()
+    assert "today" in by_offset[0].display_label()
     assert "day02-phase01S02" in by_offset[0].display_label()
     assert "config_OFL_2025" in by_offset[0].display_label()
 
@@ -482,6 +484,42 @@ def test_baseline_day_is_explicit_and_ages_from_it():
     # an explicit baseline_day wins over the -2 the legacy names imply
     both = PlanMouse.model_validate({"mouse_id": "m4", "baseline_day": 0, "age_day_2": 40})
     assert (both.baseline_day, both.baseline_age) == (0, 40)
+
+
+def test_custom_columns_are_per_file():
+    """Extra per-day columns are declared by the plan, values sit on the mouse."""
+    from ylabcommon.models.plan import CustomColumn
+
+    plan = ExperimentPlan(
+        custom_columns=[CustomColumn(key="injection", label="注射"),
+                        CustomColumn(key="cage", type="choice", options=["A", "B"]),
+                        CustomColumn(key="odd", type="something-new")],
+        program=[ProgramStep(phase="1")],
+        trials=[ExperimentTrial(name="t", days=[PlanDay(day=1)],
+                                mice=[PlanMouse(mouse_id="m1",
+                                                custom={"injection": {"day1": "saline"}})])])
+    assert [c.title for c in plan.custom_columns] == ["注射", "cage", "odd"]
+    assert [c.is_choice for c in plan.custom_columns] == [False, True, False]
+    # an unknown type must not make the file unreadable
+    assert plan.custom_columns[2].type == "text"
+
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "custom.yaml"
+        save_plan(plan, p)
+        text = p.read_text(encoding="utf-8")
+        assert "injection: {day1: saline}" in text      # one line, like the others
+        back = load_plan(p)
+        assert [(c.key, c.type, c.options) for c in back.custom_columns] == [
+            ("injection", "text", []), ("cage", "choice", ["A", "B"]), ("odd", "text", [])]
+        assert back.trials[0].mice[0].custom == {"injection": {"day1": "saline"}}
+        # a plan without any keeps writing nothing
+        assert "custom" not in save_and_read_plain(ExperimentPlan(program=[ProgramStep()]), d)
+
+
+def save_and_read_plain(plan, d) -> str:
+    p = Path(d) / "plain.yaml"
+    save_plan(plan, p)
+    return p.read_text(encoding="utf-8")
 
 
 def _run_standalone() -> int:

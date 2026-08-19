@@ -63,6 +63,8 @@ __all__ = [
     "ProgramStep",
     "ResolvedDay",
     "PlanMouse",
+    "CustomColumn",
+    "RESERVED_CUSTOM_KEYS",
     "ExperimentTrial",
     "ExperimentPeriod",
     "ExperimentPlan",
@@ -98,8 +100,9 @@ PLAN_DIR_NAME = "controller-expdata"
 # 予定ディレクトリ内で計画ファイルとして扱う glob パターン。
 PLAN_FILE_GLOB = "*.yaml"
 
-# 相対日ラベル(offset 日 -> 日本語表記)。
-_REL_LABEL_JA = {-2: "一昨日", -1: "昨日", 0: "今日", 1: "明日", 2: "明後日"}
+# 相対日ラベル(offset 日 -> 表示文字列)。表示は英語に統一している。
+_REL_LABEL = {-2: "2 days ago", -1: "yesterday", 0: "today",
+              1: "tomorrow", 2: "in 2 days"}
 _REL_KEY = {-1: "yesterday", 0: "today", 1: "tomorrow"}
 
 
@@ -219,6 +222,52 @@ class ResolvedDay(BaseModel):
 #: 旧: day -2 固定を前提にした項目名 -> 基準日つきの項目名。
 _LEGACY_BASELINE = {"age_day_2": "baseline_age", "actual_bw_day_2": "baseline_bw"}
 
+#: :attr:`CustomColumn.type` に取れる値。
+CUSTOM_TEXT = "text"
+CUSTOM_CHOICE = "choice"
+
+#: 追加列のキーに使えない名前。日ごとの値の名前とぶつかると「どちらの列か」が
+#: 決まらなくなるので、名前空間で逃げずに**衝突させて弾く**(GUI が入力時に検査)。
+#: ``day`` / ``date`` / ``skip`` は day そのものの語なので併せて予約する。
+RESERVED_CUSTOM_KEYS = frozenset(PERDAY_DICT_KEYS) | {"day", "date", "skip", "note"}
+
+
+class CustomColumn(BaseModel):
+    """この Plan だけに足す、日ごとの自由記入欄 (:attr:`ExperimentPlan.custom_columns`)。
+
+    プロトコルによって記録したい項目は違うので、モデルに項目を増やすのではなく
+    **ファイル単位で列を宣言**する。値は個体の :attr:`PlanMouse.custom` に
+    ``{列キー: {day ラベル: 値}}`` で入り、他の日ごとの値と同じ扱いになる。
+
+    - ``key``: YAML に書かれる列キー。個体側の辞書のキーでもある。
+    - ``label``: 画面の見出し。省略時は ``key``。
+    - ``type``: ``text``(1 行フリーテキスト)または ``choice``(ドロップダウン)。
+    - ``options``: ``choice`` のときの選択肢。**この Plan の中だけで有効**。
+      空欄も選べるよう、GUI は先頭に空を足す。自由入力も許すので、
+      候補に無い値が既に入っていても失われない。
+    """
+
+    key: str
+    label: str = ""
+    type: str = CUSTOM_TEXT
+    options: List[str] = Field(default_factory=list)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _known_type(cls, v):
+        """未知の型は text 扱い(将来の型を書いたファイルでも読めなくならない)。"""
+        s = str(v or "").strip().lower()
+        return s if s in (CUSTOM_TEXT, CUSTOM_CHOICE) else CUSTOM_TEXT
+
+    @property
+    def title(self) -> str:
+        """画面に出す名前。"""
+        return self.label or self.key
+
+    @property
+    def is_choice(self) -> bool:
+        return self.type == CUSTOM_CHOICE
+
 
 class PlanMouse(BaseModel):
     """マウス 1 個体分の名簿と、日ごとの実験台(operant chamber)割当。
@@ -325,6 +374,8 @@ class PlanMouse(BaseModel):
     photometry_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
     user: Dict[str, str] = Field(default_factory=dict)
+    #: Plan が宣言した追加列の値。``{列キー: {day ラベル: 値}}``。
+    custom: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     note: Optional[str] = None
 
 
@@ -376,6 +427,7 @@ class ExperimentPlan(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     within_factors: List[str] = Field(default_factory=list)
+    custom_columns: List["CustomColumn"] = Field(default_factory=list)
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
@@ -508,7 +560,7 @@ class ScheduledConfig(BaseModel):
 
     offset: int  # 基準日からの日数 (-1=昨日, 0=今日, +1=明日)
     rel_key: str  # "yesterday" / "today" / "tomorrow" / "+N" など
-    rel_label_ja: str  # 昨日 / 今日 / 明日 など
+    rel_label: str     # yesterday / today / tomorrow など
     date: DateType
     day_label: str = ""  # マウス辞書キーと同じ ``dayN``
     day_code: str = ""   # day + phase + session を符号化 (例 ``day01-phase01S03``)。CC 転送用
@@ -520,13 +572,18 @@ class ScheduledConfig(BaseModel):
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
 
+    @property
+    def rel_label_ja(self) -> str:
+        """旧名。CC controller 側が読んでいるので残す(中身は英語)。"""
+        return self.rel_label
+
     def display_label(self) -> str:
-        """選択ダイアログ 1 行分の日本語表示文字列。"""
-        task = self.task_param or "(task未指定)"
+        """選択ダイアログ 1 行分の表示文字列(英語)。"""
+        task = self.task_param or "(no task)"
         code = (self.day_code + " ") if self.day_code else ""
         origin = self.plan_name + (f":{self.period_name}" if self.period_name else "")
         return (
-            f"【{self.rel_label_ja} {self.date.isoformat()}】 "
+            f"[{self.rel_label} {self.date.isoformat()}] "
             f"{code}{self.config_dir} / {task}  «{origin}»"
         )
 
@@ -543,7 +600,7 @@ class ScheduledMouse(BaseModel):
 
     offset: int
     rel_key: str
-    rel_label_ja: str
+    rel_label: str
     date: DateType
     day_label: str = ""
     day_code: str = ""        # day + phase + session を符号化 (例 ``day01-phase01S03``)。CC 転送用
@@ -563,14 +620,19 @@ class ScheduledMouse(BaseModel):
     ear_tag: str = ""
     within_factor: str = ""   # その day の水準
 
+    @property
+    def rel_label_ja(self) -> str:
+        """旧名。CC controller 側が読んでいるので残す(中身は英語)。"""
+        return self.rel_label
+
     def display_label(self) -> str:
-        """選択リスト 1 行分の日本語表示文字列。"""
+        """選択リスト 1 行分の表示文字列(英語)。"""
         who = self.mouse_id or "(no id)"
         slot = f"[{self.slot}] " if self.slot else ""
         cond = f"/{self.cond}" if self.cond else ""
-        task = self.task_param or "(task未指定)"
+        task = self.task_param or "(no task)"
         return (
-            f"【{self.rel_label_ja} {self.date.isoformat()}】 {slot}{who} "
+            f"[{self.rel_label} {self.date.isoformat()}] {slot}{who} "
             f"{self.prj}{cond} — {self.config_dir} / {task}"
         )
 
@@ -611,8 +673,9 @@ def _check_duplicate_keys(text: str, name: str) -> None:
         seen.add(key)
     if dup:
         raise DuplicateKeyError(
-            f"{name}: トップレベルのキーが重複しています: {', '.join(dup)}。"
-            "YAML は後勝ちなので前の内容が失われます。統合してから読み込んでください。")
+            f"{name}: duplicate top-level key(s): {', '.join(dup)}. "
+            "YAML keeps the last one, so the earlier content would be lost. "
+            "Merge them before loading.")
 
 
 def load_plan(path: Union[str, Path]) -> ExperimentPlan:
@@ -638,6 +701,12 @@ def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
                 v = mouse.get(key)
                 if isinstance(v, dict) and v:
                     mouse[key] = _FlowMap(v)
+            # custom は 1 段深い ({列キー: {day: 値}}) ので内側だけ 1 行にする。
+            custom = mouse.get("custom")
+            if isinstance(custom, dict):
+                for col, days in list(custom.items()):
+                    if isinstance(days, dict) and days:
+                        custom[col] = _FlowMap(days)
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(
             data,
@@ -671,8 +740,8 @@ def iter_plan_files(plan_dir: Union[str, Path]) -> List[Path]:
         elif _looks_like_plan(p):
             hidden.append(p)
     for p in hidden:
-        print(f"[ylabcommon.plan] 計画に見えますが拡張子が .yaml/.yml でないため"
-              f"読み込まれません: {p}")
+        print(f"[ylabcommon.plan] looks like a plan but has no .yaml/.yml "
+              f"extension, so it is not loaded: {p}")
     return files
 
 
@@ -683,14 +752,14 @@ def load_plans(plan_dir: Union[str, Path]) -> List[Tuple[Path, ExperimentPlan]]:
         try:
             result.append((p, load_plan(p)))
         except Exception as e:  # noqa: BLE001 - 1 ファイルの破損で全体を止めない
-            print(f"[ylabcommon.plan] 計画ファイルの読み込みに失敗: {p}: {e}")
+            print(f"[ylabcommon.plan] failed to read plan file: {p}: {e}")
     return result
 
 
 def _rel_labels(offset: int) -> Tuple[str, str]:
-    """offset -> (rel_key, rel_label_ja)。"""
+    """offset -> (rel_key, rel_label)。"""
     key = _REL_KEY.get(offset, f"{offset:+d}")
-    label = _REL_LABEL_JA.get(offset, f"{offset:+d}日")
+    label = _REL_LABEL.get(offset, f"{offset:+d}d")
     return key, label
 
 
@@ -780,13 +849,13 @@ def find_scheduled_configs(
                 offset = (d - ref_date).days
                 if abs(offset) > window_days:
                     continue
-                rel_key, rel_label_ja = _rel_labels(offset)
+                rel_key, rel_label = _rel_labels(offset)
                 session = day.session
                 found.append(
                     ScheduledConfig(
                         offset=offset,
                         rel_key=rel_key,
-                        rel_label_ja=rel_label_ja,
+                        rel_label=rel_label,
                         date=d,
                         day_label=day.label,
                         day_code=format_day_code(day.day, day.phase, session),
@@ -835,7 +904,7 @@ def find_scheduled_mice(
                 offset = (d - ref_date).days
                 if abs(offset) > window_days:
                     continue
-                rel_key, rel_label_ja = _rel_labels(offset)
+                rel_key, rel_label = _rel_labels(offset)
                 label = day.label
                 session = day.session
                 day_code = format_day_code(day.day, day.phase, session)
@@ -854,7 +923,7 @@ def find_scheduled_mice(
                         ScheduledMouse(
                             offset=offset,
                             rel_key=rel_key,
-                            rel_label_ja=rel_label_ja,
+                            rel_label=rel_label,
                             date=d,
                             day_label=label,
                             day_code=format_day_code(day.day, m_phase, m_sess),
