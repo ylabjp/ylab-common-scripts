@@ -723,6 +723,12 @@ def iter_plan_files(plan_dir: Union[str, Path]) -> List[Path]:
     """予定ディレクトリ内の計画 YAML を(名前順に)列挙する。存在しなければ空。
 
     拡張子は ``.yaml`` と ``.yml`` の両方を拾う(``.yml`` の計画が実在する)。
+
+    同じフォルダには計画でない YAML も置いてある(``settings.yaml`` /
+    ``experimental_slot.yaml`` などのマスタ)。**中身が計画でないファイルは
+    そもそも返さない**。以前は拡張子だけで拾っていたため、CC の起動ログに
+    ``experimental_slot.yaml`` の検証エラーが毎回出て、本当の問題を隠していた。
+
     拡張子の無いファイルは拾えないので、**計画に見えるのに拡張子が無い**
     ものは警告する。実例として ``prjDA11-1_RV_CSstop``(32 個体)が拡張子
     無しで置かれ、GUI からも CC からも見えないまま残っていた。
@@ -736,7 +742,8 @@ def iter_plan_files(plan_dir: Union[str, Path]) -> List[Path]:
         if not p.is_file() or p.name.startswith((".", "_")):
             continue
         if p.suffix.lower() in (".yaml", ".yml"):
-            files.append(p)
+            if _looks_like_plan(p):
+                files.append(p)
         elif _looks_like_plan(p):
             hidden.append(p)
     for p in hidden:
