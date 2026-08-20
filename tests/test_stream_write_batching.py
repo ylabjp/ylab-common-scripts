@@ -108,3 +108,67 @@ def test_memory_stays_bounded_by_the_block_size(tmp_path, monkeypatch):
 
     assert len(sizes) == T // 2, "ブロックに分けずに読んでいる"
     assert max(sizes) == 2 * C * Z * 4 * 4
+
+
+# ---- 入力を畳む配列 (z 投影など) --------------------------------------------
+
+def test_a_z_reducing_array_is_blocked_by_what_it_reads(tmp_path, monkeypatch):
+    """出力ではなく **元をどれだけ読むか** でブロックを決めること。
+
+    回帰 (実データでメモリ不足): z 投影は出力 Z=1 だが、1 時点を作るのに元の面が
+    Z 枚要る。出力の大きさでブロックを決めると読む量を Z 倍見誤り、
+    C=2・1024x1024・Z=41 で t_block=64 -> 元を 5248 面 = 10.5 GiB 一度に読んで
+    落ちた (書きかけの 1 KB が残った)。
+    """
+    tracker = _Tracker()
+    T, C, Z = 12, 2, 6
+    volume = _volume(tracker, T, C, Z)
+    projection = volume.sum(axis=2, keepdims=True, dtype=np.uint32).astype(np.uint16)
+
+    # 1 ブロック = 元の 2 時点ぶん
+    source_per_frame = C * Z * 4 * 4 * 2
+    monkeypatch.setattr(W, "_STREAM_BLOCK_BYTES", 2 * source_per_frame)
+
+    sizes = []
+    real = W._read_block
+    monkeypatch.setattr(W, "_read_block",
+                        lambda b: sizes.append(int(b.shape[0])) or real(b))
+
+    out = tmp_path / "proj.ome.tif"
+    W.BioIOWriter(out, compression="zlib", compression_level=1)._write_ometiff_streaming(
+        projection, out, channel_names=None, physical_pixel_sizes=(1.0, 0.5, 0.5),
+        source_bytes_per_frame=source_per_frame)
+
+    assert max(sizes) == 2, "元の読み出し量を無視してブロックを決めている (%s)" % sizes
+    assert len(sizes) == T // 2
+
+
+def test_the_hint_is_optional_and_changes_nothing_when_absent(tmp_path, monkeypatch):
+    """渡さなければ従来どおり (出力の大きさで決める)。"""
+    tracker = _Tracker()
+    T, C, Z = 12, 2, 1
+    monkeypatch.setattr(W, "_STREAM_BLOCK_BYTES", 2 * C * Z * 4 * 4 * 2)
+
+    sizes = []
+    real = W._read_block
+    monkeypatch.setattr(W, "_read_block",
+                        lambda b: sizes.append(int(b.shape[0])) or real(b))
+    _write(tmp_path, _volume(tracker, T, C, Z), "default.ome.tif")
+
+    assert max(sizes) == 2
+
+
+def test_the_projection_values_survive_the_blocking(tmp_path):
+    """ブロックに分けても、書き出した値が合計と一致すること。"""
+    tracker = _Tracker()
+    T, C, Z = 6, 2, 3
+    volume = _volume(tracker, T, C, Z)
+    projection = volume.sum(axis=2, keepdims=True, dtype=np.uint32).astype(np.uint16)
+
+    out = tmp_path / "sum.ome.tif"
+    W.BioIOWriter(out, compression="zlib", compression_level=1)._write_ometiff_streaming(
+        projection, out, channel_names=None, physical_pixel_sizes=(1.0, 0.5, 0.5),
+        source_bytes_per_frame=C * Z * 4 * 4 * 2)
+
+    got = tifffile.imread(out).reshape(T, C, 1, 4, 4)
+    np.testing.assert_array_equal(got, np.asarray(projection))

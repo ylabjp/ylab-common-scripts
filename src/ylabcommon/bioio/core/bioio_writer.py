@@ -197,14 +197,24 @@ class BioIOWriter:
         *,
         channel_names: Optional[Sequence[str]],
         physical_pixel_sizes: Optional[tuple[float, float, float]],
+        source_bytes_per_frame: Optional[int] = None,
     ) -> None:
         """Stream a large TCZYX dask array to OME-TIFF without materializing it.
 
-        Planes are computed in bounded Z-blocks (~256 MB) and written one Y/X page
+        Planes are computed in bounded blocks (~256 MB) and written one Y/X page
         at a time via tifffile, so peak memory stays ~one block instead of the
         whole volume. Assumes TCZYX order and that the source dask array is chunked
         finely enough (per plane/scene) that reading a block does not pull the
         entire volume — a monolithic single-chunk source cannot be streamed.
+
+        Args:
+            source_bytes_per_frame: how many bytes of *source* data one output
+                time point costs to read. Defaults to the output's own size,
+                which is right only when the array is read straight through.
+                **Pass it whenever the array reduces its input** — a Z projection
+                reads Z planes per output plane, so sizing blocks from the output
+                underestimates the read by a factor of Z. See the comment on
+                ``t_block`` below for the failure this caused.
         """
         import tifffile
 
@@ -237,7 +247,14 @@ class BioIOWriter:
         #
         # 時点をまとめて 1 回で読めば、その中のファイルは dask のスケジューラが同時に
         # 読む。待ち時間なので重ねられる (ヘッダ読みと同じ理屈)。
-        t_block = max(1, (_STREAM_BLOCK_BYTES) // (max(C * Z, 1) * plane_bytes))
+        #
+        # ブロックの大きさは「**元をどれだけ読むか**」で決める。出力の大きさで
+        # 決めると、入力を畳む配列 (z 投影など) で読む量を大きく見誤る。実際に
+        # 起きた例: 出力 Z=1・C=2・1024x1024 の z 投影で t_block=64 が選ばれたが、
+        # 1 時点を作るのに元の面が Z=41 枚要るため、1 ブロックで 64x2x41 = 5248 面
+        # = 10.5 GiB を一度に読み、メモリ不足で落ちた (書きかけの 1 KB が残った)。
+        per_frame = source_bytes_per_frame or (max(C * Z, 1) * plane_bytes)
+        t_block = max(1, (_STREAM_BLOCK_BYTES) // max(int(per_frame), 1))
 
         print(f"[BioIOWriter] Streaming OME-TIFF "
               f"(T={T},C={C},Z={Z},Y={Y},X={X}, {dtype}, ~{nbytes / 1024**3:.1f} GiB, "
