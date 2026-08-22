@@ -247,6 +247,57 @@ class GroupAnalysisItemParam(BaseModel):
     # div は per-trial div と同値(比でトライアル数が相殺)なので出さない。総数はトライアル数に比例する
     # ため per-trial 指標とは一致しない(意図的)。既定 False。
     include_event_totals: Optional[bool] = False
+    # cond をフォルダ構造(prj/cond*/mouse/day)から切り離し、**個体単位**で組み直す。
+    # {新ラベル: [mouse_id, ...]} の形式で、cond_group の3効果(再ラベル / 未記載の除外 /
+    # キー順の描画順固定)をそのまま単位だけ mouse に置き換えたもの。
+    #   * どのグループにも書かれていない個体は**除外**される(cond_group と同じ規則)。
+    #     「書けば in、書かなければ out」なので個体の出し入れがこれだけで書ける。
+    #   * mouse_id はフォルダ名と完全一致(性別サフィックス -m/-f 込み)。
+    #   * cond_group と同時には指定できない(どちらも「その行の cond は何か」を決めるため)。
+    # 例: {"Responder": ["OATC001-m", "OATC005-m"], "NonResponder": ["OATC002-m"]}
+    cond_by_mouse: Optional[Dict[str, List[str]]] = None
+    # cond の構成はそのままに、指定した個体だけを全集計から外す。cond_group とも
+    # cond_by_mouse とも併用でき、他のどの処理よりも先に適用される。
+    exclude_mice: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def _check_cond_selection(self):
+        """cond_by_mouse / exclude_mice の静的に決まる矛盾を config 読み込み時に弾く。
+
+        いずれも「どちらの意味に取るべきか決められない」書き方なので、黙って一方を採用すると
+        n が意図せず減った図が正常に見えてしまう。データを見なくても判定できるものはここで
+        落とし、データ依存の検査(存在しない mouse_id / どの群にも入らない個体)は
+        behavior_analysis 側の resolve_cond_selection が警告する。
+        """
+        if self.cond_by_mouse:
+            if self.cond_group:
+                raise ValueError(
+                    "cond_group and cond_by_mouse cannot be used together: both decide "
+                    "the cond of a row. Use cond_group to regroup folder conds, or "
+                    "cond_by_mouse to rebuild conds from individual mice."
+                )
+            empty = [label for label, mice in self.cond_by_mouse.items() if not mice]
+            if empty:
+                raise ValueError(
+                    f"cond_by_mouse has group(s) with no mouse: {empty}. "
+                    "Remove the group or list its mice."
+                )
+            seen: Dict[str, str] = {}
+            for label, mice in self.cond_by_mouse.items():
+                for m in mice:
+                    if m in seen:
+                        raise ValueError(
+                            f"cond_by_mouse lists mouse '{m}' in both '{seen[m]}' and "
+                            f"'{label}'. A mouse can belong to only one group."
+                        )
+                    seen[m] = label
+            both = sorted(set(self.exclude_mice or []) & set(seen))
+            if both:
+                raise ValueError(
+                    f"mouse(s) {both} appear in both cond_by_mouse and exclude_mice. "
+                    "Drop them from one of the two."
+                )
+        return self
 
 
 class AggregationParamItem(BaseModel):
