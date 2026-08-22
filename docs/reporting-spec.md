@@ -17,15 +17,33 @@ is unchanged.
 This is established reproducible-research practice applied to our
 matplotlib/PdfPages reporting layer:
 
-* Sandve et al. 2013, *Ten Simple Rules for Reproducible Computational
-  Research* (PLOS Comput Biol) — "for every result, keep track of how it was
-  produced".
-* Experiment/run tracking — Sumatra (Davison 2012), MLflow, DVC: one record
-  per run with params, metrics, artifacts.
-* Generated reports — knitr/Quarto, showyourwork: the report is built from
-  code; every figure is traceable to code + data.
-* Convention-named layouts — BIDS (Gorgolewski et al. 2016): naming makes a
-  dataset machine-navigable.
+* Sandve GK, Nekrutenko A, Taylor J, Hovig E (2013) Ten simple rules for
+  reproducible computational research. *PLoS Comput Biol* 9(10):e1003285.
+  [doi:10.1371/journal.pcbi.1003285](https://doi.org/10.1371/journal.pcbi.1003285)
+  — Rule 1: "for every result, keep track of how it was produced".
+* Experiment/run tracking — Davison AP (2012) Automated capture of experiment
+  context for easier reproducibility in computational research. *Comput Sci
+  Eng* 14(4):48–56 (Sumatra); MLflow; DVC — one record per run with params,
+  metrics, artifacts.
+* Generated reports — Knuth DE (1984) Literate programming. *Comput J*
+  27(2):97–111; knitr/[Quarto](https://quarto.org/);
+  [showyourwork](https://show-your.work/) — the report is built from code;
+  every figure is traceable to code + data.
+* Convention-named layouts — Gorgolewski KJ et al. (2016) The brain imaging
+  data structure. *Sci Data* 3:160044.
+  [doi:10.1038/sdata.2016.44](https://doi.org/10.1038/sdata.2016.44) — naming
+  makes a dataset machine-navigable.
+* Machine-actionability as a goal — Wilkinson MD et al. (2016) The FAIR
+  Guiding Principles for scientific data management and stewardship. *Sci
+  Data* 3:160018.
+  [doi:10.1038/sdata.2016.18](https://doi.org/10.1038/sdata.2016.18)
+* Tracked pipelines — Köster J, Rahmann S (2012) Snakemake. *Bioinformatics*
+  28(19):2520–2522.
+  [doi:10.1093/bioinformatics/bts480](https://doi.org/10.1093/bioinformatics/bts480);
+  Di Tommaso P et al. (2017) Nextflow. *Nat Biotechnol* 35(4):316–319.
+  [doi:10.1038/nbt.3820](https://doi.org/10.1038/nbt.3820)
+* Code+data versioning — Halchenko YO et al. (2021) DataLad. *J Open Source
+  Softw* 6(63):3262. [doi:10.21105/joss.03262](https://doi.org/10.21105/joss.03262)
 
 ## Directory layout (relative to a project output directory)
 
