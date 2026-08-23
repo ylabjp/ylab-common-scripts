@@ -11,9 +11,11 @@ from scipy.stats import mannwhitneyu, kruskal
 import pandas as pd
 import numpy as np
 import datetime
-matplotlib.rcParams["font.family"] = "Arial"
-matplotlib.rcParams["pdf.fonttype"] = 42
-matplotlib.rcParams["ps.fonttype"] = 42
+from ylabcommon.utils.mpl_style import apply_house_style
+
+# 設定の実体は mpl_style へ移した(reporting からも同じものを使うため)。
+# import しただけで適用される従来の挙動はそのまま。
+apply_house_style()
 
 
 class STANDARD_FIGURE_SIZE:

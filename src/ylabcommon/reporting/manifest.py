@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -26,6 +28,50 @@ MANIFEST_NAME = "manifest.jsonl"
 _FIELD = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 #: 図ID全体 `{prj}_{group}_{kind}[_{seq}]`。フィールド区切りは `_` で3〜4個。
 _ID_RE = re.compile(rf"^{_FIELD}(?:_{_FIELD}){{2,3}}$")
+
+
+def _json_default(obj: Any):
+    """`json.dumps` が知らない型の受け皿。
+
+    numpy スカラは `.item()` で Python の値にする。**`np.float64` は `float` を
+    継承するので素通りするのに `np.int64` は `int` を継承しない**という非対称が
+    あり、`n=[np.sum(mask), ...]` のような自然な書き方が TypeError になっていた。
+    """
+    item = getattr(obj, "item", None)
+    if callable(item):
+        try:
+            return item()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(obj, Path):
+        return obj.as_posix()
+    raise TypeError(f"{type(obj).__name__} is not JSON serialisable")
+
+
+def dumps_record(record: dict) -> str:
+    """manifest の1行を作る。**RFC 8259 に無いトークンは書かない。**
+
+    `allow_nan=False` にしてあるので、非有限値が残っていれば黙って `NaN` を
+    書くのではなく `ValueError` になる。`NaN` を書くと manifest は JSON Lines を
+    名乗れなくなるうえ、`jq` や `pandas.read_json` はそれを**エラーにせず
+    `null` へ変換する**。`null` は spec が「検定はしたが値が出なかった」に
+    予約したトークンなので、黙って意味が入れ替わる。
+    """
+    return json.dumps(
+        record, ensure_ascii=False, sort_keys=False,
+        allow_nan=False, default=_json_default,
+    )
+
+
+def ensure_jsonable(payload: Any) -> None:
+    """あとで manifest に書けることを**ファイルを書く前に**確かめる。
+
+    `save()` は SVG/PNG/PDF を書いたあとに manifest へ追記する。直列化に失敗すると
+    図だけが残って manifest に行が無い「孤児」ができ、spec が保証したい
+    アドレス可能性が壊れる。呼び出し側由来の値(stats・data・caption)は
+    savefig の前にここで検査する。
+    """
+    dumps_record({"_": payload})
 
 
 def figures_dir(prj_dir: Path | str) -> Path:
@@ -119,6 +165,27 @@ def split_figure_id(fid: str) -> tuple[str, str, str, str | None]:
     return prj, group, kind, (parts[3] if len(parts) == 4 else None)
 
 
+def _finite_or_none(value, field_name: str, nonfinite: list[str]):
+    """非有限(NaN / ±Inf)なら None にし、フィールド名を `nonfinite` へ積む。
+
+    scipy は分散ゼロの `ttest_ind`、差がゼロの `ttest_rel`、定数入力の
+    `pearsonr` などで日常的に nan を返す。そのまま書くと manifest が
+    JSON Lines でなくなる。
+    """
+    if value is None:
+        return None
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            value = item()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float) and not math.isfinite(value):
+        nonfinite.append(field_name)
+        return None
+    return value
+
+
 @dataclass(frozen=True)
 class StatRecord:
     """図に紐づく検定結果1件。
@@ -140,13 +207,21 @@ class StatRecord:
 
     def to_dict(self) -> dict:
         # p は「計算したが値なし」を表現できるよう None でも残す。他は省く。
-        out: dict = {"name": self.name, "test": self.test, "p": self.p}
+        params = dict(self.params) if self.params else {}
+        nonfinite: list[str] = []
+        p = _finite_or_none(self.p, "p", nonfinite)
+        statistic = _finite_or_none(self.statistic, "statistic", nonfinite)
+        if nonfinite:
+            # spec の「理由は params に入れる」に合わせる。null だけにすると
+            # 「検定していない」と区別が付かなくなるので、何が非有限だったかを残す。
+            params["nonfinite"] = nonfinite
+        out: dict = {"name": self.name, "test": self.test, "p": p}
         if self.n is not None:
-            out["n"] = list(self.n)
-        if self.statistic is not None:
-            out["statistic"] = self.statistic
-        if self.params:
-            out["params"] = dict(self.params)
+            out["n"] = [int(v) for v in self.n]
+        if statistic is not None:
+            out["statistic"] = statistic
+        if params:
+            out["params"] = params
         return out
 
     @classmethod
@@ -239,16 +314,59 @@ def read_manifest(prj_dir: Path | str) -> list[dict]:
 
 
 def write_manifest(prj_dir: Path | str, records: Iterable[dict]) -> Path:
-    """manifest を丸ごと書き直す(同じディレクトリの一時ファイル経由で置き換える)。"""
+    """manifest を丸ごと書き直す(同じディレクトリの一時ファイル経由で置き換える)。
+
+    一時ファイル名に **pid を混ぜる**。固定名だと、同じ `prj_dir` に対して2つの
+    run が並行したときに互いの一時ファイルを踏み、置き換えの途中で相手の内容を
+    拾ってしまう。
+    """
     path = manifest_path(prj_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    body = "".join(
-        json.dumps(r, ensure_ascii=False, sort_keys=False) + "\n" for r in records
-    )
-    tmp.write_text(body, encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    body = "".join(dumps_record(r) + "\n" for r in records)
+    try:
+        tmp.write_text(body, encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     return path
+
+
+def rewrite_dropping_scope(prj_dir: Path | str, scope: str | None) -> set[str]:
+    """`scope` のレコードだけを落として書き直し、**残った id の集合**を返す。
+
+    行単位で扱い、**壊れて読めない行はそのまま残す**。以前は `read_manifest` が
+    壊れた行を捨て、その結果を丸ごと書き戻していたので、追記の途中で切れた1行が
+    あると**別の run のレコードまで巻き添えで消え**、その図IDが未使用に戻っていた。
+    """
+    path = manifest_path(prj_dir)
+    if not path.exists():
+        return set()
+    kept_lines: list[str] = []
+    kept_ids: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            kept_lines.append(line)   # 読めない行は判断せずに温存する
+            continue
+        if isinstance(obj, dict) and obj.get("scope") == scope and obj.get("id"):
+            continue
+        kept_lines.append(line)
+        if isinstance(obj, dict) and obj.get("id"):
+            kept_ids.add(obj["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text("".join(l + "\n" for l in kept_lines), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return kept_ids
 
 
 def append_record(prj_dir: Path | str, record: dict) -> Path:
@@ -260,5 +378,5 @@ def append_record(prj_dir: Path | str, record: dict) -> Path:
     path = manifest_path(prj_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False, sort_keys=False) + "\n")
+        f.write(dumps_record(record) + "\n")
     return path
