@@ -1,6 +1,7 @@
-# Reporting Spec: Addressable Analysis Outputs (draft)
+# Reporting Spec: Addressable Analysis Outputs
 
-Status: **draft for review** (Phase 0 of the reporting plan).
+Status: **Phase 1 implemented** (`ylabcommon.reporting`). Phases 2–4 (adoption and
+promotion) are open — see ylabjp/ylab-common-scripts#68.
 Norm source: ylabjp/general research guidelines — `80-operations/ai-skills.md`, applied example "Addressable Analysis Outputs".
 
 ## Motivation
@@ -68,9 +69,10 @@ Examples: `prj1-2-3_conda_psth`, `prj1-2-3_all_event-raster_p02`.
 ```json
 {
   "id": "prj1-2-3_conda_psth",
-  "prj": "1-2-3",
+  "prj": "prj1-2-3",
   "group": "conda",
   "kind": "psth",
+  "scope": "psth_ga.pdf",
   "caption": "PSTH around cue onset, cond A vs B",
   "files": {"svg": "figures/prj1-2-3_conda_psth.svg",
             "png": "figures/prj1-2-3_conda_psth.png"},
@@ -79,7 +81,7 @@ Examples: `prj1-2-3_conda_psth`, `prj1-2-3_all_event-raster_p02`.
     {"name": "conda_vs_condb", "test": "mannwhitneyu",
      "n": [12, 11], "p": 0.031, "params": {"alternative": "two-sided"}}
   ],
-  "source": {"repo": "behavior-analysis", "commit": "abc1234", "dirty": false,
+  "source": {"repo": "behavior-analysis", "commit": "<40-char sha>", "dirty": false,
              "script": "pipeline/group_report.py", "params_hash": "…"},
   "data": ["cond_a/…", "cond_b/…"],
   "created_at": "2026-08-21T12:00:00+09:00"
@@ -93,7 +95,16 @@ Rules:
 * `source.dirty: true` when the analysis repo working tree had uncommitted
   changes at run time.
 * `data` paths are **relative to `prj_dir`** — no machine-specific roots in
-  the manifest.
+  the manifest. The same holds for `files`.
+* `prj`/`group`/`kind` are **derived from the id**, not written independently, so a
+  record can never disagree with its own address.
+* `scope` names the run that owns the record (defaults to the PDF file name). A rerun
+  replaces the records of its own scope and leaves every other scope alone.
+* `commit` is the **full 40-character sha**. The short form is a display concern
+  (`report.md` shortens it); short shas can collide and cannot be expanded again.
+* `stats[].p` stays present as `null` when a test was attempted but produced no value
+  (reason goes in `params`, e.g. `{"skipped": "n<2"}`). Dropping the key would make
+  "not computed" and "computed, undefined" indistinguishable.
 
 ## report.md
 
@@ -101,15 +112,32 @@ Generated from the manifest: one section per `group`, PNG embeds via relative
 links, captions, and a stats table. Regenerable at any time; PDF export of the
 report is optional.
 
-## API sketch (`ylabcommon.reporting`)
+## API (`ylabcommon.reporting`)
 
 ```python
-store = FigureStore(prj_dir, pdf_name="psth_ga.pdf", source=SourceInfo.capture())
-store.save(fig, key="prj1-2-3_conda_psth", caption="…", stats=[…], data=[…])
-store.pdf     # underlying PdfPages, for call sites not yet ported
-store.close()
+from ylabcommon.reporting import FigureStore, figure_id, render_report
+
+with FigureStore(prj_dir, pdf_name="psth_ga.pdf") as store:   # source is captured
+    store.save(                                               # automatically
+        fig,
+        key=figure_id("prj1-2-3", "conda", "psth"),
+        caption="PSTH around cue onset, cond A vs B",
+        stats=[{"name": "conda_vs_condb", "test": "mannwhitneyu",
+                "n": [12, 11], "p": 0.031, "params": {"alternative": "two-sided"}}],
+        data=["cond_a/…", "cond_b/…"],
+        bbox_inches="tight",          # savefig kwargs reach SVG, PNG and the PDF page
+    )
+    store.pdf     # underlying PdfPages, for call sites not yet ported
+
 render_report(prj_dir)   # manifest -> report/report.md
 ```
+
+* `figure_id(prj, group, kind, seq=None)` builds a conforming id; `save` derives
+  `prj`/`group`/`kind` by splitting it.
+* `FigureStore(prj_dir, scope="…")` without `pdf_name` records figures with no bundled
+  PDF. One of `pdf_name` / `scope` is required — it is what a rerun replaces.
+* Pages written straight to `store.pdf` are not recorded (that is what "not yet ported"
+  means), but they do not shift the page numbers `save` records.
 
 Compatibility contract: PDF output is byte-for-byte the same behavior as
 today's `PdfPages` usage; per-figure files and manifest records are pure
@@ -123,10 +151,23 @@ storage. Figures under discussion are **promoted** (copied) into the
 project-management repository; cloud-drive copies are disposable exports.
 (Policy: ylabjp/general `80-operations/documentation.md`.)
 
+## Settled in Phase 1
+
+* **Manifest lifecycle**: rewrite per run, scoped by the `scope` field. On open, a
+  `FigureStore` drops the manifest records carrying its own scope and keeps the rest;
+  each figure is then appended as it is saved, so a run that dies part-way still leaves
+  a truthful manifest of what it managed to draw.
+* **Figure-id uniqueness**: enforced within `prj_dir`. Reusing an id that another
+  report already owns raises rather than silently overwriting that figure's record.
+
 ## Open questions
 
 * Stability of `seq`/page numbers across reruns (proposal: `seq` derives from
-  content keys, not enumeration order).
+  content keys, not enumeration order). Phase 1 takes `seq` from the caller and
+  does not enumerate.
 * `params_hash`: which parameters enter the hash, and their canonical form.
-* Manifest lifecycle: append vs rewrite (proposal: rewrite per run, scoped to
-  the PDF being regenerated).
+  Phase 1 accepts it from the caller rather than inventing a scheme.
+* Orphaned figure files: a rerun that stops emitting a figure removes its manifest
+  record but leaves `figures/*.svg|png` on disk. The manifest is the index, so the
+  orphan is invisible to `report.md`; deleting files under `prj_dir` was judged too
+  destructive to do implicitly.
