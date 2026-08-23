@@ -143,6 +143,39 @@ Compatibility contract: PDF output is byte-for-byte the same behavior as
 today's `PdfPages` usage; per-figure files and manifest records are pure
 additions. Call sites adopt one by one.
 
+## Migrating a call site off `create_pdf_pages` / `close_fig`
+
+The PDF *content* is unchanged, but three things that came free with
+`matplot_util` do not come free with `FigureStore`. Two are handled for you; the
+third is a deliberate difference.
+
+| | `create_pdf_pages` + `close_fig` | `FigureStore` |
+| --- | --- | --- |
+| house rcParams (Arial, fonttype 42) | applied as an import side effect of `matplot_util` | applied by `FigureStore` (`house_style=True`, the default). Pass `house_style=False` to manage them yourself |
+| closing the figure | `close_fig` called `plt.close()` | `save(..., close_figure=True)`. **Default is False** — a batch script that emits hundreds of figures must pass it or they accumulate |
+| `subplots_adjust` margins | `close_fig` applied fixed margins (`wspace=0.5, hspace=1.5, bottom=0.15, top=0.85, left=0.07, right=0.93`) | **not applied.** Call `plt.subplots_adjust(...)` yourself, or pass `bbox_inches="tight"` to `save` |
+
+Unwritable output is a hard error rather than a silent rename:
+`create_pdf_pages` fell back to `{base}_{timestamp}.pdf` on `PermissionError`
+without telling the caller, which would put a filename in `pdf.file` that is not
+the file that was written. `FigureStore` checks the PDF is writable up front and
+raises. (`PdfPages` alone is not that check — it opens the file lazily, at the
+first `savefig`.)
+
+## Serialisation rules
+
+* The manifest is **strict** JSON Lines: `json.dumps(..., allow_nan=False)`.
+  Non-finite statistics (`ttest_ind` on zero-variance groups, `pearsonr` on
+  constant input, …) are stored as `p: null` with the field names listed in
+  `params.nonfinite`. Writing bare `NaN` would leave the file unreadable by
+  strict parsers — and worse, `jq` and `pandas.read_json` silently coerce it to
+  `null`, which is the token reserved above for "computed, no value", so the two
+  cases would become indistinguishable without any error.
+* numpy scalars are coerced (`np.int64` does not subclass `int`, so `n =
+  [np.sum(mask), …]` would otherwise raise).
+* Caller-supplied values are validated **before** any figure file is written, so
+  a serialisation failure cannot leave figures on disk with no manifest row.
+
 ## Storage and access
 
 Outputs live under `prj_dir` on lab storage (analyzed data). AI-assisted work

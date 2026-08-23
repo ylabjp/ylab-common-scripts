@@ -22,10 +22,10 @@ from ylabcommon.reporting.manifest import (
     FigureRecord,
     StatRecord,
     append_record,
+    ensure_jsonable,
     figures_dir,
-    read_manifest,
+    rewrite_dropping_scope,
     split_figure_id,
-    write_manifest,
 )
 from ylabcommon.reporting.source import SourceInfo
 
@@ -42,6 +42,9 @@ class FigureStore:
         書いたレコードだけを差し替える**ためのキーで、他のレポートのレコードは残る。
         pdf_name も scope も無いと再実行のたびにレコードが二重になるので ValueError。
     source: 出所情報。省略時は呼び出し元のリポジトリから取得する。
+    house_style: ラボ共通の rcParams(Arial / fonttype 42)を当てる。既定 True。
+        `matplot_util` を import したときと同じ見た目にするためのもので、
+        **グローバルな rcParams を書き換える**ので、自前で管理したいときは False。
     """
 
     def __init__(
@@ -52,6 +55,7 @@ class FigureStore:
         scope: str | None = None,
         source: SourceInfo | None = None,
         png_dpi: int = DEFAULT_PNG_DPI,
+        house_style: bool = True,
     ) -> None:
         self.prj_dir = Path(prj_dir)
         self.pdf_name = pdf_name
@@ -67,18 +71,35 @@ class FigureStore:
 
         self._closed = False
         self._records: list[FigureRecord] = []
-        # 自分の scope の古いレコードを落として書き直してから始める。以降は1図ごとに
-        # 追記するので、run が途中で落ちてもそこまでの図は manifest に残る。
-        kept = [r for r in read_manifest(self.prj_dir) if r.get("scope") != self.scope]
-        self._foreign_ids = {r.get("id") for r in kept}
-        write_manifest(self.prj_dir, kept)
 
+        # **PDF に書けることを先に確かめる。** 後回しにすると、PDF がロックされて
+        # いた場合に「前回の manifest を消したあとで例外」になり、図も PDF も
+        # 無いのに前回の記録だけ失う。
+        #
+        # `PdfPages(...)` は**ファイルを遅延オープンする**ので、構築しただけでは
+        # 検査にならない(実際に開くのは最初の savefig)。追記モードで開いて確かめる。
+        # `matplot_util.create_pdf_pages` が書き込み可否をこの方法で見ているのと同じ。
         self._pdf = None
         if pdf_name:
             from matplotlib.backends.backend_pdf import PdfPages
 
             self.prj_dir.mkdir(parents=True, exist_ok=True)
-            self._pdf = PdfPages(self.prj_dir / pdf_name)
+            pdf_path = self.prj_dir / pdf_name
+            with open(pdf_path, "ab"):
+                pass
+            self._pdf = PdfPages(pdf_path)
+
+        if house_style:
+            # 図の出力経路が matplot_util 以外にも増えたので、同じ rcParams を
+            # ここでも当てる。当てないと create_pdf_pages から移行した瞬間、
+            # PDF が Type-42/Arial から Type-3/DejaVu に黙って変わる。
+            from ylabcommon.utils.mpl_style import apply_house_style
+
+            apply_house_style()
+
+        # 自分の scope の古いレコードだけを落とす。以降は1図ごとに追記するので、
+        # run が途中で落ちてもそこまでの図は manifest に残る。
+        self._foreign_ids = rewrite_dropping_scope(self.prj_dir, self.scope)
 
     # --- PDF passthrough ------------------------------------------------- #
     @property
@@ -110,6 +131,7 @@ class FigureStore:
         caption: str | None = None,
         stats: Iterable[Any] | None = None,
         data: Sequence[str] | None = None,
+        close_figure: bool = False,
         **savefig_kwargs,
     ) -> FigureRecord:
         """図を SVG/PNG と(あれば)PDF の1ページとして保存し、manifest へ追記する。
@@ -118,6 +140,9 @@ class FigureStore:
         stats: 検定結果。**図に描かなかったものも渡すこと**(これが目的)。
         data: 入力データの **prj_dir 相対**パス。
         savefig_kwargs: `bbox_inches="tight"` など。3つの出力に同じものを渡す。
+        close_figure: 保存後に figure を閉じる。既定 False。
+            **`matplot_util.close_fig` は閉じていた**ので、そこから移行して図を
+            大量に出すスクリプトは True にしないと figure が溜まり続ける。
         """
         if self._closed:
             raise ValueError("FigureStore is closed")
@@ -130,6 +155,15 @@ class FigureStore:
             )
         if any(r.id == key for r in self._records):
             raise ValueError(f"figure id {key!r} was already saved in this run")
+
+        # **ファイルを書く前に**直列化できることを確かめる。あとで失敗すると
+        # 図だけ残って manifest に行が無い孤児になる(numpy の int が典型)。
+        stat_records = tuple(StatRecord.coerce(s) for s in (stats or ()))
+        ensure_jsonable({
+            "caption": caption,
+            "stats": [r.to_dict() for r in stat_records],
+            "data": list(data or ()),
+        })
 
         fig_dir = figures_dir(self.prj_dir)
         fig_dir.mkdir(parents=True, exist_ok=True)
@@ -152,13 +186,17 @@ class FigureStore:
                 "png": png.relative_to(self.prj_dir).as_posix(),
             },
             pdf=pdf_ref,
-            stats=tuple(StatRecord.coerce(s) for s in (stats or ())),
+            stats=stat_records,
             source=self.source.to_dict(),
             data=tuple(data or ()),
             created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         )
         self._records.append(record)
         append_record(self.prj_dir, record.to_dict())
+        if close_figure:
+            import matplotlib.pyplot as plt
+
+            plt.close(fig)
         return record
 
     # --- 後始末 ------------------------------------------------------------ #
