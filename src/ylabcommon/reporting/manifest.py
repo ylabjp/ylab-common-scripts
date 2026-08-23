@@ -56,6 +56,35 @@ def slug(text: Any) -> str:
     return out
 
 
+#: content_token がハッシュへ切り替える長さ。図IDがファイル名として扱いにくくならない
+#: 範囲で、読める限りは元の文字列を残したい。
+CONTENT_TOKEN_MAX_LEN = 48
+#: ハッシュに落としたときの桁数(sha1 の先頭)。衝突確率は実用上無視できる。
+CONTENT_TOKEN_HASH_LEN = 10
+
+
+def content_token(*parts: Any, max_len: int = CONTENT_TOKEN_MAX_LEN) -> str:
+    """図の**内容**から決まる安定したトークンを作る(図IDの seq 用)。
+
+    ページの列挙順で seq を振ると、図が1枚増減しただけで以降の全図のIDがずれ、
+    せっかくのアドレスが参照として使えなくなる。代わりに「その図が何を表しているか」
+    (集計キー、プロット名など)から作る。**同じ内容なら再実行しても同じ**。
+
+    長くなりすぎる場合だけ sha1 の先頭 CONTENT_TOKEN_HASH_LEN 桁へ落とす。ハッシュも
+    入力が同じなら同じなので、安定性は保たれる(読みやすさだけを失う)。
+    """
+    raw = "-".join(str(p) for p in parts if p is not None and str(p) != "")
+    token = slug(raw)
+    if len(token) <= max_len:
+        return token
+    import hashlib
+
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:CONTENT_TOKEN_HASH_LEN]
+    # 先頭の読める部分を残しつつ、全体長を max_len に収める。
+    head = token[: max_len - CONTENT_TOKEN_HASH_LEN - 1].rstrip("-")
+    return f"{head}-{digest}"
+
+
 def figure_id(prj: Any, group: Any, kind: Any, seq: Any = None) -> str:
     """`{prj}_{group}_{kind}[_{seq}]` を組み立てる。各フィールドは slug 化する。
 

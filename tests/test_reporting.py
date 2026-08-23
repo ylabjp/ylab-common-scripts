@@ -21,6 +21,7 @@ import pytest
 
 from ylabcommon.reporting import (
     FigureStore,
+    content_token,
     SourceInfo,
     StatRecord,
     figure_id,
@@ -97,6 +98,43 @@ class TestFigureId:
         assert split_figure_id("prj1-2-3_all_event-raster_p02") == \
             ("prj1-2-3", "all", "event-raster", "p02")
         assert split_figure_id("p_g_k") == ("p", "g", "k", None)
+
+
+class TestContentToken:
+    """seq を**内容**から作るための部品。
+
+    ページの列挙順で seq を振ると、図が1枚増減しただけで以降の全図のIDがずれ、
+    アドレスとして参照できなくなる。内容から作れば、順序が変わっても不変。
+    """
+
+    def test_same_content_gives_the_same_token(self):
+        key = (("task_CS", "target"), ("discrete", "cc_response", "NP"))
+        assert content_token(*key) == content_token(*key)
+
+    def test_readable_for_ordinary_keys(self):
+        assert content_token(("task_CS", "target"), ("discrete", "cc", "NP")) == \
+            "task-cs-target-discrete-cc-np"
+
+    def test_ignores_empty_parts(self):
+        assert content_token("a", None, "", "b") == "a-b"
+
+    def test_long_content_falls_back_to_a_stable_hash(self):
+        long = "x" * 200
+        first, second = content_token(long), content_token(long)
+        assert first == second                      # 再実行しても同じ
+        assert len(first) <= 48
+
+    def test_different_long_content_gives_different_tokens(self):
+        assert content_token("x" * 200) != content_token("y" * 200)
+
+    def test_token_is_a_valid_id_field(self):
+        fid = figure_id("prj08", "all-male", "stat",
+                        content_token(("task_CS", "target"), ("discrete", "cc", "NP")))
+        assert validate_figure_id(fid) == fid
+
+    def test_hashed_token_is_also_a_valid_id_field(self):
+        fid = figure_id("p", "g", "k", content_token("x" * 200))
+        assert validate_figure_id(fid) == fid
 
 
 # --------------------------------------------------------------------------- #

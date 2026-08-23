@@ -13,12 +13,15 @@
     render_report(prj_dir)
 """
 from ylabcommon.reporting.manifest import (  # noqa: F401
+    CONTENT_TOKEN_HASH_LEN,
+    CONTENT_TOKEN_MAX_LEN,
     FIGURES_DIRNAME,
     MANIFEST_NAME,
     REPORT_DIRNAME,
     FigureRecord,
     StatRecord,
     append_record,
+    content_token,
     figure_id,
     figures_dir,
     manifest_path,
@@ -40,6 +43,7 @@ __all__ = [
     "SourceInfo",
     "render_report",
     "figure_id",
+    "content_token",
     "split_figure_id",
     "validate_figure_id",
     "slug",
@@ -53,5 +57,7 @@ __all__ = [
     "REPORT_DIRNAME",
     "MANIFEST_NAME",
     "REPORT_NAME",
+    "CONTENT_TOKEN_MAX_LEN",
+    "CONTENT_TOKEN_HASH_LEN",
     "DEFAULT_PNG_DPI",
 ]
