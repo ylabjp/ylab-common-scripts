@@ -259,6 +259,9 @@ class FigureRecord:
     stats: tuple = ()
     source: dict | None = None
     data: tuple = ()
+    #: この図について**できなかったこと**の記録(例: 数値が大きすぎて CSV を書かなかった)。
+    #: 黙って落とすと「なぜ無いのか」が分からないので、レコード側に理由を残す。
+    notes: tuple = ()
     created_at: str | None = None
 
     def to_dict(self) -> dict:
@@ -277,6 +280,8 @@ class FigureRecord:
             out["source"] = dict(self.source)
         if self.data:
             out["data"] = list(self.data)
+        if self.notes:
+            out["notes"] = list(self.notes)
         if self.created_at is not None:
             out["created_at"] = self.created_at
         return out

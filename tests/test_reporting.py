@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 from ylabcommon.reporting import (
@@ -168,17 +169,17 @@ class TestStatRecord:
 # FigureStore
 # --------------------------------------------------------------------------- #
 class TestFigureStore:
-    def test_writes_svg_png_pdf_and_manifest(self, tmp_path, fig):
+    def test_writes_png_pdf_and_manifest(self, tmp_path, fig):
+        """既定は **PNG のみ**。SVG は opt-in。"""
         with FigureStore(tmp_path, pdf_name="psth.pdf") as store:
             store.save(fig, key="p1_conda_psth", caption="cue onset")
-        assert (tmp_path / "figures" / "p1_conda_psth.svg").exists()
         assert (tmp_path / "figures" / "p1_conda_psth.png").exists()
+        assert not (tmp_path / "figures" / "p1_conda_psth.svg").exists()
         assert (tmp_path / "psth.pdf").exists()
         (rec,) = _records(tmp_path)
         assert rec["id"] == "p1_conda_psth"
         assert rec["caption"] == "cue onset"
-        assert rec["files"] == {"svg": "figures/p1_conda_psth.svg",
-                                "png": "figures/p1_conda_psth.png"}
+        assert rec["files"] == {"png": "figures/p1_conda_psth.png"}
         assert rec["pdf"] == {"file": "psth.pdf", "page": 1}
 
     def test_derives_prj_group_kind_from_the_id(self, tmp_path, fig):
@@ -341,6 +342,127 @@ class TestManifestLifecycle:
             f.write("{ this is not json\n")
         with pytest.warns(UserWarning, match="malformed"):
             assert len(_records(tmp_path)) == 1
+
+
+class TestFormats:
+    """既定は PNG のみ。
+
+    マルチモーダルLLM の画像入力は PNG/JPEG/GIF/WebP で SVG は画像として読めないため、
+    「AI が読んで Markdown に組み込む」用途では PNG が必須。SVG はベクタ編集用の正本で、
+    要るのは通常ごく一部の図なので既定には入れない(パネル単位にすると枚数が数倍になり、
+    容量も保存時間も効いてくる)。
+    """
+
+    def test_default_is_png_only(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            rec = store.save(fig, key="p_g_k")
+        assert set(rec.files) == {"png"}
+
+    def test_svg_is_opt_in(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf", formats=("png", "svg")) as store:
+            rec = store.save(fig, key="p_g_k")
+        assert set(rec.files) == {"png", "svg"}
+        assert (tmp_path / "figures" / "p_g_k.svg").exists()
+
+    def test_svg_only_is_allowed(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf", formats=("svg",)) as store:
+            rec = store.save(fig, key="p_g_k")
+        assert set(rec.files) == {"svg"}
+
+    def test_unknown_format_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="unsupported figure format"):
+            FigureStore(tmp_path, pdf_name="a.pdf", formats=("png", "tiff"))
+
+    def test_empty_formats_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="must not be empty"):
+            FigureStore(tmp_path, pdf_name="a.pdf", formats=())
+
+
+class TestFigureTable:
+    """図に描かれた数値そのものを CSV で残す。
+
+    p 値以外の数値(平均・SEM・波形)は図のピクセルにしか無く、AI も人も図を見る以外に
+    確認する手段が無かった。図と同名の CSV を隣に置いて manifest から辿れるようにする。
+    """
+
+    def _table(self, n=3):
+        return pd.DataFrame({
+            "cond": [f"c{i}" for i in range(n)],
+            "mean": [1.0 * i for i in range(n)],
+            "sem": [0.1] * n,
+        })
+
+    def test_writes_csv_next_to_the_figure(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            rec = store.save(fig, key="p_g_k", table=self._table())
+        assert rec.files["csv"] == "figures/p_g_k.csv"
+        out = pd.read_csv(tmp_path / "figures" / "p_g_k.csv")
+        assert list(out["cond"]) == ["c0", "c1", "c2"]
+
+    def test_index_becomes_columns(self, tmp_path, fig):
+        """MultiIndex(cond/session 等)も列として読める形にする。"""
+        t = self._table().set_index("cond")
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            store.save(fig, key="p_g_k", table=t)
+        out = pd.read_csv(tmp_path / "figures" / "p_g_k.csv")
+        assert "cond" in out.columns and "mean" in out.columns
+
+    def test_list_columns_become_semicolon_joined(self, tmp_path, fig):
+        """個体別ベクタは集計CSVと同じ `;` 連結にする。"""
+        t = self._table(2)
+        t["vector"] = [[1.0, 2.0], [3.0, 4.0]]
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            store.save(fig, key="p_g_k", table=t)
+        out = pd.read_csv(tmp_path / "figures" / "p_g_k.csv")
+        assert list(out["vector"]) == ["1.0;2.0", "3.0;4.0"]
+
+    def test_no_table_means_no_csv(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            rec = store.save(fig, key="p_g_k")
+        assert "csv" not in rec.files
+
+    def test_oversized_table_is_skipped_with_a_reason(self, tmp_path, fig):
+        """生の時系列は巨大になる。黙って出さないと「なぜ無いのか」が分からない。"""
+        big = pd.DataFrame({"x": range(50)})
+        with FigureStore(tmp_path, pdf_name="a.pdf", max_table_rows=10) as store:
+            rec = store.save(fig, key="p_g_k", table=big)
+        assert "csv" not in rec.files
+        assert rec.notes and "max_table_rows" in rec.notes[0]
+        assert _records(tmp_path)[0]["notes"] == list(rec.notes)
+
+    def test_broken_table_does_not_break_the_figure(self, tmp_path, fig):
+        """数値の書き出しに失敗しても図は出す。理由は notes に残す。"""
+        class Bad:
+            shape = (1,)
+            index = None
+
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            rec = store.save(fig, key="p_g_k", table=Bad())
+        assert "png" in rec.files and "csv" not in rec.files
+        assert rec.notes and rec.notes[0].startswith("table not written:")
+
+
+class TestExistingPdfPage:
+    """1ページに複数パネルが載るレイアウトのための経路。
+
+    縦積みの bar/PSTH は PDF では従来どおり束ねたページのまま出しつつ、記録は
+    パネル単位にしたい。ページは呼び出し側が書き、各パネルはそのページ番号を指す。
+    """
+
+    def test_pdf_page_is_recorded_without_adding_a_page(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            store.pdf.savefig(fig)                       # 束ねたページを呼び出し側が書く
+            r1 = store.save(fig, key="p_g_k-a", pdf_page=1)
+            r2 = store.save(fig, key="p_g_k-b", pdf_page=1)
+            assert store.pdf.get_pagecount() == 1        # ページは増えていない
+        assert r1.pdf == {"file": "a.pdf", "page": 1}
+        assert r2.pdf == {"file": "a.pdf", "page": 1}    # 同じページを複数の図が指す
+
+    def test_figure_files_are_still_written(self, tmp_path, fig):
+        with FigureStore(tmp_path, pdf_name="a.pdf") as store:
+            store.pdf.savefig(fig)
+            store.save(fig, key="p_g_k-a", pdf_page=1)
+        assert (tmp_path / "figures" / "p_g_k-a.png").exists()
 
 
 # --------------------------------------------------------------------------- #
