@@ -29,8 +29,20 @@ from ylabcommon.reporting.manifest import (
 )
 from ylabcommon.reporting.source import SourceInfo
 
-#: PNG(Markdown 埋め込み用ラスタ)の既定 dpi。SVG が正本なので閲覧に足りればよい。
+#: PNG(Markdown 埋め込み / AI が読む用のラスタ)の既定 dpi。
 DEFAULT_PNG_DPI = 200
+
+#: 既定の保存形式。**PNG が既定で SVG は opt-in**。
+#: マルチモーダルLLM の画像入力は PNG/JPEG/GIF/WebP で、SVG は画像として読めない
+#: (matplotlib の SVG は path の座標列なので、テキストとして渡してもグラフの形は読めない)。
+#: 「AI が読んで Markdown に組み込む」用途では PNG が必須。SVG はベクタ編集(論文figure化)
+#: 用の正本で、必要なのは通常ごく一部の図なので既定には入れない。
+DEFAULT_FORMATS = ("png",)
+SUPPORTED_FORMATS = ("png", "svg")
+
+#: 図の数値を CSV にするときの行数上限。これを超える表(生の時系列など)は書かずに
+#: 理由を record の notes に残す(黙って出さないと「なぜ無いのか」が分からない)。
+DEFAULT_MAX_TABLE_ROWS = 20000
 
 
 class FigureStore:
@@ -54,8 +66,10 @@ class FigureStore:
         *,
         scope: str | None = None,
         source: SourceInfo | None = None,
+        formats: tuple = DEFAULT_FORMATS,
         png_dpi: int = DEFAULT_PNG_DPI,
         house_style: bool = True,
+        max_table_rows: int = DEFAULT_MAX_TABLE_ROWS,
     ) -> None:
         self.prj_dir = Path(prj_dir)
         self.pdf_name = pdf_name
@@ -67,6 +81,15 @@ class FigureStore:
                 "duplicates."
             )
         self.png_dpi = png_dpi
+        self.max_table_rows = max_table_rows
+        bad = [f for f in formats if f not in SUPPORTED_FORMATS]
+        if bad:
+            raise ValueError(
+                f"unsupported figure format(s) {bad}; supported: {list(SUPPORTED_FORMATS)}"
+            )
+        if not formats:
+            raise ValueError("formats must not be empty")
+        self.formats = tuple(formats)
         self.source = source if source is not None else SourceInfo.capture()
 
         self._closed = False
@@ -132,14 +155,24 @@ class FigureStore:
         stats: Iterable[Any] | None = None,
         data: Sequence[str] | None = None,
         close_figure: bool = False,
+        table=None,
+        pdf_page: int | None = None,
         **savefig_kwargs,
     ) -> FigureRecord:
-        """図を SVG/PNG と(あれば)PDF の1ページとして保存し、manifest へ追記する。
+        """図を保存し、manifest へ追記する。
 
         key: 図ID `{prj}_{group}_{kind}[_{seq}]`。prj/group/kind はここから復元する。
         stats: 検定結果。**図に描かなかったものも渡すこと**(これが目的)。
         data: 入力データの **prj_dir 相対**パス。
-        savefig_kwargs: `bbox_inches="tight"` など。3つの出力に同じものを渡す。
+        table: **その図に描かれた数値**(DataFrame)。`figures/{key}.csv` に書いて
+            `files["csv"]` から辿れるようにする。図を見なくても値を照会できるのが
+            この層の目的の半分なので、可能な限り渡すこと。行数が max_table_rows を
+            超える表(生の時系列など)は書かず、理由を notes に残す。
+        pdf_page: **PDFのページは呼び出し側が既に書いた**場合に、そのページ番号。
+            複数のパネルが1ページに載るレイアウト(縦積みのbar/PSTH)で、パネルごとに
+            レコードを作りつつ PDF は従来どおり束ねたページのまま出すために使う。
+            None なら従来どおりこの図を新しい1ページとして PDF に書く。
+        savefig_kwargs: `bbox_inches="tight"` など。全ての出力に同じものを渡す。
         close_figure: 保存後に figure を閉じる。既定 False。
             **`matplot_util.close_fig` は閉じていた**ので、そこから移行して図を
             大量に出すスクリプトは True にしないと figure が溜まり続ける。
@@ -167,13 +200,27 @@ class FigureStore:
 
         fig_dir = figures_dir(self.prj_dir)
         fig_dir.mkdir(parents=True, exist_ok=True)
-        svg = fig_dir / f"{key}.svg"
-        png = fig_dir / f"{key}.png"
-        fig.savefig(svg, **savefig_kwargs)
-        fig.savefig(png, **{"dpi": self.png_dpi, **savefig_kwargs})
+        files: dict = {}
+        for fmt in self.formats:
+            path = fig_dir / f"{key}.{fmt}"
+            kwargs = dict(savefig_kwargs)
+            if fmt == "png":
+                kwargs.setdefault("dpi", self.png_dpi)
+            fig.savefig(path, **kwargs)
+            files[fmt] = path.relative_to(self.prj_dir).as_posix()
+
+        notes: list[str] = []
+        if table is not None:
+            csv_rel, note = self._save_table(fig_dir, key, table)
+            if csv_rel:
+                files["csv"] = csv_rel
+            if note:
+                notes.append(note)
 
         pdf_ref = None
-        if self._pdf is not None:
+        if pdf_page is not None:
+            pdf_ref = {"file": self.pdf_name, "page": int(pdf_page)}
+        elif self._pdf is not None:
             self._pdf.savefig(fig, **savefig_kwargs)
             # ページ番号は PdfPages 自身の数から取る(passthrough 直書きが混ざっても
             # ずれない)。get_pagecount は今書いたページを含む1始まりの総数。
@@ -181,14 +228,12 @@ class FigureStore:
 
         record = FigureRecord(
             id=key, prj=prj, group=group, kind=kind, scope=self.scope, caption=caption,
-            files={
-                "svg": svg.relative_to(self.prj_dir).as_posix(),
-                "png": png.relative_to(self.prj_dir).as_posix(),
-            },
+            files=files,
             pdf=pdf_ref,
             stats=stat_records,
             source=self.source.to_dict(),
             data=tuple(data or ()),
+            notes=tuple(notes),
             created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         )
         self._records.append(record)
@@ -198,6 +243,33 @@ class FigureStore:
 
             plt.close(fig)
         return record
+
+    def _save_table(self, fig_dir: Path, key: str, table) -> tuple[str | None, str | None]:
+        """図の数値を `figures/{key}.csv` に書き、(相対パス, 注記) を返す。
+
+        list を値に持つ列(個体別ベクタ等)は `;` 連結の文字列にする(集計CSVと同じ流儀)。
+        大きすぎる表は書かずに理由だけ返す。失敗しても図は落とさない。
+        """
+        try:
+            n_rows = int(getattr(table, "shape", (0,))[0])
+            if n_rows > self.max_table_rows:
+                return None, (
+                    f"table not written: {n_rows} rows exceed max_table_rows="
+                    f"{self.max_table_rows}"
+                )
+            out = table.reset_index() if getattr(table, "index", None) is not None else table
+            out = out.copy()
+            for col in out.columns:
+                if out[col].map(lambda v: isinstance(v, (list, tuple))).any():
+                    out[col] = out[col].map(
+                        lambda v: ";".join(str(x) for x in v)
+                        if isinstance(v, (list, tuple)) else v
+                    )
+            path = fig_dir / f"{key}.csv"
+            out.to_csv(path, index=False, encoding="utf-8-sig")
+            return path.relative_to(self.prj_dir).as_posix(), None
+        except Exception as e:
+            return None, f"table not written: {type(e).__name__}: {e}"
 
     # --- 後始末 ------------------------------------------------------------ #
     def close(self) -> None:

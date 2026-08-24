@@ -121,6 +121,16 @@ def render_report(prj_dir: Path | str, title: str | None = None) -> Path:
             if r.get("stats"):
                 lines.append("")
             meta: list[str] = []
+            files = r.get("files") or {}
+            # 数値へのリンクを先頭に。AI が図を見ずに値を確認できるようにするのが目的。
+            if files.get("csv"):
+                rel = os.path.relpath(prj_dir / files["csv"], out_dir).replace(os.sep, "/")
+                meta.append(f"Data: [{Path(files['csv']).name}]({rel})")
+            if files.get("svg"):
+                rel = os.path.relpath(prj_dir / files["svg"], out_dir).replace(os.sep, "/")
+                meta.append(f"Vector: [{Path(files['svg']).name}]({rel})")
+            for note in (r.get("notes") or []):
+                meta.append(f"Note: {note}")
             pdf = r.get("pdf") or {}
             if pdf.get("file"):
                 meta.append(f"PDF: `{pdf['file']}` p.{pdf.get('page')}")
@@ -128,7 +138,7 @@ def render_report(prj_dir: Path | str, title: str | None = None) -> Path:
             if src:
                 meta.append(f"Source: {src}")
             if r.get("data"):
-                meta.append("Data: " + ", ".join(f"`{d}`" for d in r["data"]))
+                meta.append("Input: " + ", ".join(f"`{d}`" for d in r["data"]))
             if r.get("created_at"):
                 meta.append(f"Created: {r['created_at']}")
             if meta:

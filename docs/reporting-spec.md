@@ -50,12 +50,35 @@ matplotlib/PdfPages reporting layer:
 
 ```text
 prj_dir/
-  figures/{figure_id}.svg      # vector, for reading and later figure work
-  figures/{figure_id}.png      # raster, for embedding in Markdown
+  figures/{figure_id}.png      # raster — what an AI reads, and what Markdown embeds
+  figures/{figure_id}.csv      # the numbers actually plotted in that figure
+  figures/{figure_id}.svg      # vector, opt-in, for later figure work
   report/manifest.jsonl        # one JSON record per figure (see below)
   report/report.md             # generated from the manifest
   *.pdf                        # existing bundled reports, unchanged (views)
 ```
+
+**PNG is the default and SVG is opt-in.** Multimodal LLMs accept PNG/JPEG/GIF/WebP as
+images; SVG is not an image to them, and a matplotlib SVG is a list of path coordinates,
+so handing it over as text does not convey the plot. Since "an AI reads the figure and
+writes it into Markdown" is the point, PNG is required. SVG matters for vector editing
+(turning a panel into a paper figure), which applies to a handful of figures, not all —
+and figures are recorded per panel, so the count is several times the page count.
+
+The `.csv` holds **the values drawn in that figure**, so a reader can check the numbers
+without looking at the picture. It is not a substitute for `_aggregation/` exports (which
+are per-cond and carry per-animal columns); it is the figure's own data, one file per
+figure, guaranteed to match what was plotted.
+
+## One figure = one panel
+
+A figure record is **one panel**, not one PDF page. A page is a layout artifact: the
+number of panels per page is whatever fits the height limit, so adding one session
+re-splits the pages and the content behind a given page-derived id silently changes —
+which defeats the point of an addressable id. A panel is a content unit and is stable.
+
+The PDF keeps its stacked multi-panel pages (it is the bundled *view*). Each panel's
+record points at the page it appears on, so **several records share one `pdf.page`**.
 
 ## Figure ID
 
@@ -74,9 +97,10 @@ Examples: `prj1-2-3_conda_psth`, `prj1-2-3_all_event-raster_p02`.
   "kind": "psth",
   "scope": "psth_ga.pdf",
   "caption": "PSTH around cue onset, cond A vs B",
-  "files": {"svg": "figures/prj1-2-3_conda_psth.svg",
-            "png": "figures/prj1-2-3_conda_psth.png"},
+  "files": {"png": "figures/prj1-2-3_conda_psth.png",
+            "csv": "figures/prj1-2-3_conda_psth.csv"},
   "pdf": {"file": "psth_ga.pdf", "page": 3},
+  "notes": ["table not written: 51234 rows exceed max_table_rows=20000"],
   "stats": [
     {"name": "conda_vs_condb", "test": "mannwhitneyu",
      "n": [12, 11], "p": 0.031, "params": {"alternative": "two-sided"}}
@@ -102,6 +126,8 @@ Rules:
   replaces the records of its own scope and leaves every other scope alone.
 * `commit` is the **full 40-character sha**. The short form is a display concern
   (`report.md` shortens it); short shas can collide and cannot be expanded again.
+* `notes` records what could **not** be done for this figure (e.g. the numbers were too
+  large to write). Dropping it silently leaves "why is there no csv?" unanswerable.
 * `stats[].p` stays present as `null` when a test was attempted but produced no value
   (reason goes in `params`, e.g. `{"skipped": "n<2"}`). Dropping the key would make
   "not computed" and "computed, undefined" indistinguishable.
