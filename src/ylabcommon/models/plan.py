@@ -417,6 +417,12 @@ class ExperimentPlan(BaseModel):
     :attr:`PlanMouse.within_factor` を選ぶときの選択肢になる。
 
     給水(絶水)管理:
+    - ``bodyweight_management``: この計画で体重管理を行うか。**既定は False**。
+      週シート(体重表)に出るのは True の計画だけで、取り込みも True の計画にしか
+      書き戻さない。1 個体は複数の計画に載りうる(課題本体と Before-task、
+      並行する別プロトコル)が、**体重を管理するのはそのうち 1 つだけ**。ここで
+      絞らないと同じ個体が週シートに何列も出て、どの列に打った値が計画のどれに
+      入るのかが決まらなくなる。
     - ``water_restriction_ratio``: 目標体重の割合 (例 0.85 = 予測自由摂取体重の 85%)。
     - ``daily_evaporation_ml``: 1 日あたりの水分蒸発量 (ml)。給水量の算出に加味する。
     予測自由摂取体重は settings.yaml の標準体重に対し、基準計量
@@ -428,6 +434,7 @@ class ExperimentPlan(BaseModel):
 
     within_factors: List[str] = Field(default_factory=list)
     custom_columns: List["CustomColumn"] = Field(default_factory=list)
+    bodyweight_management: bool = False
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
