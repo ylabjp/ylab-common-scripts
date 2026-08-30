@@ -41,6 +41,40 @@ _STREAM_BLOCK_BYTES = 256 * 1024**2
 _STREAM_READERS = 32
 
 
+#: 出力名を作るときに「拡張子」として置き換えてよい終わり方。**長いものを先に**
+#: 並べること (``.ome.tif`` を ``.tif`` より先に見ないと ``.ome`` が名前の一部と
+#: して残る)。
+_TIFF_SUFFIXES = (".ome.tiff", ".ome.tif", ".tiff", ".tif")
+_ZARR_SUFFIXES = (".ome.zarr", ".zarr")
+
+
+def _with_ome_suffix(path: Path, suffix: str, known: Sequence[str]) -> Path:
+    """``path`` に OME の拡張子を付けた宛先を返す。
+
+    **``Path.with_suffix`` を使ってはいけない。** あれは「最後のドット以降」を
+    拡張子とみなすので、この用途では 2 つの壊れ方をする (実測):
+
+        volume                       -> volume.ome.tif        (正しい)
+        volume.ome.tif               -> volume.ome.ome.tif    <- .ome が二重になる
+        stack_coreg_adj_crop.ome.tif -> ...crop.ome.ome.tif    <- 同上
+        volume_1.5x                  -> volume_1.ome.tif      <- 名前の一部が消える
+
+    ひとつめのせいで、**出力名を自分で決めている呼び出し側は公開 API を使えない**。
+    slice-analysis が ``volume.ome.tif`` のような名前を渡すと ``volume.ome.ome.tif``
+    になるので、内部の ``_write_ometiff_streaming`` を直接呼ぶしかなかった。
+    ふたつめは、名前にドットを含む取得で **黙って別の場所に書く**。
+
+    ここでは既知の終わり方だけを取り除いて付け直す。知らない終わり方は名前の
+    一部として残す。
+    """
+    name = path.name
+    for candidate in known:
+        if name.lower().endswith(candidate) and len(name) > len(candidate):
+            name = name[: -len(candidate)]
+            break
+    return path.with_name(name + suffix)
+
+
 def _read_block(block):
     """遅延ブロックを実体化する。dask なら **同時に** 読む。
 
@@ -91,6 +125,8 @@ class BioIOWriter:
         # 展開する。安全側を既定にして、必要な呼び出し側だけが明示的に有効化する
         # (ThorlabBioioBuilder.write は以前から save_zarr=False を明示していた)。
         save_zarr: bool = False,
+        source_bytes_per_frame: Optional[int] = None,
+        stream: Optional[bool] = None,
     ) -> None:
         """
         Write validated dataset.
@@ -98,7 +134,21 @@ class BioIOWriter:
         Parameters
         ----------
         data:
-            5D numpy array (TCZYX).
+            5D numpy array (TCZYX). May be a lazy (dask) array.
+        source_bytes_per_frame:
+            How many bytes of *source* data one output time point costs to read.
+            **Pass it whenever the array reduces its input** (a Z projection reads
+            Z planes per output plane), or the streaming writer sizes its blocks
+            from the output and under-counts the read by a factor of Z. See
+            ``_write_ometiff_streaming``.
+        stream:
+            Force the streaming writer on (True) or off (False). The default
+            (None) streams a lazy array once it is larger than 2 GiB, which is
+            the right call when the caller does not care either way.
+
+        両方とも、内部の ``_write_ometiff_streaming`` を直接呼ぶ以外に渡す手が
+        無かったもの。呼び出し側が非公開のメソッドへ手を伸ばすのは、公開 API に
+        必要な口が無いということなので、ここに出す。
         """
 
         self._validate_array(data, dim_order)
@@ -108,6 +158,8 @@ class BioIOWriter:
             dim_order=dim_order,
             channel_names=channel_names,
             physical_pixel_sizes=physical_pixel_sizes,
+            source_bytes_per_frame=source_bytes_per_frame,
+            stream=stream,
         )
 
         if save_zarr:
@@ -145,8 +197,10 @@ class BioIOWriter:
         dim_order: str,
         channel_names: Optional[Sequence[str]],
         physical_pixel_sizes: Optional[tuple[float, float, float]],
+        source_bytes_per_frame: Optional[int] = None,
+        stream: Optional[bool] = None,
     ) -> None:
-        out_file = self.output_path.with_suffix(".ome.tif")
+        out_file = _with_ome_suffix(self.output_path, ".ome.tif", _TIFF_SUFFIXES)
         print(f"DEBUG WRITER: values actually sent to writer: {physical_pixel_sizes}")
 
         # bioio's OmeTiffWriter.save() computes dask arrays fully into RAM
@@ -154,13 +208,24 @@ class BioIOWriter:
         # 62000x1024x1024 uint16 stack = 121 GiB). For a large lazy (dask) array,
         # stream it to disk plane-by-plane instead so peak memory stays bounded.
         # Small arrays keep the proven OmeTiffWriter path.
+        lazy = _da is not None and isinstance(data, _da.Array)
         nbytes = prod(data.shape) * np.dtype(data.dtype).itemsize
-        if _da is not None and isinstance(data, _da.Array) and nbytes > 2 * 1024**3:
+        if stream is None:
+            stream = lazy and nbytes > 2 * 1024**3
+        if stream:
+            if not lazy:
+                # 実体配列は既に RAM にある。流し書きしても減るものが無く、
+                # 経路だけが変わる。頼まれても黙って従わずに言う。
+                raise ValueError(
+                    "stream=True needs a lazy (dask) array; this one is already "
+                    "in memory, so streaming it would change the write path "
+                    "without bounding anything.")
             self._write_ometiff_streaming(
                 data,
                 out_file,
                 channel_names=channel_names,
                 physical_pixel_sizes=physical_pixel_sizes,
+                source_bytes_per_frame=source_bytes_per_frame,
             )
             return
 
@@ -303,7 +368,7 @@ class BioIOWriter:
         channel_names: Optional[Sequence[str]],
         physical_pixel_sizes: Optional[tuple[float, float, float]],
     ) -> None:
-        out_dir = self.output_path.with_suffix(".ome.zarr")
+        out_dir = _with_ome_suffix(self.output_path, ".ome.zarr", _ZARR_SUFFIXES)
 
         OmeZarrWriter.save(
             data,
