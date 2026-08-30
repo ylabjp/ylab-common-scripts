@@ -3,7 +3,7 @@ import yaml
 from pathlib import Path
 
 import pytest
-from ylabcommon import util
+from ylabcommon.utils import util
 
 
 # --------------------------------------------------------------------------- #

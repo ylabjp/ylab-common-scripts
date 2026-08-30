@@ -86,3 +86,25 @@ zarr = [
   "ome-zarr",
   "zarr",
 ]
+
+[tool.pytest.ini_options]
+# **リポジトリのルートに置くこと。** これは以前 tests/pytest.ini にあったが、
+# ルートから素の `pytest` を実行すると pytest はルートの設定ファイルしか探さない
+# ので、その設定は使われていなかった。結果 testpaths が効かず、収集も
+# pythonpath も指定と違う状態で走っていた。
+testpaths = ["tests", "src"]
+
+# src 配下にも実装の隣に置かれたテスト (*_test.py) がある。
+# 以前はここに他人の作業マシンの絶対パス
+# (/Users/tanmay/.../thorlab_microscopy/src/) が並んでおり、
+# そのマシン以外では死んだ設定だった。
+pythonpath = ["src"]
+
+# **実際に使われているものを登録する。** 以前は使われていない slow / integration
+# だけが登録され、使われている 3 つは未登録だった (--strict-markers を入れた
+# 途端に落ちる状態)。
+markers = [
+    "unit: no external data or network",
+    "integration_bioio: needs a real local dataset (--local-tiff-dir / --local-xml)",
+    "gdrive: needs Google Drive credentials (--gdrive-folder / --gdrive-sa-json)",
+]

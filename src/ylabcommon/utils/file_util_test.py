@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import ylabcommon.file_util as fu
+import ylabcommon.utils.file_util as fu
 
 
 # --------------------------------------------------------------------------- #

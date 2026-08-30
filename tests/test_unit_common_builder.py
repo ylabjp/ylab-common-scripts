@@ -1,8 +1,25 @@
 # tests/test_unit_common_builder.py
+"""``thorlab_loader.ThorlabBuilder`` の単体テスト。
+
+**このリポジトリでは走らない。** ``thorlab_loader`` は ylabcommon の前身の
+別パッケージで、依存にも入っていない。``ThorlabBuilder`` に当たるものは
+ylabcommon には無く (``ThorlabBioioBuilder`` は API が別物で、ここが差し替える
+``ThorlabMetadata`` / ``read_stack`` / ``save_ome_tiff`` も存在しない)、
+そのままでは付け替えられない。
+
+以前は import で **収集エラー**になっていた。エラーは「テストが 1 本落ちた」と
+同じ見え方をするので、走らないものは走らないと言って skip する。
+``thorlab_loader`` が入った環境では今までどおり走る。
+"""
 
 import pytest
 import numpy as np
 from pathlib import Path
+
+pytest.importorskip(
+    "thorlab_loader",
+    reason="thorlab_loader is a separate package and is not a dependency here")
+
 from thorlab_loader.builder import ThorlabBuilder
 from ylabcommon.parser.keyence_parser import KeyenceParser
 

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-import ylabcommon.matplot_util as mplutil
+import ylabcommon.utils.matplot_util as mplutil
 
 
 # --------------------------------------------------------------------------- #
