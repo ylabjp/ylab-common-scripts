@@ -1,48 +1,34 @@
+"""手元の実データ 1 式を最後まで通す (opt-in)。
+
+``--local-tiff-dir`` と ``--local-xml`` を渡したときだけ走る。渡さなければ
+``local_real_dataset_common`` が skip する。
+"""
 import pytest
-from thorlab_loader.backends.bioio_thorlab_builder import ThorlabBioioBuilder
+
+from ylabcommon.bioio.thorlab.builder import ThorlabBioioBuilder
 
 
 @pytest.mark.integration_bioio
-def test_full_pipeline_bioio_common(local_real_dataset_common):
+def test_full_pipeline_bioio_common(local_real_dataset_common, tmp_path):
+    tiff_dir, xml_path = local_real_dataset_common
 
-    tiff_dir, xml_file = local_real_dataset_common
-
-    if not tiff_dir:
-        pytest.skip("No local dataset provided")
-
-    if not xml_file:
-        raise FileNotFoundError("No Experiment.xml found")
-
-    xml_path = xml_file/"Experiment.xml"
-
-    builder = ThorlabBioioBuilder(
-        tiff_dir = str(tiff_dir),
-        xml_file = str(xml_path),
-        output_dir = "Ptest_output",
-        compression=None,
-        compression_level=None
-    )
+    # ``ThorlabBioioBuilder`` は Experiment.xml を tiff_dir から自分で決める
+    # (以前は xml_file / output_dir も引数だった)。渡された XML と食い違って
+    # いたら、そのまま進めても別のものを読むことになるので先に止める。
+    builder = ThorlabBioioBuilder(str(tiff_dir), compression=None,
+                                  compression_level=None)
+    assert builder.xml_file == xml_path, (
+        "the builder reads %s but the dataset points at %s"
+        % (builder.xml_file, xml_path))
 
     builder.build()
 
-    #assert True
+    out = tmp_path / "local_common"
+    out.mkdir()
+    builder.write(out / "volume")
 
-
-"""
-@pytest.mark.integration
-def test_keyence_local(fake_dataset, tmp_path):
-    out_dir = tmp_path / "keyence_output"
-
-    parser = KeyenceParser(fake_dataset)
-
-    builder = KeyenceBioioBuilder(
-        str(tiff_dir),
-        str(xml_path),
-        out_dir,
-        compression=None,
-        compression_level=None
-    )
-
-
-    assert out_dir.exists()
-"""
+    # **何か書けたことまで見る。** 以前は ``build()`` を呼ぶだけで
+    # ``#assert True`` が残っており、例外が出ないこと以外は何も確かめていなかった。
+    written = sorted(out.glob("*.ome.tif"))
+    assert written, sorted(p.name for p in out.iterdir())
+    assert written[0].stat().st_size > 0

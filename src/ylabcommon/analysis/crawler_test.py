@@ -11,11 +11,12 @@ import pytest
 #     make_cond_spec, make_mouse_spec, make_day_spec,
 #     GenericCrawler, GenericKernel, CrawlContext,
 # )
-from crawler import (
-    HierNode, LevelSpec, __build_tree_generic, __behavior_node_factory,
-    __make_cond_spec, __make_mouse_spec, __make_day_spec,
-    GenericCrawler, GenericKernel, CrawlContext,
+from ylabcommon.analysis.crawler import (
+    HierNode, LevelSpec, __build_tree_generic,
+    __make_cond_spec, __make_mouse_spec, __make_day_behavior_spec,
+    BehaviorNode, GenericCrawler, GenericKernel, CrawlContext,
 )
+from ylabcommon.models.parameters.general import ArgModel
 
 
 # ---------------------------------------------------------------------------
@@ -29,8 +30,8 @@ def dummy_fs(tmp_path: Path) -> Path:
         prj/
           condA/
             mouse1/
-              day001_/
-              day002/
+              day001/
+              day002_/
           condB/
             mouseX/
               day100/
@@ -75,12 +76,11 @@ class TraceKernel(GenericKernel):
 
 def test_ancestor_and_level_property(dummy_fs: Path):
     """HierNode.ancestor and BehaviorNode.cond/mouse/day properties behave."""
-    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     roots = __build_tree_generic(
         root=dummy_fs,
-        analysis_param=None,
         level_specs=level_specs,
-        node_class=__behavior_node_factory,
+        node_class=BehaviorNode,
     )
     # Locate one deep leaf: condA / mouse1 / day001_
     condA = next(r for r in roots if r.name == "condA")
@@ -100,23 +100,27 @@ def test_ancestor_and_level_property(dummy_fs: Path):
 
 def test_build_tree_generic_structure(dummy_fs: Path):
     """The builder yields the expected number of nodes and structure."""
-    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     roots = __build_tree_generic(
         root=dummy_fs,
-        analysis_param=None,
         level_specs=level_specs,
-        node_class=__behavior_node_factory,
+        node_class=BehaviorNode,
     )
     assert len(roots) == 2  # condA, condB
     condA = next(r for r in roots if r.name == "condA")
     condB = next(r for r in roots if r.name == "condB")
 
-    # condA -> one mouse, two days (after rename preprocessing)
+    # condA -> one mouse, two days
     mouse_children = condA.children
     assert len(mouse_children) == 1
     mouse = mouse_children[0]
-    # day002 already had underscore, day001 renamed to day001_
-    assert sorted(ch.name for ch in mouse.children) == ["day001_", "day002_"]
+    # **見つかった名前のまま返すこと。** ここは以前 ["day001_", "day002_"] を
+    # 期待していた —— 末尾に "_" の無い day を _preprocess_day が **改名** して
+    # いた頃の期待である。その改名は意図的に止めてあり (crawler.py の
+    # _preprocess_day は中身がコメントアウトされたまま d を返す)、読み取りだけの
+    # 走査が利用者のディレクトリ名を書き換えないようになっている。
+    # 実装ではなく期待のほうが古い。
+    assert sorted(ch.name for ch in mouse.children) == ["day001", "day002_"]
 
     # condB -> mouseX -> one day
     assert len(condB.children) == 1
@@ -125,20 +129,21 @@ def test_build_tree_generic_structure(dummy_fs: Path):
 
 def test_generic_crawler_trace(dummy_fs: Path):
     """GenericCrawler walks nodes depth-first and calls kernel hooks."""
-    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_spec()]
+    level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     roots = __build_tree_generic(
         root=dummy_fs,
-        analysis_param=None,
         level_specs=level_specs,
-        node_class=__behavior_node_factory,
+        node_class=BehaviorNode,
     )
 
     kernel = TraceKernel()
+    # 走査の設定は CrawlContext にまとまった (以前は project_dir / overwrite を
+    # GenericCrawler が直接受け取っていた)。呼び出し側 (slice-analysis の QC など)
+    # と同じ組み立て方をする。
     crawler = GenericCrawler(
         kernels=[kernel],
-        analysis_param=None,
-        project_dir=dummy_fs,
-        overwrite=False,
+        ctx=CrawlContext(analysis_param=None, project_dir=dummy_fs,
+                         arg=ArgModel(overwrite=False)),
     )
     crawler.crawl_from_nodes(roots)
 
@@ -163,4 +168,5 @@ def test_generic_crawler_trace(dummy_fs: Path):
     # Optional: verify first few depth-first sequence elements
     df_names = [v.split(":", 2)[2] for v in visited_nodes]
     # Depth-first should start with first cond, then its first mouse, etc.
-    assert df_names[:3] == ["condA", "mouse1", "day001_"]
+    # 名前は改名されずそのまま (test_build_tree_generic_structure のコメント参照)。
+    assert df_names[:3] == ["condA", "mouse1", "day001"]

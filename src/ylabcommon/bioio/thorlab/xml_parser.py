@@ -74,8 +74,15 @@ class ExperimentXMLParser:
             # 走査中心のずらし量。0 が既定で、0 でなければ視野が中心からずれている。
             # 値そのものを持つだけで、警告は :func:`warn_if_scan_offset` が出す
             # (extract_metadata は取得ごとに何度も呼ばれるので、ここで出すと重複する)。
-            meta["ScanOffsetX"] = self._safe_int(lsm.get("offsetX")) or 0
-            meta["ScanOffsetY"] = self._safe_int(lsm.get("offsetY")) or 0
+            #
+            # **書かれていなければ None のままにする。** 以前は ``or 0`` で 0 に
+            # 倒していたので、「0 と記録された取得」と「そもそも記録の無い取得」が
+            # 区別できなかった。オフセットが 0 であることは合否の判定に使われる
+            # (slice-analysis の QC はこれだけで通す) ため、確かめられなかった
+            # ものが黙って合格する。読めなかったことは値ではなく None で表す。
+            # 数値が要るだけの呼び出し側は :func:`scan_offset` を使えばよい。
+            meta["ScanOffsetX"] = self._safe_int(lsm.get("offsetX"))
+            meta["ScanOffsetY"] = self._safe_int(lsm.get("offsetY"))
 
         # -------------------------
         # Z / T の枠
@@ -235,12 +242,30 @@ class ExperimentXMLParser:
 
 
 def scan_offset(meta: dict) -> tuple:
-    """``extract_metadata()`` の結果から走査オフセット ``(x, y)`` を取り出す。"""
+    """``extract_metadata()`` の結果から走査オフセット ``(x, y)`` を取り出す。
+
+    **記録が無いときも ``(0, 0)`` を返す。** 数値がほしいだけの呼び出し側を
+    ``None`` で煩わせないためだが、そのぶん「0 と記録された」と「記録が無い」が
+    ここでは区別できない。**区別が要るなら :func:`scan_offset_known` を見ること。**
+    合否の判定に使うなら、まずそちらを見てからにする。
+    """
     return int(meta.get("ScanOffsetX") or 0), int(meta.get("ScanOffsetY") or 0)
 
 
+def scan_offset_known(meta: dict) -> bool:
+    """走査オフセットが実際に記録されていたかどうか。
+
+    ``<LSM>` が無い / ``offsetX`` ``offsetY`` が書かれていない / 数として読めない、
+    のいずれでも False。**「オフセットは 0 だった」と「オフセットは分からない」を
+    混ぜないための関数。** 0 であることを取り込みの合否に使う道具 (slice-analysis の
+    QC) では、確かめられなかったものが黙って合格するのがいちばん困る。
+    """
+    return (meta.get("ScanOffsetX") is not None
+            and meta.get("ScanOffsetY") is not None)
+
+
 def warn_if_scan_offset(meta: dict, xml_path) -> bool:
-    """走査中心がずれていたら警告する。ずれていれば True。
+    """走査中心がずれていたら警告する。**ずれていると分かったとき** True。
 
     ``<LSM offsetX="-52" offsetY="36" .../>`` は走査の中心を視野の中心から
     ずらす設定で、既定は 0 である。0 でない取得は視野がステージ座標の中心と
@@ -248,24 +273,51 @@ def warn_if_scan_offset(meta: dict, xml_path) -> bool:
     そのまま通す (画素も画素サイズも変わらない) が、黙って通すと、あとで
     「位置が合わない」とだけ言われて原因を追えなくなる。
 
+    記録が無い取得 (古い ThorImage など) でも黙って通さず、別の文面で知らせる。
+    ただし戻り値は False —— **ずれていると分かったわけではない** ので、
+    戻り値で分岐している呼び出し側に「ずれている」と言ってはいけない。
+    分からなかったことまで見たい呼び出し側は :func:`scan_offset_known` を使う。
+
     警告は端末では色付き、Better Stack へは値付きの構造化ログとして残す
     (どの取得が・いくつずれていたかを後から集計できるように)。
     """
     from ylabcommon.utils.betterstack_log import log_warning
 
-    x, y = scan_offset(meta)
-    if x == 0 and y == 0:
+    raw_x, raw_y = meta.get("ScanOffsetX"), meta.get("ScanOffsetY")
+
+    # **ずれていると分かるほうを先に見る。** 片方だけ記録されていて、その片方が
+    # 0 でないなら、視野がずれていることは確定している。「記録が無い」を先に
+    # 見ると、その確定した事実が「確認できません」に隠れてしまう。
+    if raw_x or raw_y:
+        log_warning(
+            "[thorlab] Scan offset is not centred: offsetX=%s, offsetY=%s "
+            "(expected 0, 0). The field of view is shifted from the centre of the "
+            "scan area, so stage coordinates will not line up with acquisitions "
+            "taken at offset 0. Pixels and pixel size are unaffected. Source: %s"
+            % (_shown(raw_x), _shown(raw_y), xml_path),
+            stage="thorlab.xml",
+            target_file=str(xml_path),
+            scan_offset_x=raw_x,
+            scan_offset_y=raw_y,
+        )
+        return True
+
+    if not scan_offset_known(meta):
+        log_warning(
+            "[thorlab] Scan offset is not recorded: this Experiment.xml has no "
+            "readable offsetX/offsetY, so whether the field of view is centred "
+            "cannot be checked. Do not read this as 'offset 0'. Source: %s"
+            % xml_path,
+            stage="thorlab.xml",
+            target_file=str(xml_path),
+            scan_offset_x=raw_x,
+            scan_offset_y=raw_y,
+        )
         return False
 
-    log_warning(
-        "[thorlab] Scan offset is not centred: offsetX=%d, offsetY=%d (expected 0, 0). "
-        "The field of view is shifted from the centre of the scan area, so stage "
-        "coordinates will not line up with acquisitions taken at offset 0. "
-        "Pixels and pixel size are unaffected. Source: %s"
-        % (x, y, xml_path),
-        stage="thorlab.xml",
-        target_file=str(xml_path),
-        scan_offset_x=x,
-        scan_offset_y=y,
-    )
-    return True
+    return False
+
+
+def _shown(value):
+    """記録の無い値を 0 と書かない。文面の中で「0 だった」と読ませないため。"""
+    return "not recorded" if value is None else value

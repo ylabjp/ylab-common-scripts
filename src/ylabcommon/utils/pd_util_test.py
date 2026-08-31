@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ylabcommon import pd_util
+from ylabcommon.utils import pd_util
 
 
 # --------------------------------------------------------------------------- #
