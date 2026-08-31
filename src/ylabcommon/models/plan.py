@@ -118,12 +118,24 @@ class CCConfig(BaseModel):
 
     - ``config_dir``: behavior-config/controller-cc 以下の config フォルダ名
       (例 ``config_OFL_2025``)。
+    - ``paradigm``: 記録ファイル名の 2 番目の要素になる課題パラダイム名
+      (例 ``OATC`` / ``3CSRTT`` / ``Before-task``)。CC controller の Execution 欄へ
+      そのまま流し込む。
+
+    ``paradigm`` は **Plan 単位**で持つ。1 つの Plan は 1 プロトコル分の計画なので、
+    パラダイムが変わる日程は別ファイルに分ける(``*-beforetask.yaml`` が既にそう
+    なっている)。``config_dir`` と同じ粒度で、ステップ単位の上書きは持たない。
+
+    計画ファイル名を paradigm の代わりに使うことはしない。ファイル名は
+    ``prj27-4_OFL_stress`` のように prj 番号や条件を含む識別子で、パラダイム名
+    そのものではないため。
 
     photometry パラメータは plan 既定を持たず、各 day で task_param と並べて
     :attr:`PlanDay.photometry_param` に個別指定する。
     """
 
     config_dir: str = ""
+    paradigm: str = ""
 
 
 class ProgramStep(BaseModel):
@@ -576,6 +588,7 @@ class ScheduledConfig(BaseModel):
     plan_name: str = ""  # 由来した YAML ファイル名 (拡張子なし)。protocol はここ(=ファイル名)で表す
     period_name: str = ""  # 由来した Period 名 (複数 Period のとき)
     config_dir: str = ""
+    paradigm: str = ""   # 計画の ``cc_config.paradigm``。記録ファイル名の 2 番目の要素
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
 
@@ -616,6 +629,7 @@ class ScheduledMouse(BaseModel):
     plan_name: str = ""       # 由来した YAML ファイル名 (拡張子なし)。protocol はここ(=ファイル名)で表す
     period_name: str = ""
     config_dir: str = ""
+    paradigm: str = ""        # 計画の ``cc_config.paradigm``。記録ファイル名の 2 番目の要素
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
     # 個体 (mouse) メタ
@@ -878,6 +892,7 @@ def find_scheduled_configs(
                         plan_name=plan_name,
                         period_name=period.name,
                         config_dir=cc.config_dir,
+                        paradigm=cc.paradigm,
                         task_param=day.task_param,
                         photometry_param=day.photometry_param,
                     )
@@ -946,6 +961,7 @@ def find_scheduled_mice(
                             plan_name=plan_name,
                             period_name=period.name,
                             config_dir=cc.config_dir,
+                            paradigm=cc.paradigm,
                             task_param=task,
                             photometry_param=photo,
                             slot=(m.bench.get(label, "") if label else ""),
