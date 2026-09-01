@@ -65,7 +65,7 @@ def _thorlabs_channel_key(path):
     channel token (``ChanA`` / ``ChanB`` / ... or ``CH1``) is what distinguishes
     channels. Returns that token, or the whole stem if none is found (so all files
     collapse into a single channel). Mirrors the convention used by
-    ``outfile_name.build_output_name`` and ``file_selection``.
+    ``file_selection``.
     """
     stem = Path(path).stem
     for tok in stem.split("_"):
