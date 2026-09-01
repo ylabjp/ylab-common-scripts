@@ -45,7 +45,7 @@ def _sample_plan() -> ExperimentPlan:
         within_factors=["paired", "unpaired"],
         water_restriction_ratio=0.85,
         daily_evaporation_ml=1.2,
-        cc_config=CCConfig(config_dir="config_OFL_2025", paradigm="OATC"),
+        cc_config=CCConfig(config_dir="config_OFL_2025"),
         program=[
             ProgramStep(phase="1", task_param="OAFC_shock_exposure.json",
                         photometry_param="20Hz_470_405nm.json"),
@@ -86,7 +86,6 @@ def test_round_trip():
     assert loaded.water_restriction_ratio == 0.85
     assert loaded.daily_evaporation_ml == 1.2
     assert loaded.cc_config.config_dir == "config_OFL_2025"
-    assert loaded.cc_config.paradigm == "OATC"
     assert len(loaded.program) == 3
     day2 = loaded.resolve_trial(loaded.trials[0])[1]
     assert day2.day == 2 and day2.offset == 1 and day2.label == "day2"
@@ -537,41 +536,29 @@ def _run_standalone() -> int:
     return 1 if failed else 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(_run_standalone())
-
-
 # ------------------------------------------------------------------ paradigm
 
-def test_paradigm_reaches_scheduled_entries():
-    """cc_config.paradigm が今日のマウス/Slot と config 予定の両方に載る。
+def test_cc_config_carries_no_paradigm():
+    """計画は paradigm を持たない。記録名の 2 番目は CC の Execution 欄で入力する。
 
-    CC controller の Execution 欄 "paradigm" はここからしか埋まらない。空のまま
-    だと記録ファイル名の 2 番目の要素が抜け、解析側でパラダイムを判別できない。
+    決めるのはその回の ``task_param`` で、``config_dir`` ではない
+    (``config_3CSRTT_2022`` から 3CSRTT / Before-task / 3CSRTT-notask が出る)。
+    予定の各エントリにも載らないことを固定しておく — 生えると CC 側が計画の値で
+    Execution 欄を上書きし、同じ日の 2 セッション目が 1 セッション目のパラダイム名で
+    記録される(実績で 838 日ある並び)。
     """
     plan = _sample_plan()
-    with tempfile.TemporaryDirectory() as d:
-        save_plan(plan, os.path.join(d, "OFL_Holmes_2026.yaml"))
-        mice = find_scheduled_mice(d, ref_date=date(2026, 4, 26), window_days=0)
-        configs = find_scheduled_configs(d, ref_date=date(2026, 4, 26), window_days=0)
-    assert mice and all(m.paradigm == "OATC" for m in mice)
-    assert configs and all(c.paradigm == "OATC" for c in configs)
-
-
-def test_paradigm_defaults_to_empty_and_is_not_written():
-    """paradigm 未設定の既存計画はそのまま読め、保存しても項目が増えない。
-
-    save_plan は exclude_defaults なので、paradigm を使っていないファイルに
-    空の paradigm 行が生えてはいけない(全 100 件超の計画ファイルが対象)。
-    """
-    plan = _sample_plan()
-    plan.cc_config.paradigm = ""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "OFL_Holmes_2026.yaml")
         save_plan(plan, p)
         text = open(p, encoding="utf-8").read()
-        loaded = load_plan(p)
         mice = find_scheduled_mice(d, ref_date=date(2026, 4, 26), window_days=0)
+        configs = find_scheduled_configs(d, ref_date=date(2026, 4, 26), window_days=0)
+    assert not hasattr(plan.cc_config, "paradigm")
     assert "paradigm" not in text
-    assert loaded.cc_config.paradigm == ""
-    assert all(m.paradigm == "" for m in mice)
+    assert mice and not any(hasattr(m, "paradigm") for m in mice)
+    assert configs and not any(hasattr(c, "paradigm") for c in configs)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_standalone())
