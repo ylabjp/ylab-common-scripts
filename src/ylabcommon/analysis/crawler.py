@@ -576,7 +576,7 @@ def __make_raw_cell_spec() -> LevelSpec:
         sname_sub = d.name.split("_")
         if len(sname_sub) < 3:
             raise ValueError(
-                "Invalid directory name: %s" % sess_name
+                "Invalid directory name: %s" % d.name
                 + "\n Should be in the form of [XYT/XYZ/XYZ-T]_Cell[01]_[1]_[(optional)experiment condition]\ne.g. XYT_Cell01_01_ACSF"
             )
         image_type = sname_sub[0]
