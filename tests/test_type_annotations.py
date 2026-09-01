@@ -128,20 +128,13 @@ def test_each_file_still_compiles(path):
 
 @pytest.mark.parametrize("path", _all_files(), ids=lambda p: p.name)
 def test_methods_stay_in_their_class(path):
-    """``self`` を第 1 引数に取る関数が、クラスの外に出ていないこと。"""
+    """``self`` を第 1 引数に取る関数が、モジュール直下に出ていないこと。"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    in_class = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for child in node.body:
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    in_class.add(child.lineno)
-
     stray = []
-    for node in ast.walk(tree):
+    for node in tree.body:          # モジュール直下だけ。入れ子の関数は対象外
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         args = node.args.posonlyargs + node.args.args
-        if args and args[0].arg == "self" and node.lineno not in in_class:
+        if args and args[0].arg == "self":
             stray.append("%s:%d %s" % (path.name, node.lineno, node.name))
     assert not stray, stray
