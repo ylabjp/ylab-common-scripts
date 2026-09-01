@@ -140,7 +140,14 @@ def build_output_name(output_dir: Path, tiff_files, Z_stack_val, T_stack_val):
             stageX = int(parts[1])
             stageY = int(parts[2])
             z = int(parts[3])
-        except:
+        except (IndexError, ValueError):
+            # ThorLabs の連番形式 (ChanA_001_002_003_004.tif) ではない名前。
+            # 位置は取れないが channel は取れているので、行そのものは残す。
+            #
+            # **裸の ``except:`` にしないこと。** あれは KeyboardInterrupt や
+            # SystemExit まで飲むので、取り込みの途中で Ctrl-C が効かなくなる。
+            # ここで起きうるのは、要素が足りない (IndexError) か、数として
+            # 読めない (ValueError) かの 2 つだけである。
             pass
 
         records.append({
@@ -180,7 +187,14 @@ def build_output_name(output_dir: Path, tiff_files, Z_stack_val, T_stack_val):
     '''
 
     total_z = Z_stack_val
-    z_start = int(df["z"].dropna().min()) if not df.get("z", pd.Series()).empty else 1
+    # **「列があるか」ではなく「読めた値があるか」を見る。** 以前は
+    # ``not df.get("z", pd.Series()).empty`` を条件にしていたが、これは列の
+    # 有無しか見ていない。どの名前からも z が読めなかったとき列は全部 NaN の
+    # まま残るので条件は真になり、``int(NaN)`` が
+    # ``ValueError: cannot convert float NaN to integer`` で落ちる。
+    # すぐ下の ``t_start`` は最初から dropna() を見ており、そちらが正しい形。
+    z_values = df["z"].dropna() if "z" in df.columns else pd.Series(dtype=float)
+    z_start = int(z_values.min()) if not z_values.empty else 1
     
     if total_z > 1:
         zpart = f"Z{z_start:03d}_to_{total_z}_stack"
@@ -189,11 +203,29 @@ def build_output_name(output_dir: Path, tiff_files, Z_stack_val, T_stack_val):
 
     total_t = T_stack_val
     t_start = int(df["t"].dropna().min()) if "t" in df.columns and not df["t"].dropna().empty else 1
-    
+
     if total_t > 1:
         tpart = f"T{t_start:03d}_series{total_t}"
     else:
         tpart = f"T{t_start:03d}"
+
+    # **ループ変数の残り物を使わない。** ここは上のループを抜けたあとの
+    # ``stageX`` / ``stageY``、つまり **最後に見たファイル** の値を使っていた
+    # (それらを DataFrame から取り直す行はコメントアウトされたブロックの中に
+    # あり、動いていない)。ファイルの並び順で名前が決まってしまううえ、
+    # 最後の 1 本が上の except に落ちると None のまま f-string へ渡り、
+    # ``TypeError: unsupported format string passed to NoneType.__format__``
+    # という原因の分からない形で落ちる。
+    # ``ch`` と同じく、読めた中の最初のものを使う。
+    stage_x = df["stageX"].dropna()
+    stage_y = df["stageY"].dropna()
+    if stage_x.empty or stage_y.empty:
+        raise RuntimeError(
+            "Could not read a stage position from any of the %d file name(s); "
+            "expected the ThorLabs form ChanA_<X>_<Y>_<Z>_<T>.tif. First name: %r"
+            % (len(df), df["filename"].iloc[0] if len(df) else None))
+    stageX = int(stage_x.iloc[0])
+    stageY = int(stage_y.iloc[0])
 
     filename = f"Output_{ch}_X{stageX:03d}_Y{stageY:03d}_{zpart}_{tpart}"
 
