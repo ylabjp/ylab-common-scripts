@@ -1,3 +1,4 @@
+from typing import Any
 import numpy as np
 from ylabcommon.bioio.keyence.keyence_metainfo import ImageMetadata
 from ylabcommon.bioio.core.metadata_extractor_base import MicroscopeMetadataExtractor
@@ -20,8 +21,7 @@ from ylabcommon.bioio.core.metadata_extractor_base import MicroscopeMetadataExtr
 
 class KeyenceMetadataExtractor(MicroscopeMetadataExtractor):
 
-    def extract(self):
-
+    def extract(self) -> Any:
         metas = [ImageMetadata(f).get_dict() for f in self.files]
 
         first = metas[0]
@@ -31,7 +31,21 @@ class KeyenceMetadataExtractor(MicroscopeMetadataExtractor):
         # ----------------------------
 
         class ImageMeta:
-            pass
+            # 書き出し側へ渡すだけの入れ物。持たせる項目をここに並べておく
+            # (書いていないと、綴りを間違えた属性が黙って増える)。
+            dim_order: str
+            shape: Any
+            pixel_size: tuple
+            lens: Any
+            exposure: Any
+            sectioning: Any
+            stage: dict
+            image: dict
+            #: 以下は検証用 —— 全ファイルで揃っているべき値の集合。
+            pixel_sizes: set
+            dimensions: set
+            lens_names: set
+            z_positions: list
 
         # ----------------------------
         # Compute Z spacing

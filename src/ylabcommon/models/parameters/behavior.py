@@ -70,7 +70,7 @@ BODY = "body"
 # 各バージョンの body parts を (part_name, role) で定義する。
 # part_name の並び順は DLC モデルの出力順に一致させること
 # (detect_dlc_bodyparts_version は順序に依存しないが、可読性のため合わせておく)。
-DLC_BODY_PARTS = {
+DLC_BODY_PARTS: Dict[int, List[tuple[str, Optional[str]]]] = {
     2020: [
         ("left_ear", HEAD),
         ("right_ear", HEAD),
@@ -135,7 +135,7 @@ def get_dlc_parts_for_region(version: int, region: str) -> List[str]:
     return [name for name, role in DLC_BODY_PARTS[version] if role == region]
 
 
-def detect_dlc_bodyparts_version(body_parts) -> int:
+def detect_dlc_bodyparts_version(body_parts: Any) -> int:
     """
     DLC 出力に含まれる body part の集合から、どの DLC モデルバージョンかを判定する。
 
@@ -155,7 +155,7 @@ def detect_dlc_bodyparts_version(body_parts) -> int:
         "使用した DLC モデルを確認してください。"
     )
 
-def replace_yen_in_path_for_linux(fname: str):
+def replace_yen_in_path_for_linux(fname: str) -> str:
     return fname.replace("\\", "/")
 
 class DLCParam(BaseModel):
@@ -166,18 +166,20 @@ class DLCParam(BaseModel):
     is_dynamic:Optional[bool] = True
     dlc_median_filter_kernel_in_pixel:Optional[int] = 11
 
-    def get_dlc_body_parts_all(self, version: Optional[int] = None):
-        return get_dlc_body_part_names(version if version is not None else self.bodyparts_version)
+    def _version(self, version: Optional[int]) -> int:
+        """明示指定 > フィールド > 既定 (2020) の順で DLC バージョンを決める。"""
+        if version is not None:
+            return version
+        return self.bodyparts_version if self.bodyparts_version is not None else 2020
 
-    def get_dlc_parts_for_head_center(self, version: Optional[int] = None):
-        return get_dlc_parts_for_region(
-            version if version is not None else self.bodyparts_version, HEAD
-        )
+    def get_dlc_body_parts_all(self, version: Optional[int] = None) -> List[str]:
+        return get_dlc_body_part_names(self._version(version))
 
-    def get_dlc_parts_for_body_center(self, version: Optional[int] = None):
-        return get_dlc_parts_for_region(
-            version if version is not None else self.bodyparts_version, BODY
-        )
+    def get_dlc_parts_for_head_center(self, version: Optional[int] = None) -> List[str]:
+        return get_dlc_parts_for_region(self._version(version), HEAD)
+
+    def get_dlc_parts_for_body_center(self, version: Optional[int] = None) -> List[str]:
+        return get_dlc_parts_for_region(self._version(version), BODY)
 
 
 
@@ -188,23 +190,24 @@ class PreprocessingParam(BaseModel):
     time_bin_in_s_for_video_processing: Optional[float] = None
     time_bin_in_s: Optional[float] = None
     model_targets: Optional[List[str]] = []
-    def get_resample_str(self, for_video_processing=False) -> str:
-        if for_video_processing:
-            time_bin_in_s = self.time_bin_in_s_for_video_processing
-        else:
-            time_bin_in_s = self.time_bin_in_s
+    def _bin_in_s(self, for_video_processing: bool) -> float:
+        name = ("time_bin_in_s_for_video_processing" if for_video_processing
+                else "time_bin_in_s")
+        value = getattr(self, name)
+        if value is None:
+            raise ValueError("PreprocessingParam.%s is not set" % name)
+        return float(value)
+
+    def get_resample_str(self, for_video_processing: bool = False) -> str:
+        time_bin_in_s = self._bin_in_s(for_video_processing)
         if time_bin_in_s < 1:
             resample_str = "%dms" % int(time_bin_in_s * 1000)
         else:
             resample_str = "%ds" % time_bin_in_s
         return resample_str
 
-    def get_resample(self, for_video_processing=False) -> pd.Timedelta:
-        if for_video_processing:
-            time_bin_in_s = self.time_bin_in_s_for_video_processing
-        else:
-            time_bin_in_s = self.time_bin_in_s
-        return pd.Timedelta(seconds=time_bin_in_s)
+    def get_resample(self, for_video_processing: bool = False) -> pd.Timedelta:
+        return pd.Timedelta(seconds=self._bin_in_s(for_video_processing))
 
 class TrialDiv(BaseModel):
     """
@@ -261,7 +264,7 @@ class GroupAnalysisItemParam(BaseModel):
     exclude_mice: Optional[List[str]] = None
 
     @model_validator(mode="after")
-    def _check_cond_selection(self):
+    def _check_cond_selection(self) -> "GroupAnalysisItemParam":
         """cond_by_mouse / exclude_mice の静的に決まる矛盾を config 読み込み時に弾く。
 
         いずれも「どちらの意味に取るべきか決められない」書き方なので、黙って一方を採用すると
@@ -340,7 +343,9 @@ class EventConfig(BaseModel):
     start_in_hm: Optional[str] = None
     end_in_hm: Optional[List[int]] = None
     duration_in_hm: Optional[List[int]] = None
-    # type: "time_periods" 専用。[hours, minutes]で1回あたりの期間の長さを指定する(例: [12, 0]で12時間)。
+    # ``type`` が "time_periods" のとき専用。[hours, minutes]で1回あたりの期間の
+    # 長さを指定する(例: [12, 0]で12時間)。
+    # (行頭を `# type:` にしない —— 型チェッカが「型コメント」と読んで構文誤りになる)
     # after_in_sの代わりにこの値が秒に変換されてイベントwindowの幅として使われる(baseline_in_sは通常通り有効)。
 class PhotometryConfig(BaseModel):
     name: str
@@ -385,7 +390,7 @@ class PreprocessingScope(BaseModel):
     detection_difference: bool
 
     @model_validator(mode="after")
-    def _at_least_one_stage(self):
+    def _at_least_one_stage(self) -> "PreprocessingScope":
         if not (self.cc or self.dlc or self.detection_difference):
             raise ValueError(
                 "preprocessing_scope: cc / dlc / detection_difference が全て false です。"
@@ -412,7 +417,7 @@ class BehaviorParam(BaseModel):
     # top-level なら全ステージの config_hash が不変。preprocessing 配下に入れると
     # preprocess_video と individual_analysis のハッシュが変わり既存出力が STALE(config) になる。
     preprocessing_scope: Optional[PreprocessingScope] = None
-    video_param: Optional[VideoParam] = Field(default_factory=VideoParam)
+    video_param: VideoParam = Field(default_factory=VideoParam)
 
     group_analyses: Optional[Dict[str, GroupAnalysisItemParam]] = Field(
         default_factory=dict
@@ -431,7 +436,7 @@ class BehaviorParam(BaseModel):
     # aggregation_calc:  Optional[Dict[str, AggregationCalcConfig]]= Field(default_factory=dict)
 
     @staticmethod
-    def get_path(target):
+    def get_path(target: str) -> Path:
         base_val = os.getenv(target)
         if not base_val:
             raise EnvironmentError(
@@ -464,8 +469,8 @@ class BehaviorParam(BaseModel):
         return res
 
 
-    def generate_individual_param(self,path:Path):
-        
+    def generate_individual_param(self, path: Path) -> "BehaviorParam":
+
         if not path.exists():
             return self
 
@@ -483,7 +488,7 @@ class BehaviorParam(BaseModel):
 
         return self.model_validate(base)
 
-    def save_individual_param(self,path:Path):
+    def save_individual_param(self,path:Path) -> None:
         '''
         Define the scope of the parameters to be saved for individual dataset
         Currently, the scope is confined to video_param
@@ -527,7 +532,7 @@ class VideoInfo(BaseModel):
 
     @field_validator("analysis_status", mode="before")
     @classmethod
-    def _unset_to_pending(cls, v):
+    def _unset_to_pending(cls, v: Any) -> Any:
         """未設定 ("" / null) を "pending" に正規化する。"""
         if v is None or v == "":
             return "pending"
@@ -696,7 +701,7 @@ class DataKeys:
         DEFAULT_BLOCK_LENGTH_IN_MS = "default_block_length_in_ms"
         ACTUAL_BLOCK_LENGTH_IN_MS = "actual_block_length_in_ms"
         @classmethod
-        def get_index_columns(cls):
+        def get_index_columns(cls) -> list:
             return [
                 cls.BLOCK_TERMINATION_IN_MS,
                 cls.BLOCK_TERMINATION_ORIGIN,

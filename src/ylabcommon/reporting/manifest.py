@@ -30,7 +30,7 @@ _FIELD = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 _ID_RE = re.compile(rf"^{_FIELD}(?:_{_FIELD}){{2,3}}$")
 
 
-def _json_default(obj: Any):
+def _json_default(obj: Any) -> Any:
     """`json.dumps` が知らない型の受け皿。
 
     numpy スカラは `.item()` で Python の値にする。**`np.float64` は `float` を
@@ -165,7 +165,7 @@ def split_figure_id(fid: str) -> tuple[str, str, str, str | None]:
     return prj, group, kind, (parts[3] if len(parts) == 4 else None)
 
 
-def _finite_or_none(value, field_name: str, nonfinite: list[str]):
+def _finite_or_none(value: Any, field_name: str, nonfinite: list[str]) -> Any:
     """非有限(NaN / ±Inf)なら None にし、フィールド名を `nonfinite` へ積む。
 
     scipy は分散ゼロの `ttest_ind`、差がゼロの `ttest_rel`、定数入力の

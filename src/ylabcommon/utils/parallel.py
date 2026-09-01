@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Callable, Iterable, List, Optional, TypeVar
+from typing import Any, Callable, Iterable, List, Optional, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -32,7 +32,7 @@ def ordered_bounded_map(
     items: Iterable[T],
     *,
     max_workers: int,
-    step=None,
+    step: Any = None,
     thread_name_prefix: str = "ylab-io",
 ) -> List[R]:
     """``[fn(x) for x in items]`` と同じ結果を、I/O を最大 ``max_workers`` 並行で返す。

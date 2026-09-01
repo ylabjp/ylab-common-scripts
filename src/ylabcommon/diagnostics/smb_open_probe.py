@@ -47,6 +47,7 @@ smb_open_probe.py -- ネットワーク共有(SMB)上で「メタデータは速
 
 from __future__ import annotations
 
+from typing import Any, Optional
 import argparse
 import json
 import os
@@ -90,7 +91,7 @@ HSM_FLAGS = {"OFFLINE", "RECALL_ON_OPEN", "RECALL_ON_DATA_ACCESS"}
 NOISE_FLOOR_MS = 1.0  # これ未満は計測ノイズ。比を取っても意味がない。
 
 
-def fmt_ms(v):
+def fmt_ms(v: Any) -> str:
     """ミリ秒を読みやすく。None は '-'。ローカル SSD の sub-ms も潰さない桁数にする。"""
     if v is None:
         return "       -"
@@ -101,7 +102,7 @@ def fmt_ms(v):
     return "%8.3f" % v
 
 
-def summarize(values):
+def summarize(values: Any) -> tuple:
     """min / median / max を返す。空なら None 三つ組。"""
     vals = [v for v in values if v is not None]
     if not vals:
@@ -109,12 +110,12 @@ def summarize(values):
     return (min(vals), statistics.median(vals), max(vals))
 
 
-def median_of(values):
+def median_of(values: Any) -> Optional[float]:
     vals = [v for v in values if v is not None]
     return statistics.median(vals) if vals else None
 
 
-def decode_attrs(attrs):
+def decode_attrs(attrs: Any) -> list[str]:
     """st_file_attributes のビットを名前のリストへ。"""
     if attrs is None:
         return []
@@ -124,7 +125,7 @@ def decode_attrs(attrs):
 # ---------------------------------------------------------------------------
 # 環境情報(Windows / WSL2 / Linux をできる範囲で自己申告させる)
 # ---------------------------------------------------------------------------
-def describe_environment(target_dir):
+def describe_environment(target_dir: Any) -> dict:
     """実行環境と対象パスの素性を best-effort で調べる。失敗しても致命傷にしない。"""
     info = {
         "python": sys.version.split()[0],
@@ -149,13 +150,13 @@ def describe_environment(target_dir):
                 root = drive + "\\"
                 types = {0: "UNKNOWN", 1: "NO_ROOT_DIR", 2: "REMOVABLE",
                          3: "FIXED(local)", 4: "REMOTE(network)", 5: "CDROM", 6: "RAMDISK"}
-                dt = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+                dt = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))  # type: ignore[attr-defined]
                 info["drive_type"] = types.get(dt, str(dt))
 
                 # WNetGetConnectionW: ドライブレター -> \\server\share
                 buf = ctypes.create_unicode_buffer(1024)
                 size = wintypes.DWORD(1024)
-                rc = ctypes.windll.mpr.WNetGetConnectionW(
+                rc = ctypes.windll.mpr.WNetGetConnectionW(  # type: ignore[attr-defined]
                     ctypes.c_wchar_p(drive), buf, ctypes.byref(size))
                 if rc == 0:
                     info["unc_of_drive"] = buf.value
@@ -187,7 +188,7 @@ def describe_environment(target_dir):
 # ---------------------------------------------------------------------------
 # 対象ファイルの決定
 # ---------------------------------------------------------------------------
-def list_via_enumeration(target_dir, count):
+def list_via_enumeration(target_dir: Any, count: Any) -> tuple[list[str], float, int]:
     """os.scandir で列挙する。列挙自体の時間と総エントリ数も返す。
 
     重要: この列挙が SMB リダイレクタのディレクトリキャッシュを温めてしまうため、
@@ -207,7 +208,7 @@ def list_via_enumeration(target_dir, count):
     return names[:count], enum_ms, total
 
 
-def list_via_template(target_dir, template, start, count):
+def list_via_template(target_dir: Any, template: Any, start: Any, count: Any) -> tuple:
     """ファイル名を算術生成する。列挙しないのでキャッシュを温めない = 真のコールド測定。"""
     names = []
     for i in range(start, start + count):
@@ -221,7 +222,7 @@ def list_via_template(target_dir, template, start, count):
 # ---------------------------------------------------------------------------
 # 本体: 1 ファイルの計測
 # ---------------------------------------------------------------------------
-def _measure_core(path, do_full, max_full_bytes, progress, out):
+def _measure_core(path: Any, do_full: Any, max_full_bytes: Any, progress: Any, out: Any) -> None:
     """1 ファイルに対する全フェーズ。読み取り専用。progress は監視スレッド用の共有 dict。"""
     open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     # NOTE: O_SEQUENTIAL / O_RANDOM はあえて付けない。CPython の組み込み open() と
@@ -292,7 +293,7 @@ def _measure_core(path, do_full, max_full_bytes, progress, out):
     progress["phase"] = "done"
 
 
-def measure_one(path, do_full, max_full_bytes, timeout_s):
+def measure_one(path: Any, do_full: Any, max_full_bytes: Any, timeout_s: Any) -> dict:
     """_measure_core をワーカスレッドで実行し、タイムアウトしたら「どのフェーズで詰まったか」を記録。
 
     ブロックしたスレッドは daemon なので放置してよい(I/O 待ちは GIL を解放しているため
@@ -302,7 +303,7 @@ def measure_one(path, do_full, max_full_bytes, timeout_s):
     out = {"path": path, "name": os.path.basename(path)}
     err_box = []
 
-    def work():
+    def work() -> None:
         try:
             _measure_core(path, do_full, max_full_bytes, progress, out)
         except BaseException as exc:  # noqa: BLE001 - 何が来ても計測は続ける
@@ -332,14 +333,14 @@ def measure_one(path, do_full, max_full_bytes, timeout_s):
 # ---------------------------------------------------------------------------
 # 出力
 # ---------------------------------------------------------------------------
-def print_header(text):
+def print_header(text: Any) -> None:
     print("")
     print("=" * 78)
     print(text)
     print("=" * 78)
 
 
-def print_per_file(results):
+def print_per_file(results: Any) -> None:
     print_header("1) ファイルごとの生の計測値 (ms)")
     print("%-34s %8s %8s %8s %8s %8s %9s" % (
         "file", "stat", "openCOLD", "openWARM", "hdr4KiB", "openFULL", "readFULL"))
@@ -368,7 +369,7 @@ def print_per_file(results):
     print("  hdr4KiB  = 先頭 4 KiB の ReadFile のみ = 実パイプラインが本当に必要としている I/O")
 
 
-def print_phase_summary(ok):
+def print_phase_summary(ok: Any) -> None:
     print_header("2) フェーズ別サマリ (ms) と スループット")
     rows = [
         ("stat()", "stat_ms"),
@@ -406,7 +407,7 @@ def print_phase_summary(ok):
         print("  ファイルサイズ: median %.2f MiB" % (statistics.median(sizes) / 1048576.0))
 
 
-def print_asymmetry(ok):
+def print_asymmetry(ok: Any) -> dict:
     """3) 1 個目 vs 残り。「一度きりのコスト」か「恒常的なコスト」かを分ける。"""
     print_header("3) 初回ファイル vs 残り(一度きりコストか、恒常的コストか)")
     if len(ok) < 3:
@@ -454,7 +455,7 @@ def print_asymmetry(ok):
     return flags
 
 
-def print_environment(env, enum_ms, enum_total, used_template):
+def print_environment(env: Any, enum_ms: Any, enum_total: Any, used_template: Any) -> None:
     print_header("0) 環境と対象")
     print("  Python        : %s" % env["python"])
     print("  Platform      : %s" % env["platform"])
@@ -475,7 +476,7 @@ def print_environment(env, enum_ms, enum_total, used_template):
         print("                     「stat が速い」ことだけを根拠に AV と結論してはいけない理由がこれ。")
 
 
-def print_storage_flags(ok):
+def print_storage_flags(ok: Any) -> set:
     """Windows のファイル属性から HSM/階層ストレージを直接判定する。"""
     print_header("4) ファイル属性(階層ストレージ / オフライン判定)")
     any_attr = any(r.get("attr_raw") is not None for r in ok)
@@ -503,7 +504,7 @@ def print_storage_flags(ok):
     return seen
 
 
-def print_verdict(ok, results, env, storage_flags):
+def print_verdict(ok: Any, results: Any, env: Any, storage_flags: Any) -> None:
     print_header("5) 判定")
 
     timeouts = [r for r in results if r.get("timeout")]
@@ -573,7 +574,8 @@ def print_verdict(ok, results, env, storage_flags):
         print("    残る候補: 1) オープン時 AV スキャン  3) HSM/階層ストレージのリコール  2) oplock ブレーク")
         if storage_flags & HSM_FLAGS:
             print("    → ファイル属性に %s。仮説 3(階層ストレージ)が最有力。" % ", ".join(sorted(storage_flags & HSM_FLAGS)))
-        elif o_warm is not None and o_cold / max(o_warm, 1e-9) >= TH_WARM_RATIO:
+        elif (o_warm is not None and o_cold is not None
+              and o_cold / max(o_warm, 1e-9) >= TH_WARM_RATIO):
             print("    → 初回 open のみ高コスト = 仮説 1(AV、スキャン結果はファイル単位でキャッシュ)")
             print("      または仮説 3。両者はここまでの数値では区別できない。属性が clean なら AV 寄り。")
         else:
@@ -604,7 +606,7 @@ def print_verdict(ok, results, env, storage_flags):
     print_next_steps(env)
 
 
-def print_next_steps(env):
+def print_next_steps(env: Any) -> None:
     print("")
     print("  --- 追試(このスクリプトだけでは決着しない部分) ---")
     print("  a) AV(仮説 1)")
@@ -641,7 +643,7 @@ def print_next_steps(env):
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="SMB 共有上の open 遅延を CreateFile / ReadFile に分離して計測する読み取り専用プローブ",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -662,7 +664,7 @@ def build_parser():
     return p
 
 
-def main(argv=None):
+def main(argv: Any = None) -> int:
     args = build_parser().parse_args(argv)
     target = args.directory
     if args.count < 1:

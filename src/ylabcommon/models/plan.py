@@ -18,7 +18,7 @@ import re
 from datetime import date as DateType
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -44,7 +44,7 @@ class _FlowMap(dict):
     """1 行(フロー形式)で書き出す辞書。"""
 
 
-def _represent_flow_map(dumper, data):
+def _represent_flow_map(dumper: Any, data: Any) -> Any:
     return dumper.represent_mapping("tag:yaml.org,2002:map", data, flow_style=True)
 
 
@@ -86,7 +86,7 @@ __all__ = [
 _DAY_LABEL_RE = re.compile(r"^day(-?\d+)$")
 
 
-def day_label_number(label) -> Optional[int]:
+def day_label_number(label: Any) -> Optional[int]:
     """``"day-1"`` -> -1, ``"day01"`` -> 1。パースできなければ None。"""
     if not isinstance(label, str):
         return None
@@ -179,7 +179,7 @@ class PlanDay(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _from_legacy(cls, data):
+    def _from_legacy(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         data = dict(data)
@@ -266,7 +266,7 @@ class CustomColumn(BaseModel):
 
     @field_validator("type", mode="before")
     @classmethod
-    def _known_type(cls, v):
+    def _known_type(cls, v: Any) -> Any:
         """未知の型は text 扱い(将来の型を書いたファイルでも読めなくならない)。"""
         s = str(v or "").strip().lower()
         return s if s in (CUSTOM_TEXT, CUSTOM_CHOICE) else CUSTOM_TEXT
@@ -338,7 +338,7 @@ class PlanMouse(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _baseline_from_legacy(cls, data):
+    def _baseline_from_legacy(cls, data: Any) -> Any:
         """``age_day_2`` / ``actual_bw_day_2`` を基準日つきの形へ移す。
 
         旧項目名は「day -2 で測ったもの」という前提を名前に埋め込んでいた。
@@ -366,7 +366,7 @@ class PlanMouse(BaseModel):
 
     @field_validator("birth_date", "termination", mode="before")
     @classmethod
-    def _yymmdd_to_date(cls, v):
+    def _yymmdd_to_date(cls, v: Any) -> Any:
         """旧形式の ``YYMMDD`` 文字列を ISO 日付に変換して読む(YY -> 20YY)。"""
         if isinstance(v, str):
             t = v.strip()
@@ -462,7 +462,7 @@ class ExperimentPlan(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _split_legacy_days(cls, data):
+    def _split_legacy_days(cls, data: Any) -> Any:
         """旧形式(plan 直下の ``days`` に day と phase が同居)を分解して読む。
 
         ``days`` の各要素から、ステップを持つ日を :attr:`program` の並びへ、日付の
@@ -567,8 +567,12 @@ class ExperimentPlan(BaseModel):
         return self.resolve_trial(trial)
 
     def resolve_photometry_param(self, day: PlanDay) -> Optional[str]:
-        """その day の photometry パラメータ (plan 既定は廃止)。"""
-        return day.photometry_param
+        """その day の photometry パラメータ (plan 既定は廃止)。
+
+        PlanDay 自体はこの値を持たない。持っているのは凍結した
+        :attr:`PlanDay.step` (:meth:`freeze_trial` が書く) の方。
+        """
+        return day.step.photometry_param if day.step is not None else None
 
 
 class ScheduledConfig(BaseModel):
@@ -836,7 +840,7 @@ def default_sessions(phases: List[str],
 
 
 def resolve_day_date(
-    period: "ExperimentTrial", day: PlanDay
+    period: "ExperimentTrial", day: Union[PlanDay, ResolvedDay]
 ) -> Optional[DateType]:
     """具体日付 = Period.start + day.offset。start 未設定なら None。"""
     start = period.period.start if period.period else None

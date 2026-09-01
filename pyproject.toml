@@ -77,7 +77,8 @@ where = ["src"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",
-    "pytest-mock"
+    "pytest-mock",
+    "mypy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -86,6 +87,21 @@ zarr = [
   "ome-zarr",
   "zarr",
 ]
+
+# 型注釈は **誰かが確かめていないとただのコメント** になり、やがて嘘になる。
+#   uv run mypy
+# で出荷するパッケージ全体を検査する。tests/test_type_annotations.py が
+# 「注釈の付いている割合が下がっていないこと」も見ている。
+[tool.mypy]
+python_version = "3.12"
+files = ["src/ylabcommon"]
+plugins = ["pydantic.mypy"]
+# bioio / tifffile / gdown などは型情報を配っていない。無いものは Any として
+# 扱う —— 「スタブが無い」という指摘が何百と出ると本当の指摘が埋もれる。
+ignore_missing_imports = true
+# src はパッケージではなく置き場なので、module 名は ylabcommon.* から始まる。
+mypy_path = "src"
+explicit_package_bases = true
 
 [tool.pytest.ini_options]
 # **リポジトリのルートに置くこと。** これは以前 tests/pytest.ini にあったが、

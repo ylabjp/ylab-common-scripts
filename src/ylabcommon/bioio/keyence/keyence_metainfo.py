@@ -1,7 +1,21 @@
+from typing import Any, Optional
 import xml.etree.ElementTree as ET
 import re
 # obtain XML data from a TIFF file
 # grep -a -e"Data" -B0 -A1000 Test_001.tif
+
+
+def _text(parent: Optional[ET.Element], tag: str) -> str:
+    """``parent`` 直下 (または ``.//``) の ``tag`` の中身を返す。
+
+    無ければ **どのタグが無かったか** を言って落ちる。以前はここが
+    ``parent.find(tag).text`` で、タグが 1 つ欠けただけで
+    ``'NoneType' object has no attribute 'text'`` としか出なかった。
+    """
+    el = None if parent is None else parent.find(tag)
+    if el is None or el.text is None:
+        raise ValueError("Keyence XML is missing <%s>" % tag)
+    return el.text
 
 
 class ImageMetadata:
@@ -16,16 +30,18 @@ class ImageMetadata:
             Initializes the ImageMetadata object by extracting and parsing XML data from the given TIFF file.
     """
 
-    def __init__(self, tif: str, save_xml: bool = False):
+    def __init__(self, tif: str, save_xml: bool = False) -> None:
         self.__xml_file = tif.replace('.tif', '.xml')
-        self.image_positions: tuple[float] = None
-        self.dimensions: tuple[int] = None
-        self.z_position: int = None
-        self.nm_per_pixel_values: float = None
-        self.lens_name = None
-        self.exposure_time = None
-        self.sectioning = None
-        self.gain: tuple[int] = None
+        self.image_positions: tuple[int, int] = (0, 0)
+        self.dimensions: tuple[int, int] = (0, 0)
+        #: XML の値をそのまま (文字列)。無ければ None。
+        self.z_position: Optional[str] = None
+        self.nm_per_pixel_values: float = 0.0
+        self.lens_name: Any = None
+        self.exposure_time: Any = None
+        self.sectioning: Any = None
+        #: (CameraGain, CameraHardwareGain)。XML の値をそのまま (文字列) か 0。
+        self.gain: tuple[Any, Any] = (0, 0)
         # Read TIFF file as binary
         with open(tif, "rb") as file:
             content = file.read().decode(errors="ignore")   # decode as string
@@ -50,29 +66,29 @@ class ImageMetadata:
 
         # Extract X and Y coordinates
         self.image_positions = (
-            int(region.find('X').text), int(region.find('Y').text))
+            int(_text(region, 'X')), int(_text(region, 'Y')))
 
         # Extract width and height from the SavingImageSize section
         self.dimensions = (
-            int(tree.find('.//SavingImageSize/Width').text),
-            int(tree.find('.//SavingImageSize/Height').text)
+            int(_text(tree.getroot(), './/SavingImageSize/Width')),
+            int(_text(tree.getroot(), './/SavingImageSize/Height')),
         )
 
         # Extract width from XyStageRegion and SavingImageSize to calculate nm_per_pixel
         # Width in nm from XyStageRegion
         # Width in pixels from SavingImageSize
-        self.nm_per_pixel_values = int(region.find(
-            'Width').text) / self.dimensions[0]  # Conversion factor
+        self.nm_per_pixel_values = (
+            int(_text(region, 'Width')) / self.dimensions[0])  # Conversion factor
 
         # Extract Z position if available
-        self.z_position = tree.find(
-            './/StageLocationZ').text if tree.find('.//StageLocationZ') is not None else None
+        self.z_position = (_text(tree.getroot(), './/StageLocationZ')
+                           if tree.find('.//StageLocationZ') is not None else None)
 
         self.gain = (
-            tree.find(
-                './/CameraGain').text if tree.find('.//CameraGain') is not None else 0,
-            tree.find(
-                './/CameraHardwareGain').text if tree.find('.//CameraHardwareGain') is not None else 0
+            _text(tree.getroot(), './/CameraGain')
+            if tree.find('.//CameraGain') is not None else 0,
+            _text(tree.getroot(), './/CameraHardwareGain')
+            if tree.find('.//CameraHardwareGain') is not None else 0,
         )
         # Extract LensName
         # <Lens Type="Keyence.Micro.Bio.Common.Data.Metadata.Conditions.LensCondition, Keyence.Micro.Bio.Common.Data.Metadata, Version=1.1.2.14, Culture=neutral, PublicKeyToken=null">
@@ -94,8 +110,8 @@ class ImageMetadata:
             numerator = exposure_time.find('Numerator')
             denominator = exposure_time.find('Denominator')
             if numerator is not None and denominator is not None:
-                self.exposure_time = float(
-                    numerator.text) / float(denominator.text)
+                self.exposure_time = (float(_text(exposure_time, 'Numerator'))
+                                      / float(_text(exposure_time, 'Denominator')))
         # Extract Sectioning information
         #     <Sectioning Type="Keyence.Micro.Bio.Common.Data.Metadata.Conditions.SectioningCondition, Keyence.Micro.Bio.Common.Data.Metadata, Version=1.1.2.14, Culture=neutral, PublicKeyToken=null">
         #   <Enabled Type="System.Boolean">True</Enabled>
@@ -107,23 +123,22 @@ class ImageMetadata:
         # < / Sectioning >
         sectioning_info = tree.find('.//Sectioning')
         if sectioning_info is not None:
-            if sectioning_info.find('Enabled').text == "True":
+            if _text(sectioning_info, 'Enabled') == "True":
                 self.sectioning = (
-                    "SettingType: " + sectioning_info.find('SettingType').text +
-                    "SlitType: "+sectioning_info.find('SlitType').text +
-                    "SlitSize: " + sectioning_info.find('SlitSize').text +
-                    "SlitPitch: " + sectioning_info.find('SlitPitch').text +
-                    "SlitScanPitch: " +
-                    sectioning_info.find('SlitScanPitch').text
+                    "SettingType: " + _text(sectioning_info, 'SettingType') +
+                    "SlitType: " + _text(sectioning_info, 'SlitType') +
+                    "SlitSize: " + _text(sectioning_info, 'SlitSize') +
+                    "SlitPitch: " + _text(sectioning_info, 'SlitPitch') +
+                    "SlitScanPitch: " + _text(sectioning_info, 'SlitScanPitch')
                 )
 
             else:
                 self.sectioning = "None"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"X: {self.image_positions[0]}, Y: {self.image_positions[1]}, Width: {self.dimensions[0]}, Height: {self.dimensions[1]}, nm_per_pixel: {self.nm_per_pixel_values}, lens_name: {self.lens_name}, Exposure_Time: {self.exposure_time}"
 
-    def get_dict(self):
+    def get_dict(self) -> dict:
         return {
             "X": int(self.image_positions[0]/self.nm_per_pixel_values),
             "Y": int(self.image_positions[1]/self.nm_per_pixel_values),

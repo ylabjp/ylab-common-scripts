@@ -8,7 +8,7 @@ Google Drive ZIP downloader with dual authentication:
 import io
 import zipfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -23,12 +23,12 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 # AUTH HELPERS
 # ---------------------------------------------------------
 
-def build_service_service_account(creds_path: Path):
+def build_service_service_account(creds_path: Path) -> Any:
     creds = ServiceAccountCredentials.from_service_account_file(str(creds_path), scopes=SCOPES)
     return build("drive", "v3", credentials=creds)
 
 
-def build_service_oauth(client_secret_path: Path, token_path: Path):
+def build_service_oauth(client_secret_path: Path, token_path: Path) -> Any:
     import pickle
 
     if token_path.exists():
@@ -54,13 +54,13 @@ def extract_folder_id(url: str) -> str:
     raise ValueError(f"Could not extract folder ID from: {url}")
 
 
-def list_zip_files(service, folder_id: str) -> List[dict]:
+def list_zip_files(service: Any, folder_id: str) -> List[dict]:
     query = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder'"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     return [f for f in results.get("files", []) if f["name"].lower().endswith(".zip")]
 
 
-def download_zip(service, file_id: str, out_path: Path):
+def download_zip(service: Any, file_id: str, out_path: Path) -> None:
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -72,7 +72,7 @@ def download_zip(service, file_id: str, out_path: Path):
     out_path.write_bytes(fh.getvalue())
 
 
-def extract_zip(zip_path: Path, extract_dir: Path):
+def extract_zip(zip_path: Path, extract_dir: Path) -> None:
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
 

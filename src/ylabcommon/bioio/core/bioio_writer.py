@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 from math import prod
 import numpy as np
 from bioio import PhysicalPixelSizes
 
 from ylabcommon.utils.perf import timed_step
 
+_da: Any
 try:
     import dask.array as _da
 except Exception:  # pragma: no cover - dask is a hard dep of bioio in practice
@@ -22,7 +23,7 @@ except ImportError as e:
 
 # Zarr is optional
 try:
-    from bioio_ome_zarr.writers import OmeZarrWriter
+    from bioio_ome_zarr.writers import Channel, OMEZarrWriter
     _HAS_ZARR = True
 except ImportError:
     _HAS_ZARR = False
@@ -75,7 +76,7 @@ def _with_ome_suffix(path: Path, suffix: str, known: Sequence[str]) -> Path:
     return path.with_name(name + suffix)
 
 
-def _read_block(block):
+def _read_block(block: Any) -> np.ndarray:
     """遅延ブロックを実体化する。dask なら **同時に** 読む。
 
     ``np.asarray`` (= ``compute()``) の既定スケジューラはワーカ数が CPU 数なので、
@@ -84,6 +85,20 @@ def _read_block(block):
     if _da is not None and isinstance(block, _da.Array):
         return block.compute(scheduler="threads", num_workers=_STREAM_READERS)
     return np.asarray(block)
+
+
+def _axis_scales(dim_order: str,
+                 physical_pixel_sizes: Optional[tuple[float, float, float]]
+                 ) -> Optional[list[float]]:
+    """``(Z, Y, X)`` の物理サイズを、``dim_order`` の軸ごとの scale 列にする。
+
+    OME-Zarr の ``coordinateTransformations`` は **軸ごとに 1 つ** scale を持つ
+    ので、T/C のように物理長を持たない軸には 1.0 を置く。
+    """
+    if physical_pixel_sizes is None:
+        return None
+    by_axis = dict(zip("ZYX", physical_pixel_sizes))
+    return [by_axis.get(axis, 1.0) for axis in dim_order]
 
 
 class BioIOWriter:
@@ -257,7 +272,7 @@ class BioIOWriter:
 
     def _write_ometiff_streaming(
         self,
-        data,
+        data: Any,
         out_file: Path,
         *,
         channel_names: Optional[Sequence[str]],
@@ -288,7 +303,7 @@ class BioIOWriter:
         nbytes = prod((T, C, Z, Y, X)) * dtype.itemsize
         bigtiff = nbytes > 3_900_000_000  # standard TIFF caps out near 4 GB
 
-        metadata = {"axes": "TCZYX"}
+        metadata: dict[str, Any] = {"axes": "TCZYX"}
         if physical_pixel_sizes is not None:
             pz, py, px = physical_pixel_sizes
             if px:
@@ -331,7 +346,7 @@ class BioIOWriter:
         with timed_step("ometiff.stream_write", total=T * C * Z,
                         target=str(out_file), n_bytes=nbytes) as step:
 
-            def planes():
+            def planes() -> Any:
                 for t0 in range(0, T, t_block):
                     t1 = min(t0 + t_block, T)
                     # 読む前に記録する。止まったときに掴んだままのブロックが分かる。
@@ -370,13 +385,22 @@ class BioIOWriter:
     ) -> None:
         out_dir = _with_ome_suffix(self.output_path, ".ome.zarr", _ZARR_SUFFIXES)
 
-        OmeZarrWriter.save(
-            data,
-            out_dir,
-            dim_order=dim_order,
-            channel_names=list(channel_names) if channel_names else None,
-            physical_pixel_sizes=physical_pixel_sizes,
+        # bioio-ome-zarr の書き出しは「writer を作って全ボリュームを流す」形。
+        # 以前ここは存在しない ``OmeZarrWriter.save(...)`` を呼んでいた (綴りも
+        # 上流と違い、import が常に失敗して zarr 出力が黙って無効になっていた)。
+        # 解像度ピラミッドは作らない —— 元の呼び出しも 1 段だった。
+        writer = OMEZarrWriter(
+            str(out_dir),
+            level_shapes=[list(data.shape)],
+            dtype=data.dtype,
+            axes_names=list(dim_order),
+            # color は Channel の必須項目。灰色画像なので白を置く
+            # (見た目の既定であって、画素値には影響しない)。
+            channels=([Channel(label=name, color="FFFFFF") for name in channel_names]
+                      if channel_names else None),
+            physical_pixel_size=_axis_scales(dim_order, physical_pixel_sizes),
         )
+        writer.write_full_volume(data)
 
         print(f"[BioIOWriter] OME-Zarr written → {out_dir}")
 

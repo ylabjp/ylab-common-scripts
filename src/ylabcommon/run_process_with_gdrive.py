@@ -10,6 +10,7 @@ Output handling:
  - Override       : --diff_outdirpath
 """
 
+from typing import Any
 import argparse
 import json
 import logging
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------
 # CLI
 # -------------------------------------------------
-def parse_args():
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser("Gdrive Extract")
 
     # Drive mode
@@ -59,7 +60,7 @@ def parse_args():
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
-def write_summary(summary: dict, outdir: Path):
+def write_summary(summary: dict, outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     summary_path = outdir / "summary.json"
     with open(summary_path, "w") as f:
@@ -69,7 +70,7 @@ def write_summary(summary: dict, outdir: Path):
 # -------------------------------------------------
 # DRIVE MODE
 # -------------------------------------------------
-def process_drive_mode(args):
+def process_drive_mode(args: Any) -> None:
     print("%s")
     logger.info("Running in DRIVE mode")
 
@@ -144,7 +145,7 @@ def process_drive_mode(args):
 # -------------------------------------------------
 # MAIN
 # -------------------------------------------------
-def main():
+def main() -> None:
     args = parse_args()
 
     if args.verbose:

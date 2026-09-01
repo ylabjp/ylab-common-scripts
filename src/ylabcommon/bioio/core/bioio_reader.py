@@ -1,8 +1,10 @@
 from __future__ import annotations
+from typing import Any, Optional
 from pathlib import Path
 import numpy as np
 import warnings
 
+xr: Any
 try:
     import xarray as xr
 except Exception:  # pragma: no cover - xarray is a hard dep in practice
@@ -42,7 +44,7 @@ class BioIOReader:
         except Exception as e:
             raise RuntimeError(f"[BioIOReader] Cannot initialize BioImage: {e}")
        '''
-    def __init__(self, image_data):
+    def __init__(self, image_data: Any) -> None:
         """
          image_data can be:
           - a lazy xarray.DataArray (dask-backed, already TCZYX) — preferred
@@ -77,14 +79,14 @@ class BioIOReader:
         except Exception as e:
             raise RuntimeError(f"[BioIOReader] Cannot initialize BioImage: {e}")
 
-    def read(self):
+    def read(self) -> Any:
         """遅延(dask)の TCZYX 配列を返す (:meth:`get_data` と同じ)。"""
         return self.get_data()
 
     # ---------------------------
     # Returns a LAZY (dask) TCZYX array
     # ---------------------------
-    def get_data(self):
+    def get_data(self) -> Any:
         """TCZYX の *遅延* (dask) 配列を返す。画素は読まない。
 
         以前は bioio の EAGER アクセサ ``self._img.data`` を返していた。これは
@@ -105,7 +107,7 @@ class BioIOReader:
             warnings.warn(f"[BioIO] Unable to build the lazy pixel view: {e}")
             return None
 
-    def get_data_eager(self):
+    def get_data_eager(self) -> Any:
         """全画素を RAM へ読み込んだ numpy 配列を返す (**volume 全体が載る場合のみ**)。
 
         巨大な volume では MemoryError / OOM kill になる。ストリーミング書き出しや
@@ -121,7 +123,7 @@ class BioIOReader:
     # ---------------------------
     # xarray access (lazy)
     # ---------------------------
-    def get_xarray(self):
+    def get_xarray(self) -> Any:
         """遅延(dask)裏付けの xarray ビューを返す。
 
         ``self._img.xarray_data`` は bioio の EAGER アクセサで、参照しただけで
@@ -137,7 +139,7 @@ class BioIOReader:
     # ---------------------------
     # Dimensions
     # ---------------------------
-    def get_dims(self):
+    def get_dims(self) -> Any:
         try:
             return self._img.dims
         except Exception as e:
@@ -147,7 +149,7 @@ class BioIOReader:
     # ---------------------------
     # Dimension order (TCZYX)
     # ---------------------------
-    def get_dim_order(self):
+    def get_dim_order(self) -> Optional[str]:
         try:
             return self._img.dims.order
         except Exception as e:
@@ -157,14 +159,14 @@ class BioIOReader:
     # ---------------------------
     # Shape
     # ---------------------------
-    def get_shape(self):
+    def get_shape(self) -> Optional[tuple]:
         try:
             return self._img.shape
         except Exception as e:
             warnings.warn(f"[BioIO] shape unavailable: {e}")
             return None
 
-    def get_size(self, axis: str):
+    def get_size(self, axis: str) -> Optional[int]:
         try:
             return getattr(self._img.dims, axis)
         except Exception:
@@ -174,21 +176,21 @@ class BioIOReader:
     # ---------------------------
     # Metadata
     # ---------------------------
-    def get_standard_metadata(self):
+    def get_standard_metadata(self) -> Any:
         try:
             return self._img.standard_metadata
         except Exception:
             warnings.warn("[BioIO] standard metadata unavailable")
             return None
 
-    def get_physical_pixel_sizes(self):
+    def get_physical_pixel_sizes(self) -> Any:
         try:
             return self._img.physical_pixel_sizes
         except Exception as e:
             warnings.warn(f"[BioIO] pixel size metadata unavailable: {e}")
             return None
 
-    def get_scale(self):
+    def get_scale(self) -> Any:
         try:
             return self._img.scale
         except Exception as e:
@@ -198,8 +200,7 @@ class BioIOReader:
     # ---------------------------
     # Channel metadata
     # ---------------------------
-    def get_channel_info(self):
-
+    def get_channel_info(self) -> list:
         channels = []
 
         try:

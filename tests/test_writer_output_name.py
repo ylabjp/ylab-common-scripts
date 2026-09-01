@@ -74,19 +74,59 @@ def test_the_zarr_writer_uses_that_rule_for_its_own_destination(tmp_path, monkey
     保存そのものは差し替えて名前だけ見る。
     """
     seen = []
-    monkeypatch.setattr(
-        W, "OmeZarrWriter",
-        type("_Fake", (), {"save": staticmethod(
-            lambda *a, **k: seen.append(a[1] if len(a) > 1 else k.get("uri")))}),
-        raising=False)
+
+    class _Fake:
+        def __init__(self, store, *a, **k):
+            seen.append(store)
+
+        def write_full_volume(self, data):
+            pass
+
+    # raising=True: 名前が実在することも確かめる。以前ここは実在しない綴り
+    # (``OmeZarrWriter``) を raising=False で差し替えていたので、本体側の
+    # import が常に失敗して zarr 出力が黙って無効になっていたのに気づけなかった。
+    monkeypatch.setattr(W, "OMEZarrWriter", _Fake)
 
     out = tmp_path / "volume.ome.zarr"
     W.BioIOWriter(out)._write_omezarr(
         np.zeros((1, 1, 1, 2, 2), dtype=np.uint16),
         dim_order="TCZYX", channel_names=None, physical_pixel_sizes=None)
 
-    assert seen == [out], seen
+    assert seen == [str(out)], seen
     assert "ome.ome" not in str(seen[0])
+
+
+def test_the_physical_size_of_each_axis_lines_up_with_the_dim_order():
+    """``(Z, Y, X)`` を軸ごとの scale 列へ広げるとき、位置がずれないこと。
+
+    OME-Zarr の scale は軸ごとに 1 つなので、T/C のように物理長を持たない軸には
+    1.0 が入る。ここがずれると Z と Y が入れ替わったまま書かれる。
+    """
+    assert W._axis_scales("TCZYX", (2.0, 0.5, 0.25)) == [1.0, 1.0, 2.0, 0.5, 0.25]
+    assert W._axis_scales("ZYX", (2.0, 0.5, 0.25)) == [2.0, 0.5, 0.25]
+    assert W._axis_scales("CZYX", None) is None
+
+
+@pytest.mark.skipif(not W._HAS_ZARR, reason="bioio-ome-zarr is not installed")
+def test_the_zarr_output_reads_back_as_what_was_written(tmp_path):
+    """差し替え無しで実際に書き、読み直して一致すること。
+
+    ここが無いと「呼び出し先の API が変わった」ことに気づけない。実際
+    ``OmeZarrWriter.save(...)`` は上流に存在せず、import が常に失敗して
+    ``_HAS_ZARR`` が False のまま「入っていないので飛ばします」と出ていた。
+    """
+    from bioio import BioImage
+
+    data = np.arange(1 * 2 * 3 * 4 * 5, dtype=np.uint16).reshape(1, 2, 3, 4, 5)
+    out = tmp_path / "volume.ome.zarr"
+    W.BioIOWriter(out)._write_omezarr(
+        data, dim_order="TCZYX", channel_names=["ch0", "ch1"],
+        physical_pixel_sizes=(2.0, 0.5, 0.25))
+
+    img = BioImage(str(out))
+    assert np.array_equal(np.asarray(img.data), data)
+    assert tuple(img.physical_pixel_sizes) == (2.0, 0.5, 0.25)
+    assert [str(c) for c in img.channel_names] == ["ch0", "ch1"]
 
 
 def test_a_caller_that_names_the_file_itself_gets_that_exact_file(tmp_path):

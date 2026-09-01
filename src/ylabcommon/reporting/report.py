@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from typing import Any
 import os
 from pathlib import Path
 
@@ -19,7 +20,7 @@ REPORT_NAME = "report.md"
 _SHORT_SHA = 8
 
 
-def _fmt_p(value) -> str:
+def _fmt_p(value: Any) -> str:
     """p 値の表示。None は「計算したが値なし」なので空欄にせず明示する。"""
     if value is None:
         return "n/a"
@@ -32,7 +33,7 @@ def _fmt_p(value) -> str:
     return f"{v:.4g}"
 
 
-def _fmt_cell(value) -> str:
+def _fmt_cell(value: Any) -> str:
     """Markdown の表に入れられる形へ。`|` は表を壊すのでエスケープする。"""
     if value is None:
         return ""
@@ -63,7 +64,7 @@ def _source_line(source: dict | None) -> str | None:
     return " — ".join(parts) if parts else None
 
 
-def _stats_table(stats) -> list[str]:
+def _stats_table(stats: Any) -> list[str]:
     if not stats:
         return []
     lines = [

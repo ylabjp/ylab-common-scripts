@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+from typing import Any
 import math
 
 from ylabcommon.seq.sequence import normalise
@@ -80,7 +81,7 @@ METHODS = {"wallace": wallace, "nearest_neighbour": nearest_neighbour}
 DEFAULT_METHOD = "wallace"
 
 
-def tm(seq: str, method: str = DEFAULT_METHOD, **kwargs) -> float:
+def tm(seq: str, method: str = DEFAULT_METHOD, **kwargs: Any) -> float:
     """名前で計算法を選ぶ。既定は本ラボ基準と同じスケールの wallace。"""
     try:
         fn = METHODS[method]

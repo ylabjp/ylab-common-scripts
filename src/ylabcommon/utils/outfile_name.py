@@ -1,3 +1,4 @@
+from typing import Any, Optional
 from collections import defaultdict
 from pathlib import Path
 
@@ -8,7 +9,7 @@ _LABELLED_PREFIXES = (("XY", "XY"), ("CH", "CH"),
                       ("X", "X"), ("Y", "Y"), ("Z", "Z"), ("T", "T"))
 
 
-def extract_dimensions(sorted_tiffs):
+def extract_dimensions(sorted_tiffs: Any) -> tuple[Optional[str], dict]:
     """ファイル名から次元ごとの連番の集合を取り出す。
 
     **この関数は例外を投げない。** 読めないトークンは黙って飛ばす。
@@ -48,8 +49,7 @@ def extract_dimensions(sorted_tiffs):
 
     return image_name, dims
 
-def format_range(prefix, values):
-
+def format_range(prefix: Any, values: Any) -> str:
     values = sorted(values)
 
     if len(values) == 1:
@@ -57,7 +57,7 @@ def format_range(prefix, values):
 
     return f"{prefix}{values[0]:03d}_to_{prefix}{values[-1]:03d}"
 
-def is_mosaic(dims):
+def is_mosaic(dims: Any) -> bool:
     if "XY" in dims and len(dims["XY"]) > 1:
         return True
     if "X" in dims and "Y" in dims:
@@ -65,8 +65,8 @@ def is_mosaic(dims):
             return True
     return False
 
-def build_stack_filename(output_dir: Path, image_name, dims, z_mx_min_re, ext=".tiff"):
-
+def build_stack_filename(output_dir: Path, image_name: Any, dims: Any,
+                         z_mx_min_re: Any, ext: str = ".tiff") -> Path:
     parts = [image_name]
 
     # XY dimension

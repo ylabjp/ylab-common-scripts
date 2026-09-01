@@ -1,3 +1,4 @@
+from typing import Any
 import os
 import platform
 from pathlib import Path
@@ -11,7 +12,7 @@ import ylabcommon.utils.file_util as fu
 # Fixtures                                                                    #
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
-def dir_tree(tmp_path: Path):
+def dir_tree(tmp_path: Path) -> dict:
     """Create a nested directory tree with a marker file in the root."""
     deep_dir = tmp_path / "level1" / "level2"
     deep_dir.mkdir(parents=True)
@@ -24,12 +25,12 @@ def dir_tree(tmp_path: Path):
 # find_parents_for_dir                                                        #
 # --------------------------------------------------------------------------- #
 
-def test_find_parents_for_dir_finds_target(dir_tree):
+def test_find_parents_for_dir_finds_target(dir_tree: Any) -> None:
     found = fu.find_parents_for_dir(dir_tree["deep"], "target_marker")
     assert found == dir_tree["marker"]
 
 
-def test_find_parents_for_dir_returns_none(dir_tree):
+def test_find_parents_for_dir_returns_none(dir_tree: Any) -> None:
     missing = fu.find_parents_for_dir(dir_tree["deep"], "does_not_exist")
     assert missing is None
 
@@ -38,9 +39,9 @@ def test_find_parents_for_dir_returns_none(dir_tree):
 # replace_yen_in_path                                                         #
 # --------------------------------------------------------------------------- #
 
-def test_replace_yen_in_path_handles_backslashes():
+def test_replace_yen_in_path_handles_backslashes() -> None:
     in_path = r"some\\folder\\file.txt"
-    out_path = fu.replace_yen_in_path(None, in_path)  # self arg is unused
+    out_path = fu.replace_yen_in_path(in_path)
     assert out_path == "some//folder//file.txt"
 
 
@@ -48,7 +49,7 @@ def test_replace_yen_in_path_handles_backslashes():
 # init_base_drive                                                             #
 # --------------------------------------------------------------------------- #
 
-def test_init_base_drive_selects_correct_prefix(monkeypatch, tmp_path: Path):
+def test_init_base_drive_selects_correct_prefix(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     monkeypatch.setattr(os.path, "exists", lambda p: True)
 

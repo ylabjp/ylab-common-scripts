@@ -1,3 +1,4 @@
+from typing import Any
 from collections import defaultdict
 from pathlib import Path
 import os
@@ -7,14 +8,14 @@ from bioio import BioImage
 from bioio_tifffile import Reader as TiffReader
 
 
-def file_pattern():
+def file_pattern() -> Any:
     pattern = re.compile(
         r".*XY(?P<xy>\d+)_Z(?P<z>\d+)_CH(?P<ch>\d+)\.tif",
         re.IGNORECASE
     )
     return pattern
 
-def parse_keyence_filename(filename):
+def parse_keyence_filename(filename: str) -> dict:
 
     name = Path(filename).name.replace(".tif", "")
 
@@ -44,7 +45,7 @@ def parse_keyence_filename(filename):
 
     return {"xy": xy, "z": z, "ch": ch}
 
-def normalize_keyence_filename(filename):
+def normalize_keyence_filename(filename: str) -> tuple[str, str]:
 
     name = Path(filename).name
 
@@ -57,23 +58,27 @@ def normalize_keyence_filename(filename):
         ch_val = m.group(3)
 
         new_name = f"{prefix}_Z{z_val}_CH{ch_val}.tif"
-    
+    else:
+        raise ValueError(
+            "Keyence filename does not match either the standard "
+            "(..XY#_Z#_CH#.tif) or the Z-less (..XY#_#_CH#.tif) form: %s" % name)
+
     return new_name, z_val
 
     #return name
 
-def parse_keyence_name(name):
+def parse_keyence_name(name: str) -> tuple:
 
     #name = Path(path).name
     pattern = file_pattern()
  
     #name = normalize_keyence_filename(name)   
     m = pattern.match(name)
-    z_val = 0
+    z_val: Any = 0
     m_type = True
     
     if m is None:
-        m_type = m
+        m_type = False
         name, z_val = normalize_keyence_filename(name)
         m = pattern.match(name)
         print(f"[INFO] Non-standard filename detected: Assuming Z index → {name}")
@@ -99,15 +104,14 @@ def parse_keyence_name(name):
 
     return tile, z, ch, z_val, m_type
 
-def get_channel_names(channels):
-    
+def get_channel_names(channels: Any) -> list[str]:
+
     channel_names = [f"CH{c}" for c in channels] 
     return channel_names
 
 
-def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
-
-    grouped = defaultdict(lambda: defaultdict(list))
+def stack_keyence_with_bioio_calibrated(tiff_files: Any, min_kb: int = 100) -> tuple:
+    grouped: dict[Any, dict[Any, list]] = defaultdict(lambda: defaultdict(list))
 
     # -----------------------------------
     # index dataset
@@ -121,7 +125,8 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
         grouped[tile][ch].append((z, f))
         z_arry.append(z_val)
 
-    tiles = {}
+    tiles: dict[Any, Any] = {}
+    channel_names: list[str] = []
 
     z_max_min = []
     z_max_min.append(z_arry[0]) 
@@ -162,11 +167,10 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
 
         tiles[tile] = stacked
 
-        channels_keys = sorted(channels.keys())
-        channels = get_channel_names(channels)
+        channel_names = get_channel_names(channels)
 
         print(f"DEBUG: Tiles: {len(grouped)}" )
-        print(f"DEBUG: channels: {channels}")
+        print(f"DEBUG: channels: {channel_names}")
         print(f"DEBUG: Z slices: {len(z_files)}")
         print(f"DEBUG: Z order:, {[z for z, _ in z_files]}")
         print(f"DEBUG: {stacked.dtype}")
@@ -185,5 +189,5 @@ def stack_keyence_with_bioio_calibrated(tiff_files, min_kb: int = 100):
     else:
         data = tiles
 
-    return data, sorted_files, channels, z_max_min 
+    return data, sorted_files, channel_names, z_max_min 
 

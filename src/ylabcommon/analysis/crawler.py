@@ -9,7 +9,9 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Type,
     TypeVar,
+    cast,
 )
 from ylabcommon.models.parameters.general import ArgModel
 from ylabcommon.utils.betterstack_log import analysis_context, log_error, log_info
@@ -86,7 +88,7 @@ class LevelSpec:
     pattern: str
     filter_dir: Callable[[Path], bool]
     preprocess_dir: Callable[[Path], Path]
-    load_payload: Callable[[Path], Dict[str]]
+    load_payload: Callable[[Path], Dict[str, Any]]
 
 
 # ============================================================
@@ -99,7 +101,7 @@ N = TypeVar("N", bound=HierNode)
 def __build_tree_generic(
     root: Path,
     level_specs: List[LevelSpec],
-    node_class: HierNode,
+    node_class: Type[N],
 ) -> List[N]:
     """
     root 配下を level_specs にしたがって再帰的に走査し、
@@ -127,7 +129,7 @@ def __build_tree_generic(
             payload = spec.load_payload(d2)
 
             node = node_class(d2.name, d2, spec.level, parent, payload)
-            node.children = _build_level(node, d2, depth + 1)
+            node.children = cast(List[HierNode], _build_level(node, d2, depth + 1))
             nodes.append(node)
 
         return nodes
@@ -162,14 +164,14 @@ class GenericKernel(ABC):
     ※ここでは level 固有の on_cond / on_mouse / on_day などは定義しない。
       必要であれば on_node 内部で node.level を見て分岐する。
     """
-    def __init__(self, target_filename:str=None) -> None:
+    def __init__(self, target_filename: Optional[str] = None) -> None:
         self.target_filename = target_filename
         # この kernel が処理して失敗したファイルの記録 (path, message)。
         # on_file / on_node 内で例外を握りつぶす kernel は record_failure() で
         # ここに積むことで、crawler の実行終了時サマリーに集約される。
         self.failures: List[tuple] = []
 
-    def record_failure(self, path, error) -> None:
+    def record_failure(self, path: Any, error: Any) -> None:
         """
         例外を内部で握りつぶす kernel が、その失敗を crawler の
         終了時サマリーに集約させるために except 節で呼ぶ。
@@ -238,7 +240,7 @@ class GenericCrawler:
     ) -> None:
         self.kernels = list(kernels)
         self.ctx = ctx
-        self.__log=[]
+        self.__log: list = []
 
     def crawl_from_nodes(self, roots: Sequence[HierNode]) -> None:
         """
@@ -383,9 +385,9 @@ class GenericCrawler:
         # 子ノードを再帰
         for child in node.children:
             self._walk_node(child)
-    def get_log(self):
+    def get_log(self) -> pd.DataFrame:
         return pd.DataFrame(self.__log)
-    def save_log(self):
+    def save_log(self) -> None:
         log_dir=self.ctx.project_dir / "_logs"
         log_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

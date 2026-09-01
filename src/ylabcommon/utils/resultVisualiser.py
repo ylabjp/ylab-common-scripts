@@ -1,14 +1,15 @@
+from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import json
 from pathlib import Path
 
 class ResultVisualizer:
-    def __init__(self, output_dir, experiment_name):
+    def __init__(self, output_dir: Any, experiment_name: Any) -> None:
         self.output_dir = Path(output_dir)
         self.experiment_name = experiment_name
 
-    def create_preview(self, img_obj, pixel_size_xy):
+    def create_preview(self, img_obj: Any, pixel_size_xy: Any) -> None:
         """Generates a MIP with a 50µm scale bar."""
         # TCZYX access: Max project over Z (axis 2)
         #

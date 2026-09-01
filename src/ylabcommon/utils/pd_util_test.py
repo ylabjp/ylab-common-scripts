@@ -1,3 +1,4 @@
+from typing import Any
 import os
 from pathlib import Path
 
@@ -27,12 +28,12 @@ def sample_hdf_path(tmp_path: Path) -> Path:
 # get_prj_name                                                                #
 # --------------------------------------------------------------------------- #
 
-def test_get_prj_name_valid(sample_hdf_path: Path):
+def test_get_prj_name_valid(sample_hdf_path: Path) -> None:
     expected = "projA_paradigmB"
     assert pd_util.get_prj_name(str(sample_hdf_path)) == expected
 
 
-def test_get_prj_name_invalid(tmp_path: Path):
+def test_get_prj_name_invalid(tmp_path: Path) -> None:
     wrong_file = tmp_path / "random.h5"
     wrong_file.touch()
     with pytest.raises(ValueError):
@@ -43,7 +44,7 @@ def test_get_prj_name_invalid(tmp_path: Path):
 # read_and_cache – cached path branch                                         #
 # --------------------------------------------------------------------------- #
 
-def test_read_and_cache_uses_cache(monkeypatch, sample_hdf_path: Path, tmp_path: Path):
+def test_read_and_cache_uses_cache(monkeypatch: Any, sample_hdf_path: Path, tmp_path: Path) -> None:
     """
     When the cache file already exists, read_and_cache should load from that
     cache instead of the original HDF5.
@@ -59,7 +60,7 @@ def test_read_and_cache_uses_cache(monkeypatch, sample_hdf_path: Path, tmp_path:
     monkeypatch.setattr(os.path, "exists", lambda p: Path(p) == expected_cache)
 
     # Monkey-patch pandas.read_hdf so we don’t need actual HDF5 support
-    def fake_read_hdf(path, key=None):
+    def fake_read_hdf(path: Any, key: Any = None) -> Any:
         assert Path(path) == expected_cache  # must read from cache
         return sentinel_df
 
