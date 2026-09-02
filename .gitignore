@@ -139,7 +139,10 @@ drive_work/
 # 共有するワークスペース設定
 # ------------------------------
 # 上の `*.json` は Drive API の資格情報をコミットしないための広い網である。
-# **その網は緩めないまま**、リポジトリ全員で共有する VS Code 設定の 2 つだけ通す。
-# 個人の launch.json・tasks.json は `.vscode/*` で無視されたまま。
+# **その網は緩めないまま**、リポジトリ全員で共有する設定だけ通す:
+# VS Code 設定の 2 つと、Claude Code のフック（main での編集・commit を拒否する）の 1 つ。
+# 個人の launch.json・tasks.json は `.vscode/*` で、個人の
+# .claude/settings.local.json は `*.json` で、それぞれ無視されたまま。
 !.vscode/extensions.json
 !.vscode/settings.json
+!.claude/settings.json

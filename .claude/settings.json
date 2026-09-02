@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null); d=${f:+$(dirname \"$f\")}; d=${d:-$PWD}; b=$(git -C \"$d\" rev-parse --abbrev-ref HEAD 2>/dev/null); case \"$b\" in main|master) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"This repository is on main/master. Create a topic branch before editing (git checkout -b <topic>), then retry. Direct commits to main are prohibited - docs/research-guidelines/80-operations/repository-workflow.md\"}}';; esac",
+            "timeout": 10,
+            "statusMessage": "Checking branch"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "c=$(jq -r '.tool_input.command // empty' 2>/dev/null); case \"$c\" in *'git commit'*|*'git push'*) b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); case \"$b\" in main|master) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Refusing to commit or push on main/master. Create a topic branch and open a pull request - docs/research-guidelines/80-operations/repository-workflow.md\"}}';; esac;; esac",
+            "timeout": 10,
+            "statusMessage": "Checking branch"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "b=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); case \"$b\" in main|master) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"This repository is currently on main. Create a topic branch before making any edit; a hook blocks edits and commits while on main.\"}}';; esac",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
