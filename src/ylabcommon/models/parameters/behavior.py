@@ -343,9 +343,9 @@ class EventConfig(BaseModel):
     start_in_hm: Optional[str] = None
     end_in_hm: Optional[List[int]] = None
     duration_in_hm: Optional[List[int]] = None
-    # ``type`` が "time_periods" のとき専用。[hours, minutes]で1回あたりの期間の
-    # 長さを指定する(例: [12, 0]で12時間)。
-    # (行頭を `# type:` にしない —— 型チェッカが「型コメント」と読んで構文誤りになる)
+    # `type: "time_periods"` 専用。[hours, minutes]で1回あたりの期間の長さを指定する(例: [12, 0]で12時間)。
+    # (行頭を `# type:` にすると PEP 484 の型コメントと解釈され、mypy がこのファイルを
+    #  構文エラーにする。ここを import する全モジュールの型チェックが止まるので崩さないこと)
     # after_in_sの代わりにこの値が秒に変換されてイベントwindowの幅として使われる(baseline_in_sは通常通り有効)。
 class PhotometryConfig(BaseModel):
     name: str
