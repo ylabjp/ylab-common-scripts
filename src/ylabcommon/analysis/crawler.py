@@ -6,6 +6,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Generic,
     List,
     Optional,
     Sequence,
@@ -157,9 +158,17 @@ class CrawlContext:
     arg: ArgModel
 
 
-class GenericKernel(ABC):
+class GenericKernel(ABC, Generic[N]):
     """
     HierNode もしくはそのサブクラスを前提とした汎用 Kernel 抽象クラス。
+
+    node の型は型変数 N(HierNode の subclass)で表す。`GenericKernel[BehaviorNode]`
+    と書けば node が BehaviorNode であることを型でも表明できる。添字を付けずに
+    継承した場合は N=Any 相当となり、サブクラス側で node を BehaviorNode へ
+    絞っても override エラーにならない。
+    (node を HierNode 固定にすると、サブクラスが BehaviorNode へ絞るたびに
+     LSP 違反として報告される。しかしこの基底は「node の具体型は使う側が決める」
+     という設計なので、固定ではなく型変数で表すのが正しい形。)
 
     ※ここでは level 固有の on_cond / on_mouse / on_day などは定義しない。
       必要であれば on_node 内部で node.level を見て分岐する。
@@ -189,7 +198,7 @@ class GenericKernel(ABC):
         pass
 
     # ノードごと
-    def on_node(self, ctx: CrawlContext, node: HierNode) -> None:
+    def on_node(self, ctx: CrawlContext, node: N) -> None:
         """
         すべてのノードに対して呼ばれる共通フック。
         cond/mouse/day などの level に依存した処理は、
@@ -198,7 +207,7 @@ class GenericKernel(ABC):
         pass
 
     # ファイルレベル
-    def retrieve_file_with_pattern(self, node: HierNode) -> str:
+    def retrieve_file_with_pattern(self, node: N) -> str:
         """
         Nodeごとにファイルの状態を調べる。
         目的とするデータセットが揃っているか判定する。
@@ -208,7 +217,7 @@ class GenericKernel(ABC):
         """
         return ""
 
-    def check_overwrite(self, node: HierNode,ctx: CrawlContext) -> bool:
+    def check_overwrite(self, node: N, ctx: CrawlContext) -> bool:
         """
         on fileの前にチェックする
         """
@@ -220,7 +229,7 @@ class GenericKernel(ABC):
             return False
         return True
 
-    def on_file(self, ctx: CrawlContext, node: HierNode, file_path: Path) -> None:
+    def on_file(self, ctx: CrawlContext, node: N, file_path: Path) -> None:
         """
         retrieve_file_with_pattern() でマッチしたファイルごとに呼ばれるフック。
         """
