@@ -75,7 +75,11 @@ coverage.xml
 # ------------------------------
 
 # VS Code
-.vscode/
+# 共有するワークスペース設定だけ追跡する（個人の launch.json 等は無視のまま）。
+# ディレクトリごと無視すると中のファイルを再包含できないので `.vscode/*` にしてある。
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 *.code-workspace
 
 # PyCharm / JetBrains
@@ -130,3 +134,12 @@ token.pickle
 credential/
 drive_work/
 drive_work/
+
+# ------------------------------
+# 共有するワークスペース設定
+# ------------------------------
+# 上の `*.json` は Drive API の資格情報をコミットしないための広い網である。
+# **その網は緩めないまま**、リポジトリ全員で共有する VS Code 設定の 2 つだけ通す。
+# 個人の launch.json・tasks.json は `.vscode/*` で無視されたまま。
+!.vscode/extensions.json
+!.vscode/settings.json

@@ -1,0 +1,61 @@
+{
+  // このリポジトリを開いた全員に効くワークスペース設定。
+  // 意図と根拠は ylabjp/general の docs/computation/setup/vscode.md。
+  // 個人の好み（テーマ・フォント）はここに書かない — ユーザー設定へ。
+
+  // ── Markdown ────────────────────────────────────────────────
+  // 相対リンク切れをエディタ上で検出する。
+  "markdown.validate.enabled": true,
+  "markdown.validate.fileLinks.enabled": "error",
+  "markdown.validate.fragmentLinks.enabled": "warning",
+  "markdown.validate.referenceLinks.enabled": "error",
+  // ファイルを移動・改名したときに、参照している側のリンクを自動で追従させる。
+  "markdown.updateLinksOnFileMove.enabled": "always",
+  "[markdown]": {
+    // 行末2スペースの改行を壊さないため、markdown だけ trim しない
+    "files.trimTrailingWhitespace": false,
+    // **保存時に整形しない。** 自動でかかると触っていない行まで差分に出て、
+    // レビューが読めなくなる。整形したいときは明示的に実行する
+    // （Ctrl+Shift+P → Format Document）。
+    "editor.formatOnSave": false
+  },
+
+  // ── Office Viewer — .md の既定エディタ ──────────────────────
+  // .md を WYSIWYG (cweijan.vscode-office) で開く。**mermaid もこのエディタが描画する**
+  // ので、プレビュー用の拡張は別に入れない。
+  // **生の markdown を見たいときは、タブを右クリック → Reopen Editor With...
+  //   → Text Editor**。<details> ブロック・mermaid・生 HTML を含むファイルは、
+  //   WYSIWYG で保存すると再整形されうるので、保存後に git diff を見ること。
+  "workbench.editorAssociations": {
+    "*.md": "cweijan.markdownViewer"
+  },
+  "vscode-office.editMode": "wysiwyg",
+
+  // 規約: 画像は参照する md と同じディレクトリの .images/ に置き、
+  //       内容の分かるファイル名と alt を付ける
+  //       (ylabjp/general の docs/research-guidelines/70-ai/ai-skills.md スキル6)
+  // workspacePathAsImageBasePath を false にしてあるので、下の相対パスは
+  // **その md があるディレクトリ**から解決される。
+  "vscode-office.workspacePathAsImageBasePath": false,
+  "vscode-office.pasteImageToWorkspacePath": false,
+  "vscode-office.pasterImgPath": ".images/${now}.${ext}",
+  // **貼ったらその場でファイル名を内容の分かる名前に変え、alt を書くこと。**
+  // Office Viewer には「貼り付け時にファイル名を聞く」設定が無く、${now} の
+  // タイムスタンプ名になる。規約の「内容の分かる名前」はこの手作業で満たす。
+  "vscode-office.enableTelemetry": false,
+
+  // ── Python (uv) ─────────────────────────────────────────────
+  // インタープリタは uv sync が作る .venv を使う。VS Code が自動検出するので
+  // パスは固定しない（Windows と Unix でパスが違うため）。
+  // 検出されないときは Ctrl+Shift+P → "Python: Select Interpreter" → ./.venv
+  //
+  // **保存時の自動整形は入れていない。** このリポジトリの pyproject.toml は
+  // formatter を設定していないので、有効にすると既定値で全体が書き換わり、
+  // 触っていない行まで差分に出る。formatter を決めたらここに足すこと。
+  "python.terminal.activateEnvInCurrentTerminal": true,
+
+  // ── 共通 ────────────────────────────────────────────────────
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.eol": "\n"
+}
