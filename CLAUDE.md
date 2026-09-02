@@ -10,14 +10,14 @@
 slice-controller が同時に影響を受ける。** 各リポジトリは git 参照で pin して
 いるので、破壊的な変更を入れるときは呼び出し側を先に確認すること。
 
-## ブランチ運用
+## Branch workflow
 
 **`main` に直接コミット・push しない。** ブランチを切って Pull Request を通す。
 **Claude は編集を始める前に、いまいるブランチが `main` でないことを確認すること。**
 `main` にいたらブランチを切ってから作業する。**自分が開いた PR を自分でマージしない**
 ——レビューはループの唯一のチェックポイントなので、人に残す。
 
-### ブランチ名には作業者のイニシャルを入れる（必須）
+### Branch names carry the operator's initials (required)
 
 **Claude はブランチを作る前に、作業者のイニシャルを聞くこと。聞かずに作らない。**
 形式は `claude/<イニシャル>-<topic>-<id>`（例 `claude/sy-output-name-fix-a1b2c3`）。
@@ -33,7 +33,7 @@ AI セッションから出た PR の作成者は、そのセッションを回�
 
 正: [repository-workflow.md](https://github.com/ylabjp/general/blob/main/docs/research-guidelines/80-operations/repository-workflow.md#ブランチ名)。
 
-## このファイルについて
+## About this file
 
 **最小構成である。** いまはブランチ運用しか書いていない。このリポジトリ固有の
 規約（検証の走らせ方、置いてよいもの、命名など）が決まったらここに足す。
