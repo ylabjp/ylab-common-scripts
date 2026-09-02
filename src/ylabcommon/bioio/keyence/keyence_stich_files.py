@@ -1,4 +1,9 @@
-def stitch_tiles(tile_arrays):
+from typing import Any
+
+import xarray as xr
+
+
+def stitch_tiles(tile_arrays: Any) -> Any:
 
     aligned_tiles = []
 

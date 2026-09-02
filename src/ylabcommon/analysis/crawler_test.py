@@ -1,3 +1,4 @@
+from typing import cast
 import shutil
 from pathlib import Path
 from typing import Dict, Any, List
@@ -55,18 +56,18 @@ class TraceKernel(GenericKernel):
     def __init__(self) -> None:
         self.trace: List[str] = []
 
-    def on_project_start(self, ctx: CrawlContext, roots):
+    def on_project_start(self, ctx: CrawlContext, roots: Any) -> None:
         self.trace.append("proj_start")
 
-    def on_project_end(self, ctx: CrawlContext, roots):
+    def on_project_end(self, ctx: CrawlContext, roots: Any) -> None:
         self.trace.append("proj_end")
 
-    def on_node(self, ctx: CrawlContext, node: HierNode):
+    def on_node(self, ctx: CrawlContext, node: HierNode) -> None:
         # record level + name
         self.trace.append(f"node:{node.level}:{node.name}")
 
     # Tell crawler to ignore file handling
-    def get_file_pattern(self, node):
+    def get_file_pattern(self, node: Any) -> str:
         return ""
 
 
@@ -74,18 +75,18 @@ class TraceKernel(GenericKernel):
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_ancestor_and_level_property(dummy_fs: Path):
+def test_ancestor_and_level_property(dummy_fs: Path) -> None:
     """HierNode.ancestor and BehaviorNode.cond/mouse/day properties behave."""
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
-    roots = __build_tree_generic(
+    roots: list[BehaviorNode] = __build_tree_generic(
         root=dummy_fs,
         level_specs=level_specs,
         node_class=BehaviorNode,
     )
     # Locate one deep leaf: condA / mouse1 / day001_
     condA = next(r for r in roots if r.name == "condA")
-    mouse1 = condA.children[0]
-    day001 = mouse1.children[0]
+    mouse1 = cast(BehaviorNode, condA.children[0])
+    day001 = cast(BehaviorNode, mouse1.children[0])
 
     # ancestor()
     assert day001.ancestor("mouse") is mouse1
@@ -98,10 +99,10 @@ def test_ancestor_and_level_property(dummy_fs: Path):
     assert day001.day is day001  # leaf refers to itself
 
 
-def test_build_tree_generic_structure(dummy_fs: Path):
+def test_build_tree_generic_structure(dummy_fs: Path) -> None:
     """The builder yields the expected number of nodes and structure."""
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
-    roots = __build_tree_generic(
+    roots: list[BehaviorNode] = __build_tree_generic(
         root=dummy_fs,
         level_specs=level_specs,
         node_class=BehaviorNode,
@@ -127,10 +128,10 @@ def test_build_tree_generic_structure(dummy_fs: Path):
     assert len(condB.children[0].children) == 1
 
 
-def test_generic_crawler_trace(dummy_fs: Path):
+def test_generic_crawler_trace(dummy_fs: Path) -> None:
     """GenericCrawler walks nodes depth-first and calls kernel hooks."""
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
-    roots = __build_tree_generic(
+    roots: list[BehaviorNode] = __build_tree_generic(
         root=dummy_fs,
         level_specs=level_specs,
         node_class=BehaviorNode,
@@ -154,7 +155,7 @@ def test_generic_crawler_trace(dummy_fs: Path):
     # Ensure at least every node produced by build_tree_generic is visited
     produced_nodes = []
 
-    def _collect(n):
+    def _collect(n: Any) -> None:
         produced_nodes.append(n)
         for ch in n.children:
             _collect(ch)

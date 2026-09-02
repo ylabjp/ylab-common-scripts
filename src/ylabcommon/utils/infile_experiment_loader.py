@@ -9,8 +9,7 @@ import yaml
 import zipfile
 
 
-def extract_zip_and_find_tiffs(datase_ymal_file: str):
-
+def extract_zip_and_find_tiffs(datase_ymal_file: str) -> tuple[list[str], list[str]]:
     dataset_dirs = []
     top_dir = []
 
@@ -39,14 +38,9 @@ def extract_zip_and_find_tiffs(datase_ymal_file: str):
             top_path = (tif.parent).relative_to(extract_root)
             top_dir.append(top_path)
 
-    # remove duplicates
-    dataset_dirs = sorted(set(dataset_dirs))
+    # remove duplicates, then convert Path → string directories
+    dataset_dir_names = [str(p) for p in sorted(set(dataset_dirs))]
+    top_dir_names = [str(p) for p in sorted(set(top_dir))]
 
-    # convert Path → string directories
-    dataset_dirs = [str(p) for p in dataset_dirs]
-
-    top_dir = sorted(set(top_dir))
-    top_dir = [str(p) for p in top_dir]
-
-    return dataset_dirs, top_dir
+    return dataset_dir_names, top_dir_names
 

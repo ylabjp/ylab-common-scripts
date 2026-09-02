@@ -4,15 +4,15 @@ import os
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 import logging
 from datetime import datetime
 
-def natural_sort_key(s: str):
+def natural_sort_key(s: str) -> list:
     parts = re.split(r"(\d+)", s)
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
-def scan_tiff_dir(folder: str):
+def scan_tiff_dir(folder: str) -> tuple[list, dict]:
     """``folder`` 直下の TIFF を **1 回の列挙で** 列挙し、``(paths, sizes)`` を返す。
 
     サイズは列挙の応答に最初から入っている (Windows の
@@ -87,7 +87,7 @@ def find_tiff_files(folder: str) -> List[str]:
     return scan_tiff_dir(folder)[0]
 
 
-def sizes_from_dir_scan(paths, on_directory=None) -> Dict[str, int]:
+def sizes_from_dir_scan(paths: Any, on_directory: Any = None) -> Dict[str, int]:
     """``{path: size}`` を、ファイル単位の stat ではなくディレクトリ列挙から作る。
 
     ``os.path.getsize`` は1ファイルにつき1往復する。SMB 越しの 3001 ファイルでは
@@ -115,7 +115,7 @@ def sizes_from_dir_scan(paths, on_directory=None) -> Dict[str, int]:
         古い値になりうる (メタデータの更新が遅延するため)。取得と同時に走らせる
         運用では、サイズを根拠に **捨てる** 判断だけは個別 stat で裏を取ること。
     """
-    wanted = defaultdict(dict)
+    wanted: dict[str, dict[str, Any]] = defaultdict(dict)
     for path in paths:
         head, tail = os.path.split(os.fspath(path))
         wanted[head][tail] = path
@@ -138,12 +138,12 @@ def sizes_from_dir_scan(paths, on_directory=None) -> Dict[str, int]:
             continue
     return sizes
 
-def count_files_in_directory(directory_path):
+def count_files_in_directory(directory_path: Any) -> int:
     path = Path(directory_path)
     count = len([p for p in path.iterdir() if p.is_file()])
     return count
 
-def get_theme():
+def get_theme() -> dict:
     """Returns a dictionary of ANSI escape codes for styling."""
     return {
         "header": "\033[92m\033[1m",  # Bold Green
@@ -157,13 +157,13 @@ def get_theme():
         "warning": "\033[93m",        # Yellow
     }
 
-def style_print(text, style_key="header"):
+def style_print(text: Any, style_key: str = "header") -> None:
     """Helper to print styled text with a reset."""
     theme = get_theme()
     style = theme.get(style_key, theme["reset"])
     print(f"{style}{text}{theme['reset']}")
 
-def progress_bar(i, total, width=30):
+def progress_bar(i: Any, total: Any, width: int = 30) -> None:
     progress = i / total
     filled = int(width * progress)
 
@@ -173,7 +173,7 @@ def progress_bar(i, total, width=30):
 
 
 # Simple colored logs
-def setup_logging(args):
+def setup_logging(args: Any) -> None:
     level = logging.WARNING
     if args.debug:
         level = logging.DEBUG
@@ -185,21 +185,22 @@ def setup_logging(args):
         format="%(asctime)s - %(message)s"
     )
 
-def log_info(msg):
+def log_info(msg: Any) -> None:
     logging.info(f"\033[94m[INFO]\033[0m {msg}")
 
 
-def log_done(msg):
-    logging.done(f"\033[92m[DONE]\033[0m {msg}")
+def log_done(msg: Any) -> None:
+    # logging に done は無い。INFO で出す (log_info と同じ経路)。
+    logging.info(f"\033[92m[DONE]\033[0m {msg}")
 
 
-def log_warn(msg):
+def log_warn(msg: Any) -> None:
     logging.warning(f"\033[93m[WARN]\033[0m {msg}")
 
 
-def log_error(msg):
+def log_error(msg: Any) -> None:
     logging.error(f"\033[91m[ERROR]\033[0m {msg}")
 
-def ensure_parent(path: str):
+def ensure_parent(path: str) -> None:
     Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 

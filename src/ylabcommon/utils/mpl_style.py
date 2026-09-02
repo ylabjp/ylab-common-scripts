@@ -8,11 +8,13 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 import matplotlib
 
 #: `pdf.fonttype` / `ps.fonttype` の 42 は TrueType 埋め込み。既定の 3 (Type-3) は
 #: Illustrator で文字を編集できず、投稿規定で弾かれることがある。
-HOUSE_RCPARAMS = {
+HOUSE_RCPARAMS: dict[str, Any] = {
     "font.family": "Arial",
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
@@ -21,4 +23,6 @@ HOUSE_RCPARAMS = {
 
 def apply_house_style() -> None:
     """`HOUSE_RCPARAMS` をグローバルな rcParams へ適用する。"""
-    matplotlib.rcParams.update(HOUSE_RCPARAMS)
+    # rcParams のキーは matplotlib 側で Literal 列挙になっているので、素の
+    # dict は渡せない (中身は正しいキーだけ)。
+    matplotlib.rcParams.update(HOUSE_RCPARAMS)  # type: ignore[arg-type]

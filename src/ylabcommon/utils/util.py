@@ -1,10 +1,11 @@
+from typing import Any
 import collections.abc
 import json
 import yaml
 import os
 import glob
 
-def deepupdate(dict_base: dict, other) -> dict:
+def deepupdate(dict_base: dict, other: Any) -> dict:
     """
     Deepupdate dictionary
     """
@@ -45,7 +46,7 @@ class PromptColor:
     RESET = "\033[0m"  # 全てリセット
 
 
-def supports_color(stream=None) -> bool:
+def supports_color(stream: Any = None) -> bool:
     """この出力先に色を付けてよいか。
 
     付けてはいけない場合に付けると、``←[33m`` のような制御文字がそのまま見えて
@@ -71,19 +72,20 @@ def supports_color(stream=None) -> bool:
     return True
 
 
-def _enable_windows_vt(stream) -> bool:
+def _enable_windows_vt(stream: Any) -> bool:
     """Windows コンソールで ANSI 制御文字の解釈を有効にする。できなければ False。"""
     try:
         import ctypes
 
-        handle = ctypes.windll.kernel32.GetStdHandle(-11)   # STD_OUTPUT_HANDLE
+        # STD_OUTPUT_HANDLE (-11)
+        handle = ctypes.windll.kernel32.GetStdHandle(-11)  # type: ignore[attr-defined]
         mode = ctypes.c_uint32()
-        if not ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        if not ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):  # type: ignore[attr-defined]
             return False
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
             return True
-        return bool(ctypes.windll.kernel32.SetConsoleMode(
+        return bool(ctypes.windll.kernel32.SetConsoleMode(  # type: ignore[attr-defined]
             handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     except Exception:
         return False
@@ -98,7 +100,7 @@ def colorize(text: str, color: str) -> str:
 
 
 class MixedStyleDumper(yaml.Dumper):
-    def represent_sequence(self, tag, sequence, flow_style=None):
+    def represent_sequence(self, tag: Any, sequence: Any, flow_style: Any = None) -> Any:
         """
         Custom sequence representer.
         Forces flow style for lists that do not contain dictionaries.

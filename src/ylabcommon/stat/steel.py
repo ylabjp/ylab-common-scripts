@@ -9,6 +9,7 @@ Kruskal-Wallis 検定 → 事後の多重比較 (Steel / Steel-Dwass)
         pip install scikit-posthocs
 """
 
+from typing import Any
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -18,7 +19,7 @@ from scipy import stats
 # ---------------------------------------------------------------
 # Steel 検定 (対照群との比較) — scipy/scikit-posthocs に無いので自前実装
 # ---------------------------------------------------------------
-def steel_test(control, treatments, labels=None):
+def steel_test(control: Any, treatments: Any, labels: Any = None) -> pd.DataFrame:
     """
     Parameters
     ----------
@@ -45,7 +46,8 @@ def steel_test(control, treatments, labels=None):
     if labels is None:
         labels = [f"treat{i + 1}" for i in range(k)]
 
-    t_stats, ns = [], []
+    t_stats: Any = []
+    ns: list[int] = []
     for tr in treatments:
         tr = np.asarray(tr, dtype=float)
         ni = len(tr)

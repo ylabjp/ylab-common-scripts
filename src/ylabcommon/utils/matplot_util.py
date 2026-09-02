@@ -1,3 +1,4 @@
+from typing import Any
 import matplotlib
 import matplotlib.pyplot as plt
 import colorsys
@@ -87,7 +88,7 @@ def create_pdf_pages(fig_name_base: str) -> PdfPages:
     return pp
 
 
-def close_fig(pp, wspace=0.5, hspace=1.5, bottom=0.15, top=0.85, left=0.07, right=0.93):
+def close_fig(pp: Any, wspace: float = 0.5, hspace: float = 1.5, bottom: float = 0.15, top: float = 0.85, left: float = 0.07, right: float = 0.93) -> None:
 
     plt.subplots_adjust(
         wspace=wspace,
@@ -104,7 +105,7 @@ def close_fig(pp, wspace=0.5, hspace=1.5, bottom=0.15, top=0.85, left=0.07, righ
     plt.close()
 
 
-def standard_bar(ax: Axes, cond_label, color, y_data: pd.DataFrame):
+def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame) -> None:
     if y_data is None:
         ax.bar(
             cond_label,
@@ -160,7 +161,7 @@ def standard_bar(ax: Axes, cond_label, color, y_data: pd.DataFrame):
         jitter=0.2  # 横幅を指定できる
     )
 
-def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: pd.DataFrame):
+def standard_bar_for_agg_data(ax: Axes, cond_label: Any, color:list[str], agg_data: pd.DataFrame) -> None:
     '''
     Behaviorで実装した集計系に対応している
     agg_data: mean, sem, vectorを含むDataFrameで、indexは条件の名前
@@ -227,7 +228,9 @@ def standard_bar_for_agg_data(ax: Axes, cond_label, color:list[str], agg_data: p
                 }
             )
         ax.set_xticklabels(cond_label)
-def generate_stat_text(data_for_stat):
+
+
+def generate_stat_text(data_for_stat: Any) -> tuple[str, str]:
     out = ""
     p_str = ""
     if len(data_for_stat) == 2:
@@ -236,7 +239,10 @@ def generate_stat_text(data_for_stat):
         p_str = "P = %.3f" % p
     elif len(data_for_stat) > 2:
         stat, p = kruskal(*data_for_stat)
-        out = "KW test, H = " % stat
+        # 以前ここは書式指定の無い "KW test, H = " % stat で、H も P も落ちていた
+        # (3 群以上のとき統計量が図に出ない)。2 群側と同じ形にそろえる。
+        out = "KW test, H = %.3f" % stat
+        p_str = "P = %.3f" % p
     else:
         out = ""
     return out, p_str
@@ -303,7 +309,7 @@ def set_axis_properties(ax: plt.Axes) -> None:
         artist.set_clip_on(False)
 
 
-def convert_pg2mpl(x0, y0, width, height, angle_deg) -> np.ndarray:
+def convert_pg2mpl(x0: Any, y0: Any, width: Any, height: Any, angle_deg: Any) -> np.ndarray:
     # Converte pg ROI parameters to matplotlib ellipse parameters
     # x0, y0: center position
     # width, height: axes lengths

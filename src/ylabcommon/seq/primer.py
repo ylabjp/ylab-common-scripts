@@ -119,6 +119,7 @@ def check_primer_pair(
     fw = check_pcr_primer(fw_priming, c)
     rv = check_pcr_primer(rv_priming, c)
     pair: list[Violation] = []
+    assert fw.tm is not None and rv.tm is not None  # check_pcr_primer が必ず入れる
     diff = abs(fw.tm - rv.tm)
     if diff > c.max_pair_tm_diff:
         pair.append(Violation(

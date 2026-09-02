@@ -17,6 +17,7 @@
 出力は従来どおり bioio (OME-TIFF/Zarr) が担当する。
 """
 
+from typing import Any, Optional
 from pathlib import Path
 from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +46,7 @@ from ylabcommon.bioio.thorlab.xml_parser import ExperimentXMLParser
 PlaneLayout = namedtuple("PlaneLayout", "n_pages height width dtype")
 
 
-def get_channel_names_index(xml_path):
+def get_channel_names_index(xml_path: Any) -> list[str]:
     """Return the Thorlabs channel (wavelength) names from an Experiment.xml.
 
     Accepts a path to Experiment.xml. Each ``<Wavelength name="...">`` becomes one
@@ -58,7 +59,7 @@ def get_channel_names_index(xml_path):
     return list(names) if names else ["Channel 0"]
 
 
-def _thorlabs_channel_key(path):
+def _thorlabs_channel_key(path: Any) -> str:
     """Channel identifier parsed from a Thorlabs TIFF filename.
 
     Thorlabs raw files look like ``ChanA_00001_00002_00003_00004.tif`` — the
@@ -93,7 +94,7 @@ def _note_file(exc: BaseException, text: str) -> None:
 FilledFrame = namedtuple("FilledFrame", "slots t_keep z_keep unreadable outside ragged")
 
 
-def _thorlabs_zt(path):
+def _thorlabs_zt(path: Any) -> Optional[tuple[int, int]]:
     """ファイル名の末尾2つの数値連番を ``(z, t)`` として返す。読めなければ None。
 
     ThorLabs は取得の実際の次元をファイル名の連番で持っている
@@ -107,7 +108,7 @@ def _thorlabs_zt(path):
     return int(nums[-2]), int(nums[-1])
 
 
-def _is_preview(path):
+def _is_preview(path: Any) -> bool:
     """ThorImage が取得ごとに書き出す表示用ファイル (``ChanA_Preview.tif``) か。
 
     取得中の画面表示のためのもので、面ではない。XML の
@@ -116,7 +117,7 @@ def _is_preview(path):
     return Path(path).stem.lower().split("_")[-1] == "preview"
 
 
-def _fill_frame(files, max_t, max_z) -> FilledFrame:
+def _fill_frame(files: Any, max_t: Any, max_z: Any) -> FilledFrame:
     """XML が決めた枠 ``(max_t, max_z)`` をファイルで埋め、埋まらない分を落とす。
 
     取り込みの組み立てはこの3段階だけで決まる。
@@ -158,7 +159,7 @@ def _fill_frame(files, max_t, max_z) -> FilledFrame:
     if not slots:
         return FilledFrame({}, [], [], unreadable, outside, [])
 
-    z_counts = defaultdict(int)
+    z_counts: dict[int, int] = defaultdict(int)
     for _t, z in slots:
         z_counts[z] += 1
     t_values = sorted({t for t, _z in slots})
@@ -172,12 +173,13 @@ def _fill_frame(files, max_t, max_z) -> FilledFrame:
         if best is None or score > best[0]:
             best = (score, t_keep, z_keep)
 
+    assert best is not None  # slots が空でないので必ず 1 周は回る
     _score, t_keep, z_keep = best
     ragged = [t for t in t_values if t not in set(t_keep)]
     return FilledFrame(slots, t_keep, z_keep, unreadable, outside, ragged)
 
 
-def _drop_odd_depths(ch, t_values, per_t):
+def _drop_odd_depths(ch: Any, t_values: Any, per_t: Any) -> tuple[list, list]:
     """面数が多数派と違う時点を落とし、``(t_values, per_t)`` を返す。
 
     枠の枡が揃っていても、多ページのファイルが1枚混ざればその時点だけ面数が変わる。
@@ -192,7 +194,7 @@ def _drop_odd_depths(ch, t_values, per_t):
     if len(set(depths)) <= 1:
         return t_values, per_t
 
-    tally = defaultdict(int)
+    tally: dict[int, int] = defaultdict(int)
     for d in depths:
         tally[d] += 1
     normal = max(tally, key=lambda d: (tally[d], -d))
@@ -211,11 +213,11 @@ def _drop_odd_depths(ch, t_values, per_t):
     return [t for t, _v in kept], [v for _t, v in kept]
 
 
-def _examples(files, n=3):
+def _examples(files: Any, n: int = 3) -> str:
     return ", ".join(Path(f).name for f in files[:n]) + (" ..." if len(files) > n else "")
 
 
-def _report_cuts(ch, ch_files, frame, max_t, max_z) -> None:
+def _report_cuts(ch: Any, ch_files: Any, frame: Any, max_t: Any, max_z: Any) -> None:
     """枠のどこが埋まり、何が落ちたかを1行で出し、落ちた分は警告する。
 
     カットは正常系でも起きる (取得を止めれば必ず後ろが空く) ので、落ちたこと自体は
@@ -277,7 +279,7 @@ def _report_cuts(ch, ch_files, frame, max_t, max_z) -> None:
 _ONE_FILE_ONLY = {"_multifile": False}
 
 
-def probe_plane_layout(path) -> PlaneLayout:
+def probe_plane_layout(path: Any) -> PlaneLayout:
     """1ファイルのヘッダだけを読んで、面数・縦横・画素の型を返す。画素は読まない。
 
     数えるのは ``tf.series[0]`` の面数であって ``len(tf.pages)`` ではない。読み取り側
@@ -288,7 +290,7 @@ def probe_plane_layout(path) -> PlaneLayout:
     読めるのは 1 面である。
     """
     try:
-        with tifffile.TiffFile(str(path), **_ONE_FILE_ONLY) as tf:
+        with tifffile.TiffFile(str(path), **_ONE_FILE_ONLY) as tf:  # type: ignore[arg-type]
             series = tf.series[0]
             shape = tuple(series.shape)
             if len(shape) < 2:
@@ -303,7 +305,8 @@ def probe_plane_layout(path) -> PlaneLayout:
         raise
 
 
-def _read_file_planes(path, n_pages, height, width, dtype):
+def _read_file_planes(path: Any, n_pages: Any, height: Any, width: Any,
+                      dtype: Any) -> np.ndarray:
     """遅延読みの実体。1ファイルを ``(n_pages, Y, X)`` として返す。
 
     ヘッダを1枚しか読んでいない以上、残りのファイルが本当に同じ形かはここで初めて
@@ -311,7 +314,7 @@ def _read_file_planes(path, n_pages, height, width, dtype):
     (dask の shape 不一致エラーはファイル名を持たないため)。
     """
     try:
-        arr = tifffile.imread(str(path), **_ONE_FILE_ONLY)
+        arr = tifffile.imread(str(path), **_ONE_FILE_ONLY)  # type: ignore[call-overload]
     except OSError as e:
         # ネットワークドライブが落ちたときに、どのファイルで落ちたかを残す。読むのは
         # compute 時 (書き出しや解析側) なので、呼び出し側の try では捕まえきれない。
@@ -357,7 +360,7 @@ def _read_file_planes(path, n_pages, height, width, dtype):
 _PROBE_WORKERS = 64
 
 
-def _page_counts(files, layout, target):
+def _page_counts(files: Any, layout: Any, target: Any) -> list[int]:
     """各ファイルの面数を、**全ファイルのヘッダを読んで** 返す。
 
     以前はファイルサイズで「怪しいファイル」を絞り込み、そこだけヘッダを読んでいた。
@@ -388,13 +391,13 @@ def _page_counts(files, layout, target):
     return [counts[f] for f in files]
 
 
-def _probe_n_pages(path):
+def _probe_n_pages(path: Any) -> int:
     return probe_plane_layout(path).n_pages
 
 
 def stack_thorlab_with_bioio_calibrated(tiff_files: list, xml_path: str,
-                                        get_thorlabs_params, min_kb: int = 100,
-                                        sizes=None):
+                                        get_thorlabs_params: Any, min_kb: int = 100,
+                                        sizes: Any = None) -> tuple:
     """遅延 (dask) の TCZYX スタックと、実際に使ったファイル一覧を返す。
 
     Args:

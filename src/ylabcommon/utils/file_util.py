@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import os
 import glob
@@ -17,7 +18,7 @@ import questionary
 import yaml
 from dotenv import load_dotenv
 
-def find_parents_for_dir(start_dir:Path,target:str)->Path:
+def find_parents_for_dir(start_dir: Path, target: str) -> Path | None:
     '''
     Traverses upwards from the given start_dir, looking in each parent directory
     for a file or directory named 'target'. If found, returns the full path to that target.
@@ -41,7 +42,7 @@ def find_parents_for_dir(start_dir:Path,target:str)->Path:
         cur_dir = parent
     return None
 
-def load_lab_config(base_path:Path):
+def load_lab_config(base_path:Path) -> None:
     """
     OSを判定し、適切な .env ファイルを自動でロードする。
     base_path: .env ファイルが置かれているディレクトリ（デフォルトはカレントディレクトリ）
@@ -53,7 +54,7 @@ def load_lab_config(base_path:Path):
     load_dotenv(dotenv_path=env_path)
     # print(f"Loaded config for {os_type} from {env_path}")
 
-def init_base_drive(prefix: dict):
+def init_base_drive(prefix: dict) -> Path:
     '''
     prefix: {"Windows":"XXX","Linux":"XXX"}
     '''
@@ -70,12 +71,15 @@ def init_base_drive(prefix: dict):
     return dirbase
 
 
-def _get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[str, dict[str,Path|str]]:
+def _get_config_list(base_path: str, config_dir_name: str,
+                     file_type: str = "yaml") -> dict[str, dict[str, Any]]:
 
-    config_dir=find_parents_for_dir(Path(base_path),config_dir_name)
+    config_dir = find_parents_for_dir(Path(base_path), config_dir_name)
+    if config_dir is None:
+        raise ValueError("Critical error: config dir not found.")
 
-    def get_config_dict(base_dir:Path):
-        sub_dict={}
+    def get_config_dict(base_dir: Path) -> dict[str, dict[str, Any]]:
+        sub_dict: dict[str, dict[str, Any]] = {}
         config_list=list(
             base_dir.glob("*."+file_type)
         )
@@ -92,7 +96,7 @@ def _get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[s
                 }
         return sub_dict
     
-    config_basename_dict={}
+    config_basename_dict: dict[str, dict[str, Any]] = {}
     for d in config_dir.glob("config_*"):
         if not d.is_dir():
             continue
@@ -104,10 +108,12 @@ def _get_config_list(base_path:str,config_dir_name:str,file_type="yaml")->dict[s
 
     config_basename_dict=config_basename_dict|get_config_dict(config_dir)
     if len(config_basename_dict.keys())==0:
-        raise ValueError("Critical error: config dir not found.")
+        # 上の「見つからない」と原因が違う。ここは **あるが空** のとき。
+        raise ValueError("Critical error: no %s config found under %s."
+                         % (file_type, config_dir))
     return config_basename_dict
 
-def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml") -> list:
+def select_config(param_model: Any,base_path:str,config_dir_name:str,file_type: str = "yaml") -> list:
     '''
     2段階でconfigファイルを管理する
     file_typeで指定したファイルまたはconfig_で始まるディレクトリをリスト表示する。
@@ -116,7 +122,7 @@ def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml"
 
     answers = questionary.checkbox(
         "Select config and <enter>",
-        choices=config_basename_dict.keys(),
+        choices=list(config_basename_dict.keys()),
     ).ask()
 
     config_list = list(map(lambda x:config_basename_dict[x],answers))
@@ -126,7 +132,7 @@ def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml"
     if config_list[0]["type"]=="dir":
         subanswers = questionary.checkbox(
                         "Select config and <enter>",
-                        choices=config_list[0]["sub"].keys(),
+                        choices=list(config_list[0]["sub"].keys()),
                     ).ask()
         res_list = list(map(lambda x:config_list[0]["sub"][x],subanswers))
     else:
@@ -143,13 +149,13 @@ def select_config(param_model,base_path:str,config_dir_name:str,file_type="yaml"
     return sap_list
 
 
-def replace_yen_in_path(self, fname: str):
+def replace_yen_in_path(fname: str) -> str:
     '''
     For japanese win to linux
     '''
     return fname.replace("\\", "/")
 
-def init_logger(self, log_path, log_id, log_category):
+def init_logger(log_path: Any, log_id: Any, log_category: Any) -> logging.Logger:
     '''
     log_id: project config name etc
     log_category: behavior, slice etc
@@ -172,8 +178,8 @@ def init_logger(self, log_path, log_id, log_category):
     logger = logging.getLogger(log_id+today_str)
     logger.setLevel(logging.DEBUG)
 
-    handlers = []
-    for type in [["debug", logging.DEBUG], ["error", logging.ERROR]]:
+    handlers: list[logging.Handler] = []
+    for type in [("debug", logging.DEBUG), ("error", logging.ERROR)]:
         dir_name = os.path.join(
             log_path,
             log_category+"_"+type[0]
@@ -196,7 +202,7 @@ def init_logger(self, log_path, log_id, log_category):
     s_h.setFormatter(formatter)
     handlers.append(s_h)
 
-    for h in handlers:
-        logger.addHandler(h)
+    for handler in handlers:
+        logger.addHandler(handler)
 
     return logger

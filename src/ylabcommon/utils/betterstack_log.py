@@ -20,6 +20,8 @@ ylabcommon を依存に加えて安全に利用できる。
 - ``log_context()`` で with ブロック内のログへ任意のフィールドを自動付与できる。
   解析パイプライン向けには ``analysis_context()`` (stage/config/target_file) を用意する。
 """
+
+from collections.abc import Iterator
 import atexit
 import contextlib
 import contextvars
@@ -34,7 +36,7 @@ import traceback
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 TOKEN_ENV = "BETTER_STACK_TOKEN"
 KEY_ENV = "BETTER_STACK_KEY"
@@ -100,7 +102,7 @@ def _runtime_context() -> dict:
 
 
 @contextlib.contextmanager
-def log_context(**fields):
+def log_context(**fields: Any) -> Iterator[None]:
     """この with ブロック内で送信されるログへ任意のフィールドを付与する。
 
     ネストした場合は外側の値を引き継ぎ、指定したキー (None 以外) だけ上書きする。
@@ -118,7 +120,8 @@ def log_context(**fields):
 
 
 @contextlib.contextmanager
-def analysis_context(*, stage=None, config=None, target_file=None):
+def analysis_context(*, stage: Any = None, config: Any = None,
+                     target_file: Any = None) -> Iterator[None]:
     """解析パイプライン向け: stage/config/target_file を with ブロック内へ伝搬する。
 
     ``log_context`` の薄いラッパ (後方互換のために維持)。CrawlContext を持たない
@@ -158,7 +161,7 @@ def _find_env_file(start_dir: Path) -> Optional[Path]:
         cur = cur.parent
 
 
-def init_logging(base_path=None, app: Optional[str] = None) -> None:
+def init_logging(base_path: Any = None, app: Optional[str] = None) -> None:
     """.env を読み込み Better Stack のトークンを環境変数へ設定する (冪等)。
 
     base_path: .env を親方向へ探索する起点。省略時は本ファイルの位置。
@@ -270,7 +273,7 @@ def send(
     message: str,
     *,
     error: Optional[BaseException] = None,
-    **fields,
+    **fields: Any,
 ) -> None:
     """Better Stack へ1件のログを非同期送信する (キュー投入のみで即時 return)。
 
@@ -313,7 +316,7 @@ def send(
         print("[betterstack] send queue is full; dropping log event")
 
 
-def log_info(message: str, *, console: bool = True, **fields) -> None:
+def log_info(message: str, *, console: bool = True, **fields: Any) -> None:
     """情報ログ。``console=False`` にすると送信だけ行い、端末には出さない。
 
     端末は人が読むもので、Better Stack は後から辿るものなので、量の要求が違う。
@@ -325,7 +328,7 @@ def log_info(message: str, *, console: bool = True, **fields) -> None:
     send("info", message, **fields)
 
 
-def log_warning(message: str, *, console: bool = True, **fields) -> None:
+def log_warning(message: str, *, console: bool = True, **fields: Any) -> None:
     """警告。端末では黄色、Better Stack へは素のまま送る。
 
     色は **端末に出す文字にだけ** 付ける。制御文字を message に混ぜると、そのまま
@@ -338,7 +341,7 @@ def log_warning(message: str, *, console: bool = True, **fields) -> None:
     send("warning", message, **fields)
 
 
-def log_error(message: str, *, error: Optional[BaseException] = None, **fields) -> None:
+def log_error(message: str, *, error: Optional[BaseException] = None, **fields: Any) -> None:
     from ylabcommon.utils.util import PromptColor, colorize
 
     print(colorize(f"[ERROR] {message}", PromptColor.RED))
@@ -358,7 +361,7 @@ def install_excepthook(app: Optional[str] = None) -> None:
 
     prev_hook = sys.excepthook
 
-    def _hook(exc_type, exc_value, exc_tb):
+    def _hook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
         try:
             if not issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
                 log_error(f"Uncaught exception: {exc_value}", error=exc_value)
@@ -369,7 +372,7 @@ def install_excepthook(app: Optional[str] = None) -> None:
 
     prev_thread_hook = threading.excepthook
 
-    def _thread_hook(args):
+    def _thread_hook(args: Any) -> None:
         try:
             if args.exc_type is not None and not issubclass(
                 args.exc_type, (KeyboardInterrupt, SystemExit)

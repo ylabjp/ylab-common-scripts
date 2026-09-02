@@ -11,8 +11,8 @@ class ThorlabParamsAdapter(BaseParamsAdapter):
     (ThorImage が持つのは ``pixelX`` / ``pixelY``)。
     """
 
-    def __init__(self, xml_path: str):
+    def __init__(self, xml_path: str) -> None:
         self.xml_path = xml_path
 
-    def extract(self):
+    def extract(self) -> dict:
         return ExperimentXMLParser(self.xml_path).as_params()

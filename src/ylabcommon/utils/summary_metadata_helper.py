@@ -1,3 +1,4 @@
+from typing import Any
 import sys
 import platform
 import psutil # Optional: to track memory usage during the run
@@ -5,7 +6,7 @@ from bioio import __version__ as bioio_ver
 import numpy as np
 import hashlib
 
-def get_enhanced_metadata(img_obj, tiff_files):
+def get_enhanced_metadata(img_obj: Any, tiff_files: Any) -> dict:
     """
     Extracts hardware, software, and deep image specifics.
     img_obj: A BioImage object from the first file in your list.
@@ -33,7 +34,7 @@ def get_enhanced_metadata(img_obj, tiff_files):
         "physical_units": "micrometer" # Standard for Thorlabs/BioIO
     }
 
-def generate_file_sha256(file_path):
+def generate_file_sha256(file_path: Any) -> str:
     """Generates a SHA-256 hash for a file to ensure data integrity."""
     sha256_hash = hashlib.sha256()
     with open(file_path, "rb") as f:

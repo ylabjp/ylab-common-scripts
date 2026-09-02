@@ -17,10 +17,10 @@ def get_prj_name(fname: str) -> str:
 
 def read_and_cache(
     fname_df: str,
-        cache_path: str,
-        cond_map: dict,
-        df_target_key='aggregation/cc'
-):
+    cache_path: str,
+    cond_map: dict,
+    df_target_key: str = 'aggregation/cc',
+) -> pd.DataFrame:
     """
     Reads a DataFrame from an HDF5 file, processes it, and caches the result.
     This function attempts to read a cached DataFrame from a specified cache path.
@@ -46,7 +46,7 @@ def read_and_cache(
         d = pd.read_hdf(fname_df, key=df_target_key)
         d["cond_ori"] = d["cond"]
 
-        def set_cond(x: str):
+        def set_cond(x: str) -> str:
             for t in cond_map.keys():
                 if x.find(t) > 0:
                     return t

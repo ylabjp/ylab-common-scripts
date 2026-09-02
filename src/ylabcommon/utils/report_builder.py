@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import platform
 import re
@@ -9,9 +10,9 @@ import numpy as np
 
 class ReportBuilder:
 
-    def __init__(self):
+    def __init__(self) -> None:
 
-        self.report = {
+        self.report: dict[str, Any] = {
             "timestamp": datetime.utcnow().isoformat(),
             "dataset": {},
             "detected_dimensions": {},
@@ -29,7 +30,7 @@ class ReportBuilder:
             }
         }
 
-    def collect_dataset(self, input_dir, microscope, total_files):
+    def collect_dataset(self, input_dir: Any, microscope: Any, total_files: Any) -> None:
 
         self.report["dataset"] = {
             "source_tiff_dir": str(input_dir),
@@ -37,10 +38,10 @@ class ReportBuilder:
             "total_files_found": total_files
         }
     
-    def add_section(self, name, data):
+    def add_section(self, name: Any, data: Any) -> None:
         self.report[name] = data
 
-    def collect_metadata(self, image_meta, stacked_data):
+    def collect_metadata(self, image_meta: Any, stacked_data: Any) -> None:
 
         pixel_sizes = getattr(image_meta, "pixel_sizes", None)
 
@@ -69,9 +70,9 @@ class ReportBuilder:
             self.report["stack_statistics"]["size_MB"] = round(stacked_data.nbytes / (1024**2), 2)
 
 
-    def compress_dims(self, dims):
+    def compress_dims(self, dims: Any) -> dict:
 
-        clean = {}
+        clean: dict[str, Any] = {}
         for k, v in dims.items():
             v = sorted(v)
             if len(v) == 1:
@@ -83,9 +84,9 @@ class ReportBuilder:
                 clean[f"{k}_count"] = len(v)
         return clean
 
-    def format_dims(self, dims):
-        
-        clean = {}
+    def format_dims(self, dims: Any) -> dict:
+
+        clean: dict[str, Any] = {}
         for k, v in dims.items():
             v = sorted(v)
             if k == "Z":
@@ -101,11 +102,11 @@ class ReportBuilder:
 
         return clean
 
-    def set_dimensions(self, dims):
+    def set_dimensions(self, dims: Any) -> None:
 
         self.report["detected_dimensions"] = self.format_dims(dims)
 
-    def add_validation(self, name, ok, value):
+    def add_validation(self, name: Any, ok: Any, value: Any) -> None:
 
         self.report["validation"]["checks"].append({
             "name": name,
@@ -113,20 +114,19 @@ class ReportBuilder:
             "value": value
         })
 
-    def finalize_validation(self):
+    def finalize_validation(self) -> None:
 
         ok = all(c["ok"] for c in self.report["validation"]["checks"])
         self.report["validation"]["status"] = "VALIDATED" if ok else "NOT VALIDATED"
 
-    def set_output(self, output_dir, output_file):
+    def set_output(self, output_dir: Any, output_file: Any) -> None:
 
         self.report["output"] = {
             "output_directory": str(output_dir),
             "output_file": output_file
         }
 
-    def _json_converter(self, obj):
-
+    def _json_converter(self, obj: Any) -> Any:
         if isinstance(obj, np.integer):
             return int(obj)
 
@@ -144,11 +144,11 @@ class ReportBuilder:
 
         return str(obj)
 
-    def compact_small_lists(self, json_text):
+    def compact_small_lists(self, json_text: Any) -> str:
         pattern = r"\[\s+(\d+),\s+(\d+)\s+\]"
         return re.sub(pattern, r"[\1, \2]", json_text)
 
-    def write(self, output_dir, output_filename):
+    def write(self, output_dir: Any, output_filename: Any) -> None:
 
         output_dir = Path(output_dir)
         json_file = output_filename.with_suffix(".validation.json")

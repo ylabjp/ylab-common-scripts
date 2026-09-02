@@ -30,12 +30,14 @@ Note:
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import atexit
 import contextlib
 import os
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from ylabcommon.utils.betterstack_log import log_info, log_warning
 
@@ -80,7 +82,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def describe_array(volume) -> dict:
+def describe_array(volume: Any) -> dict:
     """所要時間を正規化して比較するための、配列のサイズ情報を返す。
 
     実体を持たない配列 (dask/xarray や shape/dtype だけのダミー) でも壊れないよう、
@@ -135,7 +137,7 @@ class StepHandle:
         # 工程こそ生存確認が要るのに、そこだけ見えなくなる。
         self.last_log_at: Optional[float] = None
 
-    def advance(self, n: int = 1, item=None) -> None:
+    def advance(self, n: int = 1, item: Any = None) -> None:
         """ループ1件分の進捗を記録し、必要なら進捗ログを送る。
 
         **これから処理する item に着手した時点で呼ぶ。** ``item`` に処理対象を渡しておくと、
@@ -174,7 +176,7 @@ class StepHandle:
             now = time.perf_counter()
         elapsed = max(now - self.started, 1e-9)
         rate = self.done / elapsed
-        fields = {
+        fields: dict[str, Any] = {
             "done": self.done,
             "items_per_sec": round(rate, 3),
             # 無進捗の時間。止まっているかどうかはこの値で判断する。
@@ -249,7 +251,8 @@ def active_steps() -> list:
 
 @contextlib.contextmanager
 def timed_step(step: str, *, total: Optional[int] = None,
-               progress_interval_sec: Optional[float] = None, **fields):
+               progress_interval_sec: Optional[float] = None,
+               **fields: Any) -> Iterator[Any]:
     """with ブロックの所要時間を計測し、開始・完了 (または失敗) を Better Stack へ送る。
 
     ブロック実行中は「この工程を実行中」としてレジストリに登録されるので、

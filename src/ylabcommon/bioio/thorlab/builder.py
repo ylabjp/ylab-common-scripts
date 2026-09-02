@@ -1,3 +1,4 @@
+from typing import Any, Optional
 from pathlib import Path
 
 import warnings
@@ -17,7 +18,7 @@ from ylabcommon.bioio.thorlab.xml_parser import (
 ## Main script for loading the files
 
 
-def _check_size_t_tolerant(xml_size_t, image_size_t):
+def _check_size_t_tolerant(xml_size_t: Any, image_size_t: Any) -> tuple[bool, Optional[str], str]:
     """XML が宣言する SizeT と実データの T(時点数)を比較する。
 
     タイムラプス取得は途中で停止されることがあり、その場合 XML の指定より少ない時点数
@@ -89,7 +90,7 @@ class ThorlabBioioBuilder:
         compression_level: int = 6,
         validate_metadata: bool = True,
         dry_run: bool = False,
-    ):
+    ) -> None:
 
         self.tiff_dir = Path(tiff_dir)
         self.xml_file = self.tiff_dir/"Experiment.xml"
@@ -99,10 +100,10 @@ class ThorlabBioioBuilder:
         self.compression_level = compression_level
         self.validate_metadata = validate_metadata
 
-        self.stacked_data=None
-        self.image_meta=None
-        self._xml_cache=None
-        self._params_cache=None
+        self.stacked_data: Any=None
+        self.image_meta: Any=None
+        self._xml_cache: Any=None
+        self._params_cache: Any=None
 
     # -------------------------------------------------
     # TIFF DISCOVERY + STACK
@@ -115,16 +116,15 @@ class ThorlabBioioBuilder:
         検証用のパーサ)。取り出す値は大半が重複していたので、パーサを1つに集約した。
         """
         if self._xml_cache is None:
-            self._xml_cache = ExperimentXMLParser(self.xml_file)
+            self._xml_cache = ExperimentXMLParser(str(self.xml_file))
         return self._xml_cache
 
-    def _get_params(self):
+    def _get_params(self) -> dict:
         if self._params_cache is None:
             self._params_cache = self._get_xml().as_params()
         return self._params_cache
 
-    def _discover_and_stack(self):
-
+    def _discover_and_stack(self) -> tuple:
         print("[Builder] Discovering valid TIFF files...")
 
         # ディレクトリ一覧の取得。ネットワークドライブが応答しないと、まだ1枚も
@@ -146,7 +146,7 @@ class ThorlabBioioBuilder:
         with timed_step("thorlab.stack", target=str(self.tiff_dir),
                         n_files=len(tiff_files)):
             stacked_data, tiff_files = stack_thorlab_with_bioio_calibrated(
-                tiff_files, self.xml_file, get_thorlabs_params, sizes=sizes)
+                tiff_files, str(self.xml_file), get_thorlabs_params, sizes=sizes)
 
         # stacked_data is a lazy dask array (TCZYX). Derive depth from the XML
         # params + slice count, not from the pixels.
@@ -161,8 +161,7 @@ class ThorlabBioioBuilder:
     # Metadata (XML only — no pixels, no BioImage)
     # -------------------------------------------------
 
-    def _build_image_metadata(self, stacked_data):
-
+    def _build_image_metadata(self, stacked_data: Any) -> Any:
         print("[Builder] Building image metadata from Experiment.xml...")
 
         # shape は自分たちで組み立てた遅延スタックが持っている。それ以外 (物理ピクセル
@@ -180,7 +179,7 @@ class ThorlabBioioBuilder:
     # XML Validation
     # -------------------------------------------------
 
-    def _validate_thorlab_stack(self, xml_meta, image_meta):
+    def _validate_thorlab_stack(self, xml_meta: Any, image_meta: Any) -> list:
         """XML と実データの食い違いのうち、**まだ誰も報告していないもの** だけを返す。
 
         以前はここで 7 項目を表で出していたが、検証として働いていたのは 2 つだけだった。
@@ -203,7 +202,7 @@ class ThorlabBioioBuilder:
         Returns:
             list[str]: 見つかった問題。空なら何も言うことは無い。
         """
-        problems = []
+        problems: list = []
         if not xml_meta:
             return problems
 
@@ -231,7 +230,7 @@ class ThorlabBioioBuilder:
     # WRITE OUTPUT
     # -------------------------------------------------
 
-    def write(self,output_path:Path):
+    def write(self,output_path:Path) -> None:
 
         print("[Builder] Writing OME output...")
 
@@ -274,7 +273,7 @@ class ThorlabBioioBuilder:
     # MAIN PIPELINE
     # -------------------------------------------------
 
-    def build(self):
+    def build(self) -> None:
         print("=============================================================================")
         print("[Builder] Starting BioIO reconstruction pipeline")
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, List
+from typing import Any, Optional, Tuple, Dict, List
 from datetime import datetime, timedelta
 import warnings
 
@@ -31,17 +31,17 @@ class ImagePhysicalMetadata:
     channel_names_index: Optional[List[str]]
 
     @property
-    def dim_order(self):
+    def dim_order(self) -> Any:
         """``dimension_order`` の別名 (writer が dim_order という名前で受け取るため)。"""
         return self.dimension_order
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         # 呼び出し側が返り値にキーを足すこと (sorter の PhysicalSizeXUnit など) が
         # あるので、インスタンスの __dict__ そのものではなく複製を返す。
         return dict(self.__dict__)
 
 
-def _parse_imaging_datetime(raw) -> Optional[datetime]:
+def _parse_imaging_datetime(raw: Any) -> Optional[datetime]:
     """Experiment.xml の Date 属性を datetime にする。読めなければ None。"""
     if not raw:
         return None
@@ -53,7 +53,7 @@ def _parse_imaging_datetime(raw) -> Optional[datetime]:
     return None
 
 
-def _clean_channel_names(names, size_c: int) -> List[str]:
+def _clean_channel_names(names: Any, size_c: int) -> List[str]:
     """チャンネル名を OME に書ける形に整える。
 
     ThorImage の Wavelength 名は ``ChanA: 略称`` のように接尾辞が付くことがあるので
@@ -88,7 +88,7 @@ class ThorlabMetadataExtractor(MicroscopeMetadataExtractor):
     それらは Experiment.xml に書いてあるので、XML から直接埋める。
     """
 
-    def __init__(self, stack, params: Optional[Dict] = None):
+    def __init__(self, stack: Any, params: Optional[Dict] = None) -> None:
         self._stack = stack
         self._params = params or {}
 

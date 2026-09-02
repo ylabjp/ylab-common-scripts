@@ -2,7 +2,7 @@ from pathlib import Path
 from ..utils.utils import scan_tiff_dir, log_info, log_warn
 
 
-def collect_valid_tiffs(tiff_dir: Path):
+def collect_valid_tiffs(tiff_dir: Path) -> tuple[list, dict]:
     """取得ディレクトリの生 TIFF を列挙し、``(files, sizes)`` を返す。
 
     サイズを一緒に返すのは、後段のサイズフィルタが同じディレクトリをもう一度

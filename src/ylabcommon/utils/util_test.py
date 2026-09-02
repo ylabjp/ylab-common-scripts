@@ -1,3 +1,4 @@
+from typing import Any
 import json
 import yaml
 from pathlib import Path
@@ -10,7 +11,7 @@ from ylabcommon.utils import util
 # Fixtures                                                                    #
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
-def original_data():
+def original_data() -> dict:
     """Python object that will be written to JSON, then round-tripped."""
     return {
         "alpha": 1,
@@ -20,7 +21,7 @@ def original_data():
 
 
 @pytest.fixture()
-def json_file(tmp_path: Path, original_data):
+def json_file(tmp_path: Path, original_data: Any) -> Path:
     """Temporary JSON file containing *original_data*."""
     jf = tmp_path / "sample.json"
     with jf.open("w", encoding="utf-8") as fp:
@@ -31,7 +32,7 @@ def json_file(tmp_path: Path, original_data):
 # --------------------------------------------------------------------------- #
 # deepupdate                                                                  #
 # --------------------------------------------------------------------------- #
-def test_deepupdate_merges_nested_dicts():
+def test_deepupdate_merges_nested_dicts() -> None:
     base = {"a": 1, "b": {"c": 2}}
     other = {"b": {"d": 3}, "e": 4}
 
@@ -47,7 +48,7 @@ def test_deepupdate_merges_nested_dicts():
 # --------------------------------------------------------------------------- #
 # convert_json_to_yaml                                                        #
 # --------------------------------------------------------------------------- #
-def test_convert_json_to_yaml_roundtrip(json_file: Path, original_data):
+def test_convert_json_to_yaml_roundtrip(json_file: Path, original_data: Any) -> None:
     """
     YAML produced by convert_json_to_yaml should translate back to
     the same Python object as the original JSON content.
@@ -62,13 +63,13 @@ def test_convert_json_to_yaml_roundtrip(json_file: Path, original_data):
     "{'bad': True}",       # single quotes are invalid in JSON
     "not even json",       # random string
 ])
-def invalid_json_file(tmp_path: Path, request):
+def invalid_json_file(tmp_path: Path, request: Any) -> Path:
     bad = tmp_path / "bad.json"
     bad.write_text(request.param, encoding="utf-8")
     return bad
 
 
-def test_convert_json_to_yaml_invalid(invalid_json_file: Path):
+def test_convert_json_to_yaml_invalid(invalid_json_file: Path) -> None:
     output = util.convert_json_to_yaml(str(invalid_json_file))
     assert output.startswith("Error"), "Should return an error message for invalid JSON"
 

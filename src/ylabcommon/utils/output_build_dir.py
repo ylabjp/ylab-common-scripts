@@ -1,3 +1,4 @@
+from typing import Any
 from datetime import datetime
 from pathlib import Path
 
@@ -5,16 +6,15 @@ from pathlib import Path
 Handeling Outout directory name according to input tiff's directoy
 """
 
-def sanitize(name: str):
+def sanitize(name: str) -> str:
     return name.replace("-", "_").replace(".", "p")
 
 def get_base_path(dataset_dir: str, input_root: str) -> Path:
-    dataset_dir = Path(dataset_dir)
-    input_root = Path(input_root)
-    return dataset_dir.relative_to(input_root)
+    return Path(dataset_dir).relative_to(Path(input_root))
 
-def build_output_dir_name(microscope_name=None, output_dir=None, dataset_name=None, change_output_dir_path=None, extra_txt=None):
-
+def build_output_dir_name(microscope_name: Any = None, output_dir: Any = None,
+                          dataset_name: Any = None, change_output_dir_path: Any = None,
+                          extra_txt: Any = None) -> Any:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
  
     if extra_txt:

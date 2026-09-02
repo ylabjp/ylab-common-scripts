@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from lxml import etree
-from typing import Dict
+from typing import Any, Dict, Optional
 
 
 class ExperimentXMLParser:
@@ -22,7 +22,7 @@ class ExperimentXMLParser:
       処理を進められるよう既定値で埋めて返す。
     """
 
-    def __init__(self, xml_path: str):
+    def __init__(self, xml_path: str) -> None:
 
         self.xml_path = Path(xml_path)
 
@@ -34,7 +34,7 @@ class ExperimentXMLParser:
 
     def extract_metadata(self) -> Dict:
 
-        meta = {
+        meta: Dict[str, Any] = {
             "SizeX": None,
             "SizeY": None,
             "SizeZ": None,
@@ -228,13 +228,13 @@ class ExperimentXMLParser:
             "ZFastEnabled": bool(meta["ZFastEnabled"]),
         }
 
-    def _safe_int(self, value):
+    def _safe_int(self, value: Any) -> Optional[int]:
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
 
-    def _safe_float(self, value):
+    def _safe_float(self, value: Any) -> Optional[float]:
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -264,7 +264,7 @@ def scan_offset_known(meta: dict) -> bool:
             and meta.get("ScanOffsetY") is not None)
 
 
-def warn_if_scan_offset(meta: dict, xml_path) -> bool:
+def warn_if_scan_offset(meta: dict, xml_path: Any) -> bool:
     """走査中心がずれていたら警告する。**ずれていると分かったとき** True。
 
     ``<LSM offsetX="-52" offsetY="36" .../>`` は走査の中心を視野の中心から
@@ -318,6 +318,6 @@ def warn_if_scan_offset(meta: dict, xml_path) -> bool:
     return False
 
 
-def _shown(value):
+def _shown(value: Any) -> Any:
     """記録の無い値を 0 と書かない。文面の中で「0 だった」と読ませないため。"""
     return "not recorded" if value is None else value

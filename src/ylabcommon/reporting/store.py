@@ -102,7 +102,7 @@ class FigureStore:
         # `PdfPages(...)` は**ファイルを遅延オープンする**ので、構築しただけでは
         # 検査にならない(実際に開くのは最初の savefig)。追記モードで開いて確かめる。
         # `matplot_util.create_pdf_pages` が書き込み可否をこの方法で見ているのと同じ。
-        self._pdf = None
+        self._pdf: Any = None
         if pdf_name:
             from matplotlib.backends.backend_pdf import PdfPages
 
@@ -126,7 +126,7 @@ class FigureStore:
 
     # --- PDF passthrough ------------------------------------------------- #
     @property
-    def pdf(self):
+    def pdf(self) -> Any:
         """素の `PdfPages`。未移行の呼び出し箇所がそのまま `savefig` できる。
 
         ここへ直接書いたページは manifest に載らない(移行の途中段階なので当然)。
@@ -149,15 +149,15 @@ class FigureStore:
     # --- 保存 -------------------------------------------------------------- #
     def save(
         self,
-        fig,
+        fig: Any,
         key: str,
         caption: str | None = None,
         stats: Iterable[Any] | None = None,
         data: Sequence[str] | None = None,
         close_figure: bool = False,
-        table=None,
+        table: Any = None,
         pdf_page: int | None = None,
-        **savefig_kwargs,
+        **savefig_kwargs: Any,
     ) -> FigureRecord:
         """図を保存し、manifest へ追記する。
 
@@ -244,7 +244,7 @@ class FigureStore:
             plt.close(fig)
         return record
 
-    def _save_table(self, fig_dir: Path, key: str, table) -> tuple[str | None, str | None]:
+    def _save_table(self, fig_dir: Path, key: str, table: Any) -> tuple[str | None, str | None]:
         """図の数値を `figures/{key}.csv` に書き、(相対パス, 注記) を返す。
 
         list を値に持つ列(個体別ベクタ等)は `;` 連結の文字列にする(集計CSVと同じ流儀)。
@@ -282,5 +282,5 @@ class FigureStore:
     def __enter__(self) -> "FigureStore":
         return self
 
-    def __exit__(self, *_exc) -> None:
+    def __exit__(self, *_exc: Any) -> None:
         self.close()
