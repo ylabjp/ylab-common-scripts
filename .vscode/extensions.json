@@ -1,0 +1,20 @@
+{
+  // このリポジトリを VS Code で開くと「推奨拡張機能をインストールしますか」と聞かれる。
+  // 一覧の意図と設定は ylabjp/general の docs/computation/setup/vscode.md。
+  "recommendations": [
+    // --- Markdown ---
+    // **markdown まわりはこの 1 つに寄せてある。** WYSIWYG 編集・mermaid の描画・
+    // 画像の貼り付け・アウトラインを内包するので、専用の拡張を並べない。
+    "cweijan.vscode-office",           // Office Viewer。.md の既定エディタ
+                                       // (settings.json の workbench.editorAssociations と
+                                       //  vscode-office.*)
+
+    // --- Python (uv) ---
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+
+    // --- Git ---
+    "eamodio.gitlens",
+    "mhutchie.git-graph"
+  ]
+}
