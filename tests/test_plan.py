@@ -29,6 +29,7 @@ from ylabcommon.models.plan import (  # noqa: E402
     find_scheduled_configs,
     find_scheduled_mice,
     format_day_code,
+    format_mouse_code,
     load_plan,
     resolve_day_date,
     save_plan,
@@ -450,7 +451,73 @@ def test_find_scheduled_mice_resolves_overrides():
     assert day3["m1"].photometry_param == "no_stim.json"
     assert day3["m2"].photometry_param == "no_stim.json"
     lbl = by_id["m1"].display_label()
-    assert "[B10]" in lbl and "m1" in lbl
+    # 個体名は記録名の mouse 欄と同じ形(m1 は sex: m)。一覧で選んだ行と、CC が
+    # Execution 欄へ流し込む値の見え方を揃えるため。
+    assert "[B10]" in lbl and "m1-m" in lbl
+    assert "m2-f" in by_id["m2"].display_label()
+
+
+def test_format_mouse_code_appends_the_sex():
+    """記録名の mouse 欄 = 個体 ID + 性別。区切りは `-`。"""
+    assert format_mouse_code("B0000", "m") == "B0000-m"
+    assert format_mouse_code("B0000", "f") == "B0000-f"
+    # 表記ゆれは寄せる。計画は m / f だが、移行を通っていない値も来うる。
+    assert format_mouse_code("B0000", "male") == "B0000-m"
+    assert format_mouse_code("B0000", "Female") == "B0000-f"
+    assert format_mouse_code("B0000", " M ") == "B0000-m"
+
+
+def test_format_mouse_code_leaves_the_id_alone_without_a_usable_sex():
+    """語彙に無い値は焼き付けない。記録名に入る欄なので、知らない文字列は通さない。"""
+    assert format_mouse_code("B0000") == "B0000"
+    assert format_mouse_code("B0000", "") == "B0000"
+    assert format_mouse_code("B0000", "unknown") == "B0000"
+    assert format_mouse_code("B0000", "?") == "B0000"
+
+
+def test_format_mouse_code_does_not_double_up_an_id_that_already_has_the_sex():
+    """``B1768-m`` に更に足して ``B1768-m-m`` にしない(冪等)。
+
+    この書式より前から ID 自体に性別を書いていた個体が実在する
+    (behavior-config の analysis-13-1*.yaml に 22 個体、全て sex と一致)。
+    """
+    assert format_mouse_code("B1768-m", "m") == "B1768-m"
+    assert format_mouse_code("B1768-f", "f") == "B1768-f"
+    assert format_mouse_code("B1768-M", "m") == "B1768-M"      # 表記はそのまま
+    # 2 回通しても変わらない
+    once = format_mouse_code("B0000", "m")
+    assert format_mouse_code(once, "m") == once == "B0000-m"
+
+
+def test_format_mouse_code_keeps_the_id_when_it_disagrees_with_the_sex():
+    """ID の接尾辞と sex が食い違うときは ID を優先する。
+
+    人が ID に書いた方を黙って上書きせず、``B1768-f-m`` のような読めない名前も
+    作らない。食い違いは計画側で直す(現データには 0 件)。
+    """
+    assert format_mouse_code("B1768-f", "m") == "B1768-f"
+
+
+def test_format_mouse_code_only_treats_a_trailing_sex_as_a_suffix():
+    """`-` で終わる ID すべてを性別扱いしない。番号や枝番は接尾辞ではない。"""
+    assert format_mouse_code("ET1330-2", "m") == "ET1330-2-m"
+    assert format_mouse_code("B10-01", "f") == "B10-01-f"
+    assert format_mouse_code("mf", "m") == "mf-m"        # ハイフンが無ければ足す
+
+
+def test_format_mouse_code_without_an_id_stays_empty():
+    """ID が無ければ空文字。CC の set_fname_fields は空欄を上書きしない
+    ので、Execution 欄の手入力がそのまま残る。`-m` だけの欄を作らない。"""
+    assert format_mouse_code("", "m") == ""
+    assert format_mouse_code("   ", "m") == ""
+
+
+def test_format_mouse_code_never_breaks_the_recording_file_name():
+    """`_` は記録名の区切り。`m` / `f` しか通さないので混じりようがないこと。"""
+    forbidden = set('<>:"/\\|?*_')
+    for sex in ("m", "f", "male", "female", "MALE", "x", ""):
+        code = format_mouse_code("B0000", sex)
+        assert not (set(code) & forbidden), (sex, code)
 
 
 def test_find_scheduled_mice_window0_and_sort():

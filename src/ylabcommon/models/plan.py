@@ -77,6 +77,7 @@ __all__ = [
     "resolve_day_date",
     "find_scheduled_configs",
     "format_day_code",
+    "format_mouse_code",
     "default_sessions",
     "ScheduledMouse",
     "find_scheduled_mice",
@@ -647,8 +648,13 @@ class ScheduledMouse(BaseModel):
         return self.rel_label
 
     def display_label(self) -> str:
-        """選択リスト 1 行分の表示文字列(英語)。"""
-        who = self.mouse_id or "(no id)"
+        """選択リスト 1 行分の表示文字列(英語)。
+
+        個体名は記録名の ``mouse`` 欄と同じ ``B0000-m`` の形で出す
+        (:func:`format_mouse_code`)。一覧で選んだ行と、CC controller が Execution 欄へ
+        流し込む値の見え方を揃えるため。性別が空の個体は ID だけになる。
+        """
+        who = format_mouse_code(self.mouse_id, self.sex) or "(no id)"
         slot = f"[{self.slot}] " if self.slot else ""
         cond = f"/{self.cond}" if self.cond else ""
         task = self.task_param or "(no task)"
@@ -809,6 +815,49 @@ def format_day_code(day: int, phase: str = "", session: Optional[int] = None) ->
         s = f"S{session:02d}" if session is not None else ""
         code += f"-phase{_phase_code(phase)}{s}"
     return code
+
+
+#: sex の表記ゆれ -> 記録名に載せる 1 文字。計画は ``m`` / ``f`` に寄せてあるが
+#: (behavior-config の ``_migrate_sex_vocabulary.py``)、そこを通っていない計画や
+#: 手で書かれた値には ``male`` / ``Female`` も来うる。**語彙に無い値は接尾辞を
+#: 付けない**: 記録名に入る欄なので、知らない文字列をそのまま焼き付けない。
+_SEX_SUFFIX = {"m": "m", "male": "m", "f": "f", "female": "f"}
+
+
+def format_mouse_code(mouse_id: str, sex: str = "") -> str:
+    """個体 ID に性別を付けて 1 文字列にする。例: ``("B0000", "m")`` -> ``B0000-m``。
+
+    記録ファイル名の 4 番目の要素(``_prj_paradigm_cond_mouse_day_within_memo`` の
+    ``mouse``)と、CC controller / video recorder の「今日のマウス / Slot」一覧の
+    表示に共通で使う。:func:`format_day_code` と同じ位置づけ — **符号化はここが
+    唯一の定義**で、利用側は選ぶだけにする。
+
+    区切りは ``-``。``_`` は記録名の区切りなので使えない(``compose_fname_stem`` が
+    黙って落とす)。``m`` / ``f`` の 2 値しか通さないため、Windows で使えない文字が
+    ファイル名へ混じることもない。
+
+    次の場合は ``mouse_id`` をそのまま返す(接尾辞を付けない)。
+
+    * ``sex`` が空、または ``m`` / ``f`` に解釈できない値。
+    * ``mouse_id`` が空 — 空文字のまま返す。CC の ``set_fname_fields`` は空欄を
+      上書きしないので、Execution 欄の手入力がそのまま残る。
+    * **``mouse_id`` が既に性別で終わっている** — ``B1768-m`` に更に足して
+      ``B1768-m-m`` にしない。この書式より前から ID 自体に性別を書いていた個体が
+      実在する(behavior-config の ``analysis-13-1*.yaml`` に 22 個体)。
+      **この関数は冪等**で、``format_mouse_code(format_mouse_code(x, s), s)`` は
+      ``format_mouse_code(x, s)`` に等しい。
+
+    ID の接尾辞と ``sex`` が食い違う場合(``B1768-f`` に ``sex: m``)も **ID を
+    優先してそのまま返す**。人が ID に書いた方を黙って上書きせず、``B1768-f-m``
+    のような読めない名前も作らないため。食い違いは計画側で直す。
+    """
+    mid = (mouse_id or "").strip()
+    suffix = _SEX_SUFFIX.get((sex or "").strip().lower(), "")
+    if not mid or not suffix:
+        return mid
+    if mid.rsplit("-", 1)[-1].lower() in _SEX_SUFFIX:   # 既に性別が付いている
+        return mid
+    return f"{mid}-{suffix}"
 
 
 def default_sessions(phases: List[str],
