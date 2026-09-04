@@ -33,6 +33,8 @@ import tifffile
 
 from ylabcommon.bioio.thorlab.thorlab_bioio_stack_builder import (
     _fill_frame,
+    _interior_gaps,
+    _report_cuts,
     _thorlabs_zt,
     stack_thorlab_with_bioio_calibrated,
 )
@@ -137,6 +139,106 @@ def test_the_largest_complete_block_wins():
     assert len(frame.z_keep) == 61
     assert len(frame.t_keep) == 49
     assert frame.ragged == [50]
+
+
+def _warnings_for(files, max_t, max_z):
+    """``_report_cuts`` が出す警告の本文を集める。"""
+    import warnings
+
+    frame = _fill_frame(files, max_t=max_t, max_z=max_z)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _report_cuts("ChanA", files, frame, max_t, max_z)
+    return frame, [str(w.message) for w in caught]
+
+
+def _missing(missing, z_range=range(1, 6), t_range=range(1, 4)):
+    """``missing`` の (z, t) だけ抜いたファイル名一覧。"""
+    return ["ChanA_001_001_%03d_%03d.tif" % (z, t)
+            for t in t_range for z in z_range if (z, t) not in missing]
+
+
+# ---- 目盛りが狂う落ち方は黙って通さない ----------------------------------------
+
+def test_a_hole_in_the_middle_of_the_stack_is_reported():
+    """途中の面が 1 枚欠けると、その z が **全時点から** 落ちることを言う。
+
+    報告された不具合 (slice-analysis#69) の機構。(z=3, t=2) の 1 枚が欠けると
+    「残る面の数を最大にする」規則は
+
+        z を捨てる: 4 面 x 3 時点 = 12 面   <- こちらを選ぶ
+        t を捨てる: 5 面 x 2 時点 = 10 面
+
+    となり、z=3 が全時点から消える。出来上がりは Z=4 の綺麗なスタックに見えるが、
+    3 番目の面は元の 4 番目で、**面の間隔が 1 か所だけ 2 倍**になっている。
+    ここが黙っていると、深さも 3D 位置合わせも狂ったまま解析まで進む。
+    """
+    frame, messages = _warnings_for(_missing({(3, 2)}), max_t=3, max_z=5)
+
+    assert frame.z_keep == [1, 2, 4, 5]        # 実際に z=3 が消える
+    assert frame.ragged == []                  # 時点は 1 つも落ちていない
+    assert any("z=[3]" in m and "no longer uniform" in m for m in messages), messages
+
+
+def test_several_holes_are_all_named():
+    """穴が複数あっても、どの面が消えたかを全部言う。"""
+    frame, messages = _warnings_for(_missing({(2, 1), (4, 3)}), max_t=3, max_z=5)
+
+    assert frame.z_keep == [1, 3, 5]           # 5 面が 3 面になる
+    assert any("z=[2, 4]" in m for m in messages), messages
+
+
+def test_a_timepoint_missing_from_the_middle_is_reported():
+    """時点がまるごと無いときも言う。
+
+    ``ragged`` には出ない —— あれは「枡はあるが Z が欠けた時点」で、丸ごと
+    無い時点はそもそも枡が立たない。残った時点は詰めて積まれるので、
+    **n 番目のフレームが n 番目の時点とは限らない** 状態になる
+    (slice-analysis#67 の「T:27 と T:28 が大きく飛ぶ」がこの形)。
+    """
+    frame, messages = _warnings_for(_missing({(z, 2) for z in range(1, 6)}),
+                                    max_t=3, max_z=5)
+
+    assert frame.t_keep == [1, 3]
+    assert frame.ragged == []                  # 既存の警告では拾えない
+    assert any("t=[2]" in m and "not necessarily the n-th" in m for m in messages), messages
+
+
+# ---- 正常系では鳴らない (鳴ると本物の警告が読まれなくなる) -----------------------
+
+def test_a_run_that_stopped_mid_stack_does_not_get_the_new_warning():
+    """末尾が切れただけなら、従来の ragged の警告だけが出ること。
+
+    取得を止めれば必ず後ろが空くので、ここで鳴らすと毎回鳴る警告になる。
+    """
+    frame, messages = _warnings_for(_missing({(z, 3) for z in range(3, 6)}),
+                                    max_t=3, max_z=5)
+
+    assert frame.z_keep == [1, 2, 3, 4, 5]
+    assert any("stopped mid-stack" in m for m in messages)
+    assert not any("no longer uniform" in m for m in messages), messages
+
+
+def test_a_complete_acquisition_is_silent():
+    _frame, messages = _warnings_for(_missing(set()), max_t=3, max_z=5)
+    assert messages == []
+
+
+def test_a_plain_timelapse_is_silent():
+    """z が 1 面だけの連続取得で鳴らないこと (穴の判定は 2 点以上で意味を持つ)。"""
+    files = ["ChanA_001_001_001_%03d.tif" % t for t in range(1, 101)]
+    _frame, messages = _warnings_for(files, max_t=3000, max_z=61)
+    assert messages == []
+
+
+def test_only_the_inside_of_the_range_counts_as_a_hole():
+    """穴の判定は端を数えない。"""
+    assert _interior_gaps([1, 2, 4, 5]) == [3]
+    assert _interior_gaps([1, 3, 5]) == [2, 4]
+    assert _interior_gaps([1, 2, 3]) == []
+    assert _interior_gaps([5, 6, 7]) == []      # 1..4 が無くても端は端
+    assert _interior_gaps([1]) == []
+    assert _interior_gaps([]) == []
 
 
 def test_a_few_stray_planes_do_not_shrink_a_long_timelapse():
