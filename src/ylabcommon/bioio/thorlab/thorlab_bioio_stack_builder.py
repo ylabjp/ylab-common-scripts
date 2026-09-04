@@ -17,7 +17,7 @@
 出力は従来どおり bioio (OME-TIFF/Zarr) が担当する。
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from pathlib import Path
 from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -217,6 +217,20 @@ def _examples(files: Any, n: int = 3) -> str:
     return ", ".join(Path(f).name for f in files[:n]) + (" ..." if len(files) > n else "")
 
 
+def _interior_gaps(kept: Sequence[int]) -> list[int]:
+    """採用した連番の **内側** で抜けている番号を返す。
+
+    末尾が短いのは正常である —— 取得を止めれば後ろが空く。**内側の穴は別物**で、
+    残りを詰めて積むと目盛りが狂う: z なら面と面の間隔が、t なら時点の間隔が、
+    穴の分だけ広がったまま「連続」として扱われる。画素は全部入っているので
+    出来上がりは正常に見え、解析まで進んでから初めておかしいと気付く。
+    """
+    if len(kept) < 2:
+        return []
+    have = set(kept)
+    return [v for v in range(kept[0], kept[-1] + 1) if v not in have]
+
+
 def _report_cuts(ch: Any, ch_files: Any, frame: Any, max_t: Any, max_z: Any) -> None:
     """枠のどこが埋まり、何が落ちたかを1行で出し、落ちた分は警告する。
 
@@ -251,6 +265,47 @@ def _report_cuts(ch: Any, ch_files: Any, frame: Any, max_t: Any, max_z: Any) -> 
             "were cut (t=%s). The acquisition probably stopped mid-stack."
             % (ch, len(frame.ragged), len(frame.z_keep),
                frame.ragged[:5] + (["..."] if len(frame.ragged) > 5 else [])),
+            stacklevel=2,
+        )
+
+    # **目盛りが狂う落ち方だけは別に言う。**
+    #
+    # 枠の埋め方は「残る面の数を最大にする」規則で選んでいる (:func:`_fill_frame`)。
+    # 端の欠けにはこれで正しく働くが、**途中の面が 1 枚欠けた**ときは
+    # 「その z を全時点から捨てて、時点を全部残す」方が面数が多くなるため、
+    # 深さの途中が抜けたまま詰めて積まれる。
+    #
+    #   z=1..5 / t=1..3 で (z=3, t=2) の 1 枚だけ欠ける
+    #     -> z を捨てる: 4 面 x 3 時点 = 12 面   <- こちらが選ばれる
+    #     -> t を捨てる: 5 面 x 2 時点 = 10 面
+    #
+    # 出来上がりは Z=4 の綺麗なスタックに見えるが、3 番目の面は実際には
+    # 元の 4 番目である。**面の間隔が 1 か所だけ 2 倍になっている。**
+    # ROI の深さも 3D 位置合わせも、この目盛りの上で狂う。
+    # 落ちた枚数ではなく **並びの穴** で見るのが要点 —— 末尾の欠けは正常なので、
+    # 枚数で見ると正常系でも鳴ってしまう。
+    z_holes = _interior_gaps(frame.z_keep)
+    if z_holes:
+        discarded = sum(1 for (_t, z) in frame.slots if z not in set(frame.z_keep))
+        warnings.warn(
+            "[thorlab] Channel %s: plane(s) z=%s are missing from the middle of the "
+            "stack and were cut from every timepoint, so the kept planes (z=%s) are "
+            "packed together and the spacing between them is no longer uniform. "
+            "%d file(s) were read past and discarded. Depth measurements and 3D "
+            "registration will be wrong on this stack. Check whether those planes "
+            "exist in the acquisition folder."
+            % (ch, z_holes, frame.z_keep, discarded),
+            stacklevel=2,
+        )
+
+    t_holes = _interior_gaps(frame.t_keep)
+    if t_holes:
+        warnings.warn(
+            "[thorlab] Channel %s: timepoint(s) t=%s are missing from the middle of "
+            "the series, so the kept timepoints are packed together and the interval "
+            "between them is no longer uniform. Frame n in the stack is not "
+            "necessarily the n-th timepoint of the acquisition."
+            % (ch, t_holes[:10] + (["..."] if len(t_holes) > 10 else [])),
             stacklevel=2,
         )
 
