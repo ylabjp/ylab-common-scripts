@@ -70,7 +70,27 @@ BODY = "body"
 # 各バージョンの body parts を (part_name, role) で定義する。
 # part_name の並び順は DLC モデルの出力順に一致させること
 # (detect_dlc_bodyparts_version は順序に依存しないが、可読性のため合わせておく)。
+#
+# **キーの int はモデルの世代を表すラベルであって、モデルの学習日ではない。**
+# 判定は part 名の集合の完全一致で行うので、キーの値そのものには意味が無い。
+# どのバージョンがどの scorer（DLC 出力ファイル名に埋まるモデル名）から出るかは
+# 下の各エントリのコメントに書く。新しいモデルを足すときも同じように書くこと。
+#
+# 2026 へ移行中で、旧モデルの h5 がドライブに残っているあいだは旧バージョンも
+# 必要である。移行が終わって旧 h5 が解析対象から消えるまで消さないこと。
 DLC_BODY_PARTS: Dict[int, List[tuple[str, Optional[str]]]] = {
+    # 4点。DLC_resnet50_OAVT-general4Feb12shuffle1
+    #   (_archived_models/OAVT-general4-Iino-2020-02-12)
+    #   part 名に区切りが無い旧命名(leftear など)。centroid が無いので
+    #   body_center は tailbase だけになる。
+    2019: [
+        ("leftear", HEAD),
+        ("rightear", HEAD),
+        ("snout", HEAD),
+        ("tailbase", BODY),
+    ],
+    # 7点。DLC_resnet50_NB07Sep11shuffle1 / NB04-operant-wtJun30shuffle1 /
+    #   NB06-AAJun13shuffle1
     2020: [
         ("left_ear", HEAD),
         ("right_ear", HEAD),
@@ -80,6 +100,37 @@ DLC_BODY_PARTS: Dict[int, List[tuple[str, Optional[str]]]] = {
         ("right_lateral", BODY),
         ("tail_base", BODY),
     ],
+    # 8点。DLC_resnet50_homecage_8BPSep11shuffle1
+    #   (_archived_models/homecage_8BP-Iino-2020-09-11 / -2021-04-20)
+    #   2020 の 7 点に tail_end を足したもの。tail_end は 2025 / 2026 と同じく
+    #   どちらの重心にも入れない。
+    2021: [
+        ("left_ear", HEAD),
+        ("right_ear", HEAD),
+        ("snout", HEAD),
+        ("centroid", BODY),
+        ("left_lateral", BODY),
+        ("right_lateral", BODY),
+        ("tail_base", BODY),
+        ("tail_end", None),
+    ],
+    # 8点。DLC_resnet50_NB06DevFeb25shuffle1 / NB05-homecage-headgearJun30shuffle1
+    #   (dlc2_tensorflow/NB06-omi-2023-02-23 ほか)
+    #   2020 の 7 点に head_gear を足したもの。head_gear は頭に載せた器具の目印で
+    #   解剖学的な点ではないため、head_center には入れない。こうすると
+    #   head_center の定義が 2020 と同じになり、両者を比較できる。
+    2023: [
+        ("left_ear", HEAD),
+        ("right_ear", HEAD),
+        ("snout", HEAD),
+        ("centroid", BODY),
+        ("left_lateral", BODY),
+        ("right_lateral", BODY),
+        ("tail_base", BODY),
+        ("head_gear", None),
+    ],
+    # 11点。DLC_resnet50_NB06Dev-operantJan9shuffle1 /
+    #   NB07Homecage-vertebralMar24shuffle1
     2025: [
         ("snout", HEAD),
         ("right_ear", HEAD),
@@ -93,6 +144,7 @@ DLC_BODY_PARTS: Dict[int, List[tuple[str, Optional[str]]]] = {
         ("tail_dist", None),
         ("tail_prox", None),
     ],
+    # 27点。DLC_HrnetW32_*-ModelZoo-FineTune*（現行の dlc3_pytorch 3 モデル）
     2026: [
         ("head_midpoint", HEAD),
         ("tail_end", None),

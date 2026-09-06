@@ -111,3 +111,43 @@ def test_dlcparam_version_override():
     # 引数で明示指定したバージョンが優先される
     assert p.get_dlc_parts_for_head_center(2026) == get_dlc_parts_for_region(2026, HEAD)
     assert p.get_dlc_body_parts_all(2025) == get_dlc_body_part_names(2025)
+
+
+# ── 2026-09-06 追加: ドライブに実在する旧モデルの出力を判定できること ──
+#   移行中は旧 h5 も解析するので、実測した part 名の集合をそのまま置く。
+#   （集合はドライブ上の h5 を model 名ごとに読んで確かめたもの）
+LEGACY_OBSERVED = {
+    # DLC_resnet50_OAVT-general4Feb12shuffle1
+    2019: ["leftear", "rightear", "snout", "tailbase"],
+    # DLC_resnet50_NB07Sep11shuffle1 など
+    2020: ["centroid", "left_ear", "left_lateral", "right_ear",
+           "right_lateral", "snout", "tail_base"],
+    # DLC_resnet50_homecage_8BPSep11shuffle1
+    2021: ["centroid", "left_ear", "left_lateral", "right_ear",
+           "right_lateral", "snout", "tail_base", "tail_end"],
+    # DLC_resnet50_NB06DevFeb25shuffle1 / NB05-homecage-headgearJun30shuffle1
+    2023: ["centroid", "head_gear", "left_ear", "left_lateral",
+           "right_ear", "right_lateral", "snout", "tail_base"],
+}
+
+
+@pytest.mark.parametrize("version,observed", sorted(LEGACY_OBSERVED.items()))
+def test_legacy_models_are_detected(version, observed):
+    """ドライブに実在する旧モデルの出力から、正しいバージョンが判定できる。"""
+    assert detect_dlc_bodyparts_version(observed) == version
+
+
+def test_head_center_is_same_between_2020_2021_2023():
+    """8 点版で足した tail_end / head_gear は重心に入れない。
+
+    head_center / body_center の定義が 2020 と一致していれば、旧データ同士を
+    比較できる。tail_end は尾で、head_gear は頭に載せた器具の目印なので、
+    どちらも解剖学的な重心には入れない。
+    """
+    for v in (2021, 2023):
+        assert set(get_dlc_parts_for_region(v, HEAD)) == set(
+            get_dlc_parts_for_region(2020, HEAD)
+        )
+        assert set(get_dlc_parts_for_region(v, BODY)) == set(
+            get_dlc_parts_for_region(2020, BODY)
+        )
