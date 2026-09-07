@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 # src レイアウトを直接 import できるようにする(インストール前でも検証可能に)。
@@ -19,13 +19,24 @@ if _SRC not in sys.path:
 
 from ylabcommon.models.plan import (  # noqa: E402
     CCConfig,
+    DEFAULT_SESSION_MIN,
     ExperimentTrial,
     ExperimentPlan,
     Period,
     PlanDay,
     PlanMouse,
     ProgramStep,
+    SLOT_DAY_END,
+    SLOT_DAY_START,
     default_sessions,
+    format_slot,
+    format_slot_time,
+    parse_slot,
+    parse_slot_time,
+    slot_band_names,
+    slot_bands,
+    slot_span,
+    slots_overlap,
     find_scheduled_configs,
     find_scheduled_mice,
     format_day_code,
@@ -625,6 +636,72 @@ def test_cc_config_carries_no_paradigm():
     assert "paradigm" not in text
     assert mice and not any(hasattr(m, "paradigm") for m in mice)
     assert configs and not any(hasattr(c, "paradigm") for c in configs)
+
+
+# ------------------------------------------------------- experimental slot
+
+def test_slot_name_carries_the_start_time():
+    """``B10-8:30`` は実験台 B10 の 8:30 開始。時は 0 詰めしない。"""
+    ref = parse_slot("B10-8:30")
+    assert (ref.rig, ref.start, ref.order) == ("B10", time(8, 30), None)
+    assert format_slot("B10", time(8, 30)) == "B10-8:30"
+    assert format_slot_time(time(20, 0)) == "20:00"
+    # 0 詰めで書かれていても読めるが、書き出しは 0 詰めしない側に寄せる。
+    assert parse_slot("B10-08:30").start == time(8, 30)
+    assert parse_slot_time("08:30") == time(8, 30)
+    assert parse_slot_time("あさ") is None
+
+
+def test_slot_name_still_reads_the_old_order_form():
+    """過去の記録は ``B10-01``(その日の 1 番目)。時刻は持たない。"""
+    ref = parse_slot("B10-01")
+    assert (ref.rig, ref.start, ref.order) == ("B10", None, 1)
+    # 実験台名だけの値も読める(1 万件以上がこの形で残っている)。
+    assert parse_slot("B10") == ("B10", "B10", None, None)
+    assert parse_slot("") == ("", "", None, None)
+
+
+def test_slot_name_with_a_dash_in_the_rig():
+    """rig 名自体が ``-`` を含んでも、最後の区切りだけが時刻/連番。"""
+    assert parse_slot("L-cage-1-8:30").rig == "L-cage-1"
+    assert parse_slot("Pseud-cham-3-01").rig == "Pseud-cham-3"
+
+
+def test_slot_bands_run_from_830_to_2000():
+    bands = slot_bands()
+    assert bands[0] == SLOT_DAY_START and bands[-1] == SLOT_DAY_END
+    assert len(bands) == 24                      # 30 分刻みで 8:30..20:00
+    names = slot_band_names("B10")
+    assert names[0] == "B10-8:30" and names[-1] == "B10-20:00"
+
+
+def test_one_booking_can_span_several_bands():
+    """占有は「開始時刻 + 長さ」の区間。帯をまたぐ実験も 1 つの値で書ける。"""
+    assert slot_span("B10-8:30", 100) == (8 * 60 + 30, 8 * 60 + 30 + 100)
+    # 100 分の予約は 8:30 の帯から 10:00 の帯まで押さえる。
+    assert slots_overlap("B10-8:30", 100, "B10-10:00", 60)
+    # 時刻を持たない値は区間にならない(重なり判定から外れる)。
+    assert slot_span("B10-01", 60) is None
+    assert not slots_overlap("B10-01", 60, "B10-01", 60)
+
+
+def test_two_experiments_fit_in_one_band_when_they_do_not_overlap():
+    """1 つの時間帯に 2 つの実験(本課題と Before-task)が入る。"""
+    assert not slots_overlap("B10-8:30", 20, "B10-9:00", 35)
+    # 同じ時刻なら当然かち合う。別の実験台なら関係ない。
+    assert slots_overlap("B10-8:30", 35, "B10-8:30", 35)
+    assert not slots_overlap("B10-8:30", 60, "B11-8:30", 60)
+
+
+def test_plan_declares_how_long_one_booking_holds_the_rig():
+    plan = _sample_plan()
+    assert plan.session_min is None and plan.slot_minutes == DEFAULT_SESSION_MIN
+    plan.session_min = 35                      # 3CSRTT: 100 試行で約 35 分
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "OFL_Holmes_2026.yaml")
+        save_plan(plan, p)
+        assert "session_min: 35" in open(p, encoding="utf-8").read()
+        assert load_plan(p).slot_minutes == 35
 
 
 if __name__ == "__main__":
