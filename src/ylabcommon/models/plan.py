@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
 # マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
 # (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
 PERDAY_DICT_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
-                    "task_param", "photometry_param", "within_factor", "user")
+                    "task_param", "photometry_param", "within_factor", "user", "session_min")
 
 
 class _FlowMap(dict):
@@ -443,6 +443,10 @@ class PlanMouse(BaseModel):
     (標準と同じ日は入れない)。``photometry_param`` も同様に day ラベル -> その個体・
     その日に使う photometry パラメータ名の辞書で、day 標準を個体単位で上書き
     したい日だけ入れる(:func:`find_scheduled_mice` が個体別 → day の順で解決)。
+    ``session_min`` は day ラベル -> **その日その個体の予約が実験台を押さえる分数**。
+    計画の :attr:`ExperimentPlan.session_min` を**その日だけ上書きしたいときに入れる**
+    (同じ計画の中で 1 日だけ 2 時間かかる、conditioning の日だけ長い、など)。
+    入れない日は計画の値、計画も持たなければ :data:`DEFAULT_SESSION_MIN`。
     ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
@@ -522,6 +526,7 @@ class PlanMouse(BaseModel):
         return v
 
     bench: Dict[str, str] = Field(default_factory=dict)
+    session_min: Dict[str, int] = Field(default_factory=dict)
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
     water_adjust: Dict[str, float] = Field(default_factory=dict)
@@ -584,7 +589,8 @@ class ExperimentPlan(BaseModel):
     - ``daily_evaporation_ml``: 1 日あたりの水分蒸発量 (ml)。給水量の算出に加味する。
 
     実験台の占有:
-    - ``session_min``: **1 予約が実験台を押さえる長さ (分)**。``bench`` の値が
+    - ``session_min``: **1 予約が実験台を押さえる長さ (分) の既定値**
+      (:meth:`slot_minutes_for` が個体・日ごとの上書きを先に見る)。``bench`` の値が
       ``"B10-8:30"`` のように開始時刻を持つとき、その予約は
       ``8:30`` から ``session_min`` 分だけ実験台を占有する。書かなければ
       :data:`DEFAULT_SESSION_MIN`。プロトコルの ``## Scheduling`` の
@@ -619,6 +625,16 @@ class ExperimentPlan(BaseModel):
         """1 予約が実験台を押さえる長さ (分)。未設定なら :data:`DEFAULT_SESSION_MIN`。"""
         v = self.session_min
         return int(v) if isinstance(v, int) and v > 0 else DEFAULT_SESSION_MIN
+
+    def slot_minutes_for(self, mouse: "PlanMouse", day_label: str) -> int:
+        """その個体・その日の予約が実験台を押さえる長さ (分)。
+
+        **個体・日ごとの上書き → 計画 → 既定** の順で解く。1 つの実験が複数の
+        時間帯にまたがるかどうかは日によって変わる(同じ計画でも conditioning の日
+        だけ 2 時間、など)ので、長さは計画に 1 つだけでは足りない。
+        """
+        own = (mouse.session_min or {}).get(day_label) if mouse is not None else None
+        return int(own) if isinstance(own, int) and own > 0 else self.slot_minutes
 
     @model_validator(mode="before")
     @classmethod

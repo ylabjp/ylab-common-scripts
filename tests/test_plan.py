@@ -708,6 +708,33 @@ def test_two_experiments_fit_in_one_band_when_they_do_not_overlap():
     assert not slots_overlap("B10-8:30", 60, "B11-8:30", 60)
 
 
+def test_one_day_can_hold_the_rig_longer_than_the_rest():
+    """同じ計画でも 1 日だけ長い実験がある。長さは個体・日ごとに上書きできる。
+
+    計画に 1 つしか長さが無いと、2 時間かかる 1 日のために全 day を 2 時間で
+    宣言することになり、空いている枠が塞がって見える。
+    """
+    plan = _sample_plan()
+    plan.session_min = 35
+    mouse = plan.trials[0].mice[0]
+    mouse.session_min = {"day3": 120}
+    assert plan.slot_minutes_for(mouse, "day1") == 35        # 計画の既定
+    assert plan.slot_minutes_for(mouse, "day3") == 120       # その日だけ長い
+    other = plan.trials[0].mice[1]
+    assert plan.slot_minutes_for(other, "day3") == 35        # 上書きは個体ごと
+    # 計画も持たなければ既定値
+    plan.session_min = None
+    assert plan.slot_minutes_for(other, "day1") == DEFAULT_SESSION_MIN
+    assert plan.slot_minutes_for(mouse, "day3") == 120
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "OFL_Holmes_2026.yaml")
+        save_plan(plan, f)
+        text = open(f, encoding="utf-8").read()
+        assert "session_min: {day3: 120}" in text, text   # 日ごと辞書は 1 行で出る
+        back = load_plan(f)
+        assert back.slot_minutes_for(back.trials[0].mice[0], "day3") == 120
+
+
 def test_plan_declares_how_long_one_booking_holds_the_rig():
     plan = _sample_plan()
     assert plan.session_min is None and plan.slot_minutes == DEFAULT_SESSION_MIN
