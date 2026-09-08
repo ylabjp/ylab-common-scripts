@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import re
 from datetime import date as DateType
+from datetime import time as TimeType
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -37,7 +38,7 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
 # マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
 # (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
 PERDAY_DICT_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
-                    "task_param", "photometry_param", "within_factor", "user")
+                    "task_param", "photometry_param", "within_factor", "user", "session_min")
 
 
 class _FlowMap(dict):
@@ -81,6 +82,19 @@ __all__ = [
     "default_sessions",
     "ScheduledMouse",
     "find_scheduled_mice",
+    "SLOT_DAY_START",
+    "SLOT_DAY_END",
+    "SLOT_BAND_MIN",
+    "DEFAULT_SESSION_MIN",
+    "SlotRef",
+    "parse_slot",
+    "format_slot",
+    "format_slot_time",
+    "parse_slot_time",
+    "slot_bands",
+    "slot_band_names",
+    "slot_span",
+    "slots_overlap",
 ]
 
 # 旧スキーマの day ラベル ("day1" / "day-1" / "day01") から通日番号を取り出す。
@@ -100,6 +114,138 @@ def day_label_number(label: Any) -> Optional[int]:
 PLAN_DIR_NAME = "controller-expdata"
 # 予定ディレクトリ内で計画ファイルとして扱う glob パターン。
 PLAN_FILE_GLOB = "*.yaml"
+
+# --------------------------------------------------------------------------- #
+# Experimental slot — 実験台の予約は「時刻」で書く
+# --------------------------------------------------------------------------- #
+# ``bench`` の値は実験台(rig)とその日の**開始時刻**を繋いだ ``"B10-8:30"``。
+# 2026-09-07 までは連番(``"B10-01"`` = その日の 1 番目)だったが、連番では
+#
+#   * 1 つの実験が複数の時間帯にまたがること
+#   * 1 つの時間帯で複数の実験が走ること(本課題と Before-task など)
+#
+# のどちらも書けなかった。時刻にすると、占有は「rig 上の区間」になり、
+# 重なりの有無で判定できる。**連番形式も読める**(過去の記録がそう書いてある)。
+# その場合 :attr:`SlotRef.start` は None で、区間を作れないので重なり判定から外れる。
+SLOT_DAY_START = TimeType(8, 30)   # 1 日の最初の時間帯
+SLOT_DAY_END = TimeType(20, 0)     # 1 日の最後の時間帯(この時刻に始まる枠まで)
+SLOT_BAND_MIN = 30                 # 選択肢に並べる時間帯の幅 (分)
+#: 計画が :attr:`ExperimentPlan.session_min` を書いていないときの 1 予約の長さ (分)。
+#: 従来 Google Calendar が使っていた既定値 (準備 20 + セッション 60 + 片付け 20) と
+#: 同じ 100 分ではなく、**セッションそのもの**の 60 分。準備・片付けの前後幅は
+#: カレンダー登録側が持つ(gcal_sync)。
+DEFAULT_SESSION_MIN = 60
+
+# "B10-8:30" / "B10-08:30" (rig 名自体が "-" を含む "L-cage-1-8:30" も通る)
+_SLOT_TIME_RE = re.compile(r"^(?P<rig>.+?)-(?P<h>\d{1,2}):(?P<m>\d{2})$")
+# "B10-01" — 旧形式(その日の実施順)。**2 桁に限る。**
+# 1 桁を実施順として読むと、実験台そのものの名前を壊す:``L-cage-1`` /
+# ``Pseud-cham-3`` は「L-cage の 1 番目」ではなく**実験台の名前**である
+# (experimental_slot.yaml の ``experimental_set`` がそう宣言している)。
+# 実データもこの形に一致する — 計画の bench 値で 1 桁で終わるものは 632 件すべて
+# L-cage-1..4 / Pseud-cham-1..8 の実験台名、実施順を持つ値は Airtable 由来の
+# 実績ログ 100 種を含めて**すべて 2 桁**である (2026-09-08 に全件を数えた)。
+_SLOT_ORDER_RE = re.compile(r"^(?P<rig>.+?)-(?P<order>\d{2})$")
+
+
+class SlotRef(NamedTuple):
+    """``bench`` の 1 値を分解したもの。
+
+    ``name``   … 元の文字列(``"B10-8:30"`` / ``"B10-01"`` / ``"B10"``)
+    ``rig``    … 実験台 (``experimental_set``。``"B10"``)
+    ``start``  … 開始時刻。**時刻形式のときだけ**入る
+    ``order``  … その日の実施順。**旧形式のときだけ**入る
+    """
+
+    name: str
+    rig: str
+    start: Optional[TimeType] = None
+    order: Optional[int] = None
+
+
+def parse_slot(name: Any) -> SlotRef:
+    """``"B10-8:30"`` -> ``SlotRef("B10-8:30", "B10", time(8, 30), None)``。
+
+    旧形式の連番 ``"B10-01"`` は ``order=1`` として読む(``start`` は None)。
+    実験台だけの ``"B10"`` は rig のみ。空文字は空の :class:`SlotRef`。
+
+    **実施順は 2 桁のときだけ。** ``"L-cage-1"`` / ``"Pseud-cham-3"`` は実験台の
+    名前であって「1 番目」ではないので、rig としてそのまま返す。
+    """
+    text = (name or "").strip() if isinstance(name, str) else ""
+    if not text:
+        return SlotRef("", "")
+    m = _SLOT_TIME_RE.match(text)
+    if m:
+        h, mi = int(m.group("h")), int(m.group("m"))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return SlotRef(text, m.group("rig"), TimeType(h, mi), None)
+    m = _SLOT_ORDER_RE.match(text)
+    if m:
+        return SlotRef(text, m.group("rig"), None, int(m.group("order")))
+    return SlotRef(text, text)
+
+
+def format_slot_time(t: TimeType) -> str:
+    """``time(8, 30)`` -> ``"8:30"``(時は 0 詰めしない。分は 2 桁)。"""
+    return f"{t.hour}:{t.minute:02d}"
+
+
+def parse_slot_time(text: Any) -> Optional[TimeType]:
+    """``"8:30"`` / ``"08:30"`` -> ``time(8, 30)``。読めなければ None。"""
+    s = (text or "").strip() if isinstance(text, str) else ""
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return TimeType(h, mi) if 0 <= h <= 23 and 0 <= mi <= 59 else None
+
+
+def format_slot(rig: str, start: Optional[TimeType]) -> str:
+    """``("B10", time(8, 30))`` -> ``"B10-8:30"``。時刻が無ければ実験台名だけ。"""
+    rig = (rig or "").strip()
+    if not rig or start is None:
+        return rig
+    return f"{rig}-{format_slot_time(start)}"
+
+
+def slot_bands(start: TimeType = SLOT_DAY_START, end: TimeType = SLOT_DAY_END,
+               step_min: int = SLOT_BAND_MIN) -> List[TimeType]:
+    """選択肢に並べる時間帯 (``8:30`` から ``20:00`` まで ``step_min`` 分刻み)。"""
+    first = start.hour * 60 + start.minute
+    last = end.hour * 60 + end.minute
+    step = max(1, int(step_min))
+    return [TimeType(m // 60, m % 60) for m in range(first, last + 1, step)]
+
+
+def slot_band_names(rig: str, **kw: Any) -> List[str]:
+    """1 つの実験台の時間帯を名前にしたもの (``["B10-8:30", "B10-9:00", ...]``)。"""
+    return [format_slot(rig, t) for t in slot_bands(**kw)]
+
+
+def slot_span(name: Any, session_min: int = DEFAULT_SESSION_MIN
+              ) -> Optional[Tuple[int, int]]:
+    """予約が実験台を押さえている区間 ``[開始, 終了)`` を 0 時からの分で返す。
+
+    時刻を持たない値(旧形式の連番・実験台名だけ)は区間を作れないので None。
+    """
+    ref = parse_slot(name)
+    if ref.start is None:
+        return None
+    begin = ref.start.hour * 60 + ref.start.minute
+    return (begin, begin + max(1, int(session_min)))
+
+
+def slots_overlap(a: Any, a_min: int, b: Any, b_min: int) -> bool:
+    """同じ実験台の 2 予約が時間的に重なるか。片方でも時刻が無ければ False。"""
+    ra, rb = parse_slot(a), parse_slot(b)
+    if not ra.rig or ra.rig != rb.rig:
+        return False
+    sa, sb = slot_span(a, a_min), slot_span(b, b_min)
+    if sa is None or sb is None:
+        return False
+    return sa[0] < sb[1] and sb[0] < sa[1]
+
 
 # 相対日ラベル(offset 日 -> 表示文字列)。表示は英語に統一している。
 _REL_LABEL = {-2: "2 days ago", -1: "yesterday", 0: "today",
@@ -297,6 +443,10 @@ class PlanMouse(BaseModel):
     (標準と同じ日は入れない)。``photometry_param`` も同様に day ラベル -> その個体・
     その日に使う photometry パラメータ名の辞書で、day 標準を個体単位で上書き
     したい日だけ入れる(:func:`find_scheduled_mice` が個体別 → day の順で解決)。
+    ``session_min`` は day ラベル -> **その日その個体の予約が実験台を押さえる分数**。
+    計画の :attr:`ExperimentPlan.session_min` を**その日だけ上書きしたいときに入れる**
+    (同じ計画の中で 1 日だけ 2 時間かかる、conditioning の日だけ長い、など)。
+    入れない日は計画の値、計画も持たなければ :data:`DEFAULT_SESSION_MIN`。
     ``within_factor`` は day ラベル -> その個体・その日の within-subject 因子水準の
     辞書。取りうる値は :attr:`ExperimentPlan.within_factors`(Plan 直下の候補リスト)
     から選ぶ。標準は無く、指定した日だけ入れる。
@@ -376,6 +526,7 @@ class PlanMouse(BaseModel):
         return v
 
     bench: Dict[str, str] = Field(default_factory=dict)
+    session_min: Dict[str, int] = Field(default_factory=dict)
     bw_before: Dict[str, float] = Field(default_factory=dict)
     bw_after: Dict[str, float] = Field(default_factory=dict)
     water_adjust: Dict[str, float] = Field(default_factory=dict)
@@ -436,6 +587,15 @@ class ExperimentPlan(BaseModel):
       入るのかが決まらなくなる。
     - ``water_restriction_ratio``: 目標体重の割合 (例 0.85 = 予測自由摂取体重の 85%)。
     - ``daily_evaporation_ml``: 1 日あたりの水分蒸発量 (ml)。給水量の算出に加味する。
+
+    実験台の占有:
+    - ``session_min``: **1 予約が実験台を押さえる長さ (分) の既定値**
+      (:meth:`slot_minutes_for` が個体・日ごとの上書きを先に見る)。``bench`` の値が
+      ``"B10-8:30"`` のように開始時刻を持つとき、その予約は
+      ``8:30`` から ``session_min`` 分だけ実験台を占有する。書かなければ
+      :data:`DEFAULT_SESSION_MIN`。プロトコルの ``## Scheduling`` の
+      「Hands-on」が根拠になる(3CSRTT なら 100 試行で約 35 分)。
+      **占有の重なりはこの長さで判定する**ので、実際より短く書くと競合を見落とす。
     予測自由摂取体重は settings.yaml の標準体重に対し、基準計量
     (:attr:`PlanMouse.baseline_bw` / :attr:`PlanMouse.baseline_age`) の比を掛けて
     求める(算出は GUI 側。標準体重データが behavior-config にあるため)。
@@ -448,6 +608,7 @@ class ExperimentPlan(BaseModel):
     bodyweight_management: bool = False
     water_restriction_ratio: Optional[float] = None
     daily_evaporation_ml: Optional[float] = None
+    session_min: Optional[int] = None
     cc_config: CCConfig = Field(default_factory=CCConfig)
     program: List[ProgramStep] = Field(default_factory=list)
     # 読み込みは trials: / periods: の両方を受ける(旧ファイル互換)。書き出しは trials:。
@@ -458,6 +619,22 @@ class ExperimentPlan(BaseModel):
     def periods(self) -> List[ExperimentTrial]:
         """旧名。``trials`` と同じリストを返す(``plan.periods[0]`` 等の既存コード用)。"""
         return self.trials
+
+    @property
+    def slot_minutes(self) -> int:
+        """1 予約が実験台を押さえる長さ (分)。未設定なら :data:`DEFAULT_SESSION_MIN`。"""
+        v = self.session_min
+        return int(v) if isinstance(v, int) and v > 0 else DEFAULT_SESSION_MIN
+
+    def slot_minutes_for(self, mouse: "PlanMouse", day_label: str) -> int:
+        """その個体・その日の予約が実験台を押さえる長さ (分)。
+
+        **個体・日ごとの上書き → 計画 → 既定** の順で解く。1 つの実験が複数の
+        時間帯にまたがるかどうかは日によって変わる(同じ計画でも conditioning の日
+        だけ 2 時間、など)ので、長さは計画に 1 つだけでは足りない。
+        """
+        own = (mouse.session_min or {}).get(day_label) if mouse is not None else None
+        return int(own) if isinstance(own, int) and own > 0 else self.slot_minutes
 
     @model_validator(mode="before")
     @classmethod
