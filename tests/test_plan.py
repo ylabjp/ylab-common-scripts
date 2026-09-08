@@ -667,6 +667,21 @@ def test_slot_name_with_a_dash_in_the_rig():
     assert parse_slot("Pseud-cham-3-01").rig == "Pseud-cham-3"
 
 
+def test_a_rig_whose_name_ends_in_a_digit_is_not_a_run_number():
+    """``L-cage-1`` は実験台の名前であって「その日の 1 番目」ではない。
+
+    実施順は 2 桁 (``-01``) のときだけ。1 桁を実施順と読むと、実験台名を
+    ``L-cage`` + 1 番目に割ってしまい、移行がその名前を書き換えてしまう
+    (実データ: 1 桁で終わる bench 値 632 件はすべて実験台名、実施順を持つ値は
+    実績ログ 100 種を含めてすべて 2 桁)。
+    """
+    for name in ("L-cage-1", "Pseud-cham-3", "L-cage-4", "Pseud-cham-8"):
+        ref = parse_slot(name)
+        assert (ref.rig, ref.order, ref.start) == (name, None, None), ref
+    # 2 桁ならその実験台の実施順として読む
+    assert parse_slot("Pseud-cham-3-02") == ("Pseud-cham-3-02", "Pseud-cham-3", None, 2)
+
+
 def test_slot_bands_run_from_830_to_2000():
     bands = slot_bands()
     assert bands[0] == SLOT_DAY_START and bands[-1] == SLOT_DAY_END

@@ -138,8 +138,14 @@ DEFAULT_SESSION_MIN = 60
 
 # "B10-8:30" / "B10-08:30" (rig 名自体が "-" を含む "L-cage-1-8:30" も通る)
 _SLOT_TIME_RE = re.compile(r"^(?P<rig>.+?)-(?P<h>\d{1,2}):(?P<m>\d{2})$")
-# "B10-01" — 旧形式(その日の実施順)
-_SLOT_ORDER_RE = re.compile(r"^(?P<rig>.+?)-(?P<order>\d{1,2})$")
+# "B10-01" — 旧形式(その日の実施順)。**2 桁に限る。**
+# 1 桁を実施順として読むと、実験台そのものの名前を壊す:``L-cage-1`` /
+# ``Pseud-cham-3`` は「L-cage の 1 番目」ではなく**実験台の名前**である
+# (experimental_slot.yaml の ``experimental_set`` がそう宣言している)。
+# 実データもこの形に一致する — 計画の bench 値で 1 桁で終わるものは 632 件すべて
+# L-cage-1..4 / Pseud-cham-1..8 の実験台名、実施順を持つ値は Airtable 由来の
+# 実績ログ 100 種を含めて**すべて 2 桁**である (2026-09-08 に全件を数えた)。
+_SLOT_ORDER_RE = re.compile(r"^(?P<rig>.+?)-(?P<order>\d{2})$")
 
 
 class SlotRef(NamedTuple):
@@ -162,6 +168,9 @@ def parse_slot(name: Any) -> SlotRef:
 
     旧形式の連番 ``"B10-01"`` は ``order=1`` として読む(``start`` は None)。
     実験台だけの ``"B10"`` は rig のみ。空文字は空の :class:`SlotRef`。
+
+    **実施順は 2 桁のときだけ。** ``"L-cage-1"`` / ``"Pseud-cham-3"`` は実験台の
+    名前であって「1 番目」ではないので、rig としてそのまま返す。
     """
     text = (name or "").strip() if isinstance(name, str) else ""
     if not text:
