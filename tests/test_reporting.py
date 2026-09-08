@@ -524,6 +524,43 @@ class TestSourceInfo:
         info = SourceInfo.capture(path=tmp_path)
         assert info.script == "test_reporting.py"
 
+    def test_repo_name_comes_from_origin_not_the_directory(self, tmp_path):
+        """worktree では作業ツリーの名前がリポジトリ名と違う。
+
+        `git rev-parse --show-toplevel` の basename を使っていたので、
+        `.claude/worktrees/<topic>/` から走らせた図の出所が `<topic>` になっていた。
+        同じコードから作った図が、どこで走らせたかで別の repo 名を持ってしまう。
+        """
+        repo = tmp_path / "checked-out-under-another-name"
+        repo.mkdir()
+        _git_repo(repo)
+        subprocess.run(
+            ["git", "remote", "add", "origin",
+             "https://github.com/ylabjp/behavior-analysis.git"],
+            cwd=str(repo), check=True, capture_output=True, text=True,
+        )
+        assert SourceInfo.capture(path=repo).repo == "behavior-analysis"
+
+    def test_repo_name_accepts_ssh_and_bare_urls(self, tmp_path):
+        for url, want in (
+            ("git@github.com:ylabjp/behavior-analysis.git", "behavior-analysis"),
+            ("https://github.com/ylabjp/log-2026", "log-2026"),
+            ("https://github.com/ylabjp/general/", "general"),
+        ):
+            repo = tmp_path / f"r{want}"
+            repo.mkdir()
+            _git_repo(repo)
+            subprocess.run(["git", "remote", "add", "origin", url],
+                           cwd=str(repo), check=True, capture_output=True, text=True)
+            assert SourceInfo.capture(path=repo).repo == want, url
+
+    def test_repo_name_falls_back_to_the_directory_without_origin(self, tmp_path):
+        """origin が無いリポジトリ(手元だけのもの)でも None にしない。"""
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _git_repo(repo)
+        assert SourceInfo.capture(path=repo).repo == "myrepo"
+
     def test_store_captures_source_when_not_given(self, tmp_path, fig):
         with FigureStore(tmp_path, pdf_name="a.pdf") as store:
             store.save(fig, key="p_g_k")

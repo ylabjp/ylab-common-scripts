@@ -31,6 +31,26 @@ def _git(args: list[str], cwd: Path) -> str | None:
     return r.stdout.strip()
 
 
+def _repo_name(base: Path) -> str | None:
+    """リポジトリ名。**まず origin の URL から取り**、無ければ作業ツリーの名前にする。
+
+    `git rev-parse --show-toplevel` の basename は worktree だと**作業ツリーの
+    ディレクトリ名**（`.claude/worktrees/<topic>` の `<topic>` など）で、リポジトリ名と
+    一致しない。図の出所として記録するのはリポジトリ名なので、同じコードから作った図が
+    どこで走らせたかで別の repo 名を持つことになる。
+    """
+    url = _git(["remote", "get-url", "origin"], base)
+    if url:
+        # https://host/org/name(.git) も git@host:org/name(.git) も末尾は name
+        name = url.rstrip("/").rsplit("/", 1)[-1]
+        if name.endswith(".git"):
+            name = name[: -len(".git")]
+        if name:
+            return name
+    top = _git(["rev-parse", "--show-toplevel"], base)
+    return Path(top).name if top else None
+
+
 @dataclass(frozen=True)
 class SourceInfo:
     """`FigureStore` が全レコードに付ける出所情報。
@@ -74,7 +94,7 @@ class SourceInfo:
 
         script_path = Path(script) if script is not None else caller
         return cls(
-            repo=root.name if root else None,
+            repo=_repo_name(base) if root else None,
             commit=commit or None,
             dirty=(status != "") if status is not None else None,
             script=_relative_to(script_path, root),
