@@ -682,12 +682,17 @@ def test_a_rig_whose_name_ends_in_a_digit_is_not_a_run_number():
     assert parse_slot("Pseud-cham-3-02") == ("Pseud-cham-3-02", "Pseud-cham-3", None, 2)
 
 
-def test_slot_bands_run_from_830_to_2000():
+def test_slot_bands_run_from_the_first_band_to_the_last():
+    """既定は 7:00〜20:00 の 30 分刻み(2026-09-13 に 8:30 始まりから広げた)。"""
     bands = slot_bands()
-    assert bands[0] == SLOT_DAY_START and bands[-1] == SLOT_DAY_END
-    assert len(bands) == 24                      # 30 分刻みで 8:30..20:00
+    assert bands[0] == SLOT_DAY_START == time(7, 0)
+    assert bands[-1] == SLOT_DAY_END == time(20, 0)
+    assert len(bands) == 27                      # 30 分刻みで 7:00..20:00
     names = slot_band_names("B10")
-    assert names[0] == "B10-8:30" and names[-1] == "B10-20:00"
+    assert names[0] == "B10-7:00" and names[-1] == "B10-20:00"
+    # 実験台側が窓を宣言していればそちらが勝つ
+    narrow = slot_bands(time(8, 30), time(9, 30), 30)
+    assert [format_slot_time(t) for t in narrow] == ["8:30", "9:00", "9:30"]
 
 
 def test_one_booking_can_span_several_bands():
