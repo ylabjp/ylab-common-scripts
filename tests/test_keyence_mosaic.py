@@ -257,3 +257,166 @@ def test_an_unknown_z_size_reaches_the_file_as_an_empty_field(tmp_path):
         str(tmp_path / "merged.ome.tif")).ome_metadata).images[0].pixels
     assert pixels.physical_size_z is None
     assert pixels.physical_size_x == 1.0
+
+
+# --------------------------------------------------------------------------
+# 継ぎ目: 重なりから測れる分だけ当てる
+# --------------------------------------------------------------------------
+
+_RNG = np.random.default_rng(20260920)
+
+
+def _field(height=40, width=200):
+    """位相相関が効く程度のテクスチャ。"""
+    coarse = _RNG.normal(3000, 500, (height // 4 + 2, width // 4 + 2))
+    grown = np.repeat(np.repeat(coarse, 4, axis=0), 4, axis=1)[:height, :width]
+    return np.clip(grown + _RNG.normal(0, 60, (height, width)), 0, 65535).astype(np.uint16)
+
+
+def _textured_tile(folder, name, pixels, *, claimed_x):
+    """``claimed_x`` [px] を名乗るタイル。中身は呼び出し側が切り出して渡す。
+
+    ``stitch_mosaic`` は 180 度回して貼るので、**回した結果が意図した中身に
+    なるように**ここで先に回しておく。
+    """
+    height, width = pixels.shape
+    xml = ("<Data><XyStageRegion><X>{x}</X><Y>0</Y><Width>{w}</Width></XyStageRegion>"
+           "<SavingImageSize><Width>{pw}</Width><Height>{ph}</Height></SavingImageSize>"
+           "<StageLocationZ>0</StageLocationZ><LensName>PlanApo 4x</LensName>"
+           "<ExposureTime><Numerator>1</Numerator><Denominator>20</Denominator></ExposureTime>"
+           "<CameraGain>120</CameraGain><CameraHardwareGain>336</CameraHardwareGain>"
+           "<Sectioning><Enabled>False</Enabled></Sectioning></Data>").format(
+               x=claimed_x * 1000, w=width * 1000, pw=width, ph=height)
+    path = folder / name
+    tifffile.imwrite(str(path), np.flipud(np.fliplr(pixels)))
+    with open(path, "ab") as f:
+        f.write(xml.encode("utf-8"))
+    return path
+
+
+def _two_tiles(folder, *, true_step, claimed_step, tile_width=80):
+    """同じ視野から 2 枚切り出し、ステージ座標は ``claimed_step`` を名乗らせる。
+
+    ``true_step != claimed_step`` なら、その差が registration が見つけるべき
+    ずれである。
+    """
+    field = _field(40, 200)
+    _textured_tile(folder, "Image_XY01_Z001_CH1.tif",
+                   field[:, :tile_width], claimed_x=0)
+    _textured_tile(folder, "Image_XY02_Z001_CH1.tif",
+                   field[:, true_step:true_step + tile_width], claimed_x=claimed_step)
+    return field
+
+
+def test_a_stage_coordinate_that_is_off_is_corrected(tmp_path):
+    """ステージは 40 px と言っているが、中身は 45 px ずれている。"""
+    _two_tiles(tmp_path, true_step=45, claimed_step=40)
+
+    mosaic = stitch_mosaic(tmp_path, register=True)
+    registration = mosaic.registration
+
+    assert registration.accepted == 1
+    assert registration.offsets["x40_y0"] == (0, 5)
+    assert mosaic.data.shape[-1] == 125   # 45 + 80、名乗った 120 ではない
+
+
+def test_registration_can_be_turned_off_to_get_the_stage_placement(tmp_path):
+    """移植元と同じ置き方。既存の出力と突き合わせるときに要る。"""
+    _two_tiles(tmp_path, true_step=45, claimed_step=40)
+
+    mosaic = stitch_mosaic(tmp_path, register=False)
+
+    assert mosaic.registration is None
+    assert mosaic.data.shape[-1] == 120   # 名乗ったとおり 40 + 80
+
+
+def test_a_correct_stage_coordinate_is_left_alone(tmp_path):
+    """合っているものを動かさない。"""
+    _two_tiles(tmp_path, true_step=40, claimed_step=40)
+
+    registration = stitch_mosaic(tmp_path, register=True).registration
+
+    assert registration.offsets["x40_y0"] == (0, 0)
+    assert registration.moved == 0
+
+
+def test_an_overlap_with_no_texture_does_not_move_anything(tmp_path):
+    """動かす根拠が無いときは動かさない。**でたらめに合わせない。**"""
+    for index, x in enumerate((0, 40), start=1):
+        _textured_tile(tmp_path, "Image_XY%02d_Z001_CH1.tif" % index,
+                       np.full((40, 80), 1200, np.uint16), claimed_x=x)
+
+    registration = stitch_mosaic(tmp_path, register=True).registration
+
+    assert registration.moved == 0
+    assert registration.rejected == 1
+    assert not registration.pairs[0].accepted
+
+
+def test_what_was_done_to_the_seam_is_recorded(tmp_path):
+    """出力を見ただけで、どう並べたものか分かること。
+
+    置き直しは画素の位置を変えるので、記録が無いと別々の日に作った出力を
+    突き合わせられない。
+    """
+    _two_tiles(tmp_path, true_step=45, claimed_step=40)
+
+    extra = stitch_mosaic(tmp_path, register=True).conditions.extra
+
+    assert extra["Seam/Registration"] == "phase-correlation"
+    assert extra["Seam/PairsAccepted"] == "1/1"
+    assert extra["Seam/Offset/x40_y0"] == "+0,+5"
+    assert extra["Seam/Overlap"] == "last"
+    # 明るさは**測るだけで直さない**。次の段 (キャリブレーション) の材料。
+    assert "Seam/IntensityRatio/x0_y0|x40_y0" in extra
+    assert "Seam/EdgeRatio/x0_y0" in extra
+
+
+def test_registration_costs_one_extra_read_per_overlapping_tile(tmp_path):
+    """**読み込みが増えるのはここだけ**、という約束。
+
+    推定は Z 1 面ぶん・全チャネルしか読まない。Z を積んだ取得では誤差の範囲だが
+    (C=2 Z=40 なら 80 枚中 2 枚)、Z が 1 枚の取得では 2 倍になる。それが嫌な
+    呼び出し側は ``register=False`` にできる。
+    """
+    _two_tiles(tmp_path, true_step=45, claimed_step=40)
+
+    reads = []
+    original = tifffile.imread
+
+    def counting(path, *args, **kwargs):
+        reads.append(str(path))
+        return original(path, *args, **kwargs)
+
+    tifffile.imread = counting
+    try:
+        stitch_mosaic(tmp_path, register=False)
+        without = len(reads)
+        reads.clear()
+        stitch_mosaic(tmp_path, register=True)
+        with_registration = len(reads)
+    finally:
+        tifffile.imread = original
+
+    assert without == 2                    # 貼るぶんだけ
+    assert with_registration == 4          # + 推定のぶん (Z 1 面 x 1 チャネル)
+
+
+def test_the_mean_policy_averages_the_overlap(tmp_path):
+    """継ぎ目は消えないが (実測)、選べるようにはしてある。値が変わるので記録する。"""
+    _tile(tmp_path, "Image_XY01_Z001_CH1.tif", np.full((3, 4), 100, np.uint16), x=0)
+    _tile(tmp_path, "Image_XY02_Z001_CH1.tif", np.full((3, 4), 200, np.uint16), x=2000)
+
+    mosaic = stitch_mosaic(tmp_path, register=False, overlap="mean")
+
+    assert np.all(mosaic.data[0, 0, 0, :, :2] == 100)
+    assert np.all(mosaic.data[0, 0, 0, :, 2:4] == 150)   # 重なり = 平均
+    assert np.all(mosaic.data[0, 0, 0, :, 4:] == 200)
+    assert mosaic.conditions.extra["Seam/Overlap"] == "mean"
+
+
+def test_an_unknown_overlap_policy_is_refused(tmp_path):
+    _tile(tmp_path, "Image_XY01_Z001_CH1.tif", _ramp(1))
+
+    with pytest.raises(ValueError, match="unknown overlap policy"):
+        stitch_mosaic(tmp_path, overlap="feather")
