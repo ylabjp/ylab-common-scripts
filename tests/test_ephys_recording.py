@@ -237,3 +237,41 @@ def test_the_procedure_records_the_selection_and_the_display_filter(tmp_path):
     assert result.analysed_seconds == pytest.approx(PER_TRAIN * DT)
     assert result.display_cutoff_hz == 1000.0            # 振幅に効くので残す
     assert result.params["amplitude_threshold_pa"] == 25.0
+
+
+def test_the_display_filter_is_actually_applied_not_just_recorded(tmp_path):
+    """記録に残すだけで掛けないと、記録が嘘になる (画面は掛けた波形を見ている)。"""
+    from ylabcommon.ephys.filters import apply_lowpass_filter
+    from ylabcommon.ephys.procedure import run
+
+    rec = open_recording(_write_raw(tmp_path / "raw.h5"))
+
+    plain = run(rec)
+    filtered = run(rec, display_cutoff_hz=500.0)
+
+    assert filtered.result.display_cutoff_hz == 500.0
+    assert plain.result.display_cutoff_hz is None
+    # 掛けた波形そのものが返る。素通しのときは選んだ波形と同じ。
+    np.testing.assert_allclose(plain.values, rec.values())
+    np.testing.assert_allclose(
+        filtered.values, apply_lowpass_filter(rec.values(), rec.sampling_rate_khz, 500.0))
+    assert not np.allclose(filtered.values, plain.values)   # 実際に変わっている
+    assert filtered.values.shape == plain.values.shape
+
+
+def test_one_run_gives_the_trace_the_events_and_the_record(tmp_path):
+    """画面は values を描き events を重ね result を保存する。全部同じ 1 回から出る。"""
+    from ylabcommon.ephys.procedure import run
+
+    rec = open_recording(_write_raw(tmp_path / "raw.h5"))
+
+    got = run(rec, TraceSelection(train_idx=0))
+
+    assert got.recording is rec
+    assert got.selection.train_idx == 0
+    assert got.values.shape[0] == PER_TRAIN
+    assert got.result.analysed_seconds == pytest.approx(PER_TRAIN * DT)
+    assert got.result.n_detected == len(got.events)
+    for event in got.events:
+        assert "onset_idx" in event and "trace" in event      # 重ね描きに要る
+        assert 0 <= event["onset_idx"] < got.values.shape[0]
