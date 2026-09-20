@@ -6,6 +6,10 @@ from math import prod
 import numpy as np
 from bioio import PhysicalPixelSizes
 
+from ylabcommon.bioio.core.ome_acquisition import (
+    AcquisitionConditions,
+    write_acquisition_metadata,
+)
 from ylabcommon.utils.perf import timed_step
 
 _da: Any
@@ -142,6 +146,7 @@ class BioIOWriter:
         save_zarr: bool = False,
         source_bytes_per_frame: Optional[int] = None,
         stream: Optional[bool] = None,
+        acquisition: Optional[AcquisitionConditions] = None,
     ) -> None:
         """
         Write validated dataset.
@@ -160,6 +165,11 @@ class BioIOWriter:
             Force the streaming writer on (True) or off (False). The default
             (None) streams a lazy array once it is larger than 2 GiB, which is
             the right call when the caller does not care either way.
+        acquisition:
+            Exposure time, detector gain and objective, written into the
+            OME-XML **after** the pixels (see ``ome_acquisition``). Without it
+            the output carries pixel sizes and channel names only, so the
+            conditions an acquisition was made under are not in the file.
 
         両方とも、内部の ``_write_ometiff_streaming`` を直接呼ぶ以外に渡す手が
         無かったもの。呼び出し側が非公開のメソッドへ手を伸ばすのは、公開 API に
@@ -176,6 +186,15 @@ class BioIOWriter:
             source_bytes_per_frame=source_bytes_per_frame,
             stream=stream,
         )
+
+        # 条件は画素を書いたあとで足す。自分で組んだ OME を書き込み側へ渡すと
+        # 次元のラベルが壊れる (ome_acquisition の冒頭に実測表)。どちらの経路で
+        # 書いても、出来上がったファイルに対しては同じ処理で済む。
+        if acquisition is not None:
+            write_acquisition_metadata(
+                _with_ome_suffix(self.output_path, ".ome.tif", _TIFF_SUFFIXES),
+                acquisition,
+            )
 
         if save_zarr:
             if not _HAS_ZARR:
