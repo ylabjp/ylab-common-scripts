@@ -47,6 +47,55 @@ Repository Structure
 
 - dataset summary reports
 
+- electrophysiology trace analysis (`ylabcommon.ephys`)
+
+---
+
+## `ylabcommon.ephys` — EPSC 様イベントの検出 (取得側と解析側の共有)
+
+取得側 (slice-controller の viewer) と解析側 (slice-analysis) が **同じ計算で同じ値**
+を出すために置いてある。画面 (PyQt6 / pyqtgraph) は入っていない。
+
+| モジュール | 役割 |
+| --- | --- |
+| `ephys.filters` | 4 次ゼロ位相 Butterworth の低域通過 (`apply_lowpass_filter`) |
+| `ephys.event_detection` | 二重指数関数テンプレートとの相関で内向きイベントを拾う (`detect_epsc_events` / `detect` / `summarize`) |
+| `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`mepsc_result.json` / `mepsc_events.csv`) |
+| `ephys.sorted_trace` | sorter が書いた `*_df.h5` と相方の json を読む (`SortedRecording`) |
+
+使い方 (仕分け後の記録 1 つを掛けて記録まで):
+
+```python
+from ylabcommon.ephys.event_detection import DetectionParams, detect
+from ylabcommon.ephys.event_record import build_result, save_result
+from ylabcommon.ephys.sorted_trace import SortedRecording
+
+rec = SortedRecording.open(session_dir / "V-test_260904-001_df.h5")
+params = DetectionParams()                       # 既定は取得側の画面と同じ
+events = detect(rec.values(), rec.dt_s, params)  # values() は全 train の連結
+save_result(session_dir, build_result(
+    events, source_file=rec.path.name, sampling_rate_khz=rec.sampling_rate_khz,
+    analysed_seconds=rec.duration_s(), params=params, config_name=rec.config_name))
+```
+
+決めごと:
+
+* **頻度は記録長が無いと出せない。** `summarize` / `build_result` は掛けた波形の
+  長さ (`analysed_seconds`) を必ず受け取り、0 以下なら断る
+* **採用イベントが無いときの平均は `None`。** 0 で埋めると 0 pA のイベントが
+  並んでいるのと見分けが付かない
+* **記録には値だけでなく条件も入れる。** どのファイルの、どの train を、表示用の
+  どのフィルタと、どの検出パラメータで掛けたのか。無いと後から確かめられない
+* **保存名は固定** (`mepsc_result.json`)。集計 (crawl) が決まった名前を探すので、
+  人がその場で選んだ名前ではセッションと結び付かない
+* **train の平均は検出に掛けない。** 平均するとランダムなイベントは消える
+
+検出そのものは slice-controller から **振る舞いを変えずに** 移した。持ち越して
+いる未確認の点 (`corr_threshold` が `find_peaks` の `threshold` である点、
+`onset_time_s` が窓の先頭でありベースラインぶん早い点、振幅が下位 1 パーセンタイル
+である点、山の最小間隔が無い点) は `ephys/event_detection.py` の説明に書いてある。
+直すには実験者の判断が要る。
+
 ---
 
 ## Documentation
