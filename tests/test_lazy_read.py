@@ -12,6 +12,7 @@ from ylabcommon.bioio.core.dim_order import to_tczyx
 from ylabcommon.bioio.core.lazy_read import (
     close_lazy_readers,
     open_lazy_reader_count,
+    open_lazy_readers,
     read_lazy_tczyx,
 )
 
@@ -167,3 +168,32 @@ def test_to_tczyx_does_not_materialise_a_lazy_array():
 
     assert type(got).__module__.startswith("dask.")
     assert got.shape == (1, 2, 3, 8, 6)
+
+
+def test_the_handles_themselves_are_reachable(zcyx_file):
+    """閉じたかを確かめたい側は、数ではなくハンドルが要ることがある。
+
+    ファイルを置き換えたあと、古い inode を指したままの記述子は新しい宛先と
+    一致しないので、``/proc/self/fd`` を数えると **閉じていなくても 0 に見える**。
+    slice-analysis の上書きテストがまさにそこを見ている。
+    """
+    read_lazy_tczyx(zcyx_file)
+
+    handles = open_lazy_readers(zcyx_file)
+
+    assert len(handles) == 1
+    assert handles[0].filehandle.closed is False
+
+    close_lazy_readers(zcyx_file)
+
+    assert handles[0].filehandle.closed is True
+    assert open_lazy_readers(zcyx_file) == []
+
+
+def test_the_returned_list_is_a_copy(zcyx_file):
+    """返した列を触っても帳簿は変わらないこと。閉じるのは close_lazy_readers。"""
+    read_lazy_tczyx(zcyx_file)
+
+    open_lazy_readers(zcyx_file).clear()
+
+    assert open_lazy_reader_count(zcyx_file) == 1

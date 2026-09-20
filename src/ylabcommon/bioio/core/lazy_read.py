@@ -77,6 +77,21 @@ def close_lazy_readers(path: str | os.PathLike) -> int:
     return closed
 
 
+def open_lazy_readers(path: str | os.PathLike) -> list[Any]:
+    """``path`` に対して開いたままの ``TiffFile`` の写し。
+
+    **閉じたことを確かめたい側のために公開している。** 記述子の数
+    (:func:`open_lazy_reader_count` や ``/proc/self/fd``) では足りない場面が
+    ある —— ファイルを置き換えたあとは、古い inode を指したままの記述子が
+    新しい宛先と一致しないので、**閉じていなくても 0 に見える**。
+    「この ``TiffFile`` が閉じたか」を見るにはハンドルそのものが要る。
+
+    返すのは帳簿の写しなので、これを触っても帳簿は変わらない。閉じるのは
+    :func:`close_lazy_readers` の仕事。
+    """
+    return list(_OPEN_LAZY_READERS.get(_reader_key(path), []))
+
+
 def open_lazy_reader_count(path: str | os.PathLike) -> int:
     """``path`` に対して開いたままの数。後片付けを確かめるためのもの。"""
     return len(_OPEN_LAZY_READERS.get(_reader_key(path), []))
