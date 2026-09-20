@@ -106,9 +106,25 @@ class SortedRecording:
         return 1.0 / (self.sampling_rate_khz * 1000.0)
 
     @property
+    def group(self) -> str:
+        """記録の名前。生 h5 の train グループ名と同じ位置づけ (1 記録 = 1 ファイル)。"""
+        return self.path.name
+
+    @property
     def config_name(self) -> str:
         """記録に使った ini の名前。無ければ空文字。"""
         return str(self.param.get("config_name", ""))
+
+    @property
+    def n_trains(self) -> int:
+        return len(self.train_indices)
+
+    @property
+    def samples_per_train(self) -> int:
+        """1 train の標本数。表に入っている長さから数える (設定値ではない)。"""
+        count = self.n_trains
+        total = int(self.frame.shape[0])
+        return total // count if count else total
 
     @property
     def train_indices(self) -> list[int]:

@@ -60,23 +60,47 @@ Repository Structure
 | --- | --- |
 | `ephys.filters` | 4 次ゼロ位相 Butterworth の低域通過 (`apply_lowpass_filter`) |
 | `ephys.event_detection` | 二重指数関数テンプレートとの相関で内向きイベントを拾う (`detect_epsc_events` / `detect` / `summarize`) |
-| `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`<記録名>_mepsc_result.json` / `<記録名>_mepsc_events.csv`) |
+| `ephys.raw_trace` | 取得直後の h5 を読む (`RawRecording`) |
 | `ephys.sorted_trace` | sorter が書いた `*_df.h5` と相方の json を読む (`SortedRecording`) |
+| `ephys.recording` | **2 つの形を同じ形で開いて切り出す中間層** (`open_recording` / `TraceSelection` / `describe`) |
+| `ephys.procedure` | 開く→選ぶ→掛ける→記録を組む、の手順 (`run_detection`) |
+| `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`<記録名>_mepsc_result.json` / `<記録名>_mepsc_events.csv`) |
 
-使い方 (仕分け後の記録 1 つを掛けて記録まで):
+### 中間層 — 画面も CLI も agent も同じ手順を通る
+
+段取りを画面の中に書くと、コマンドや agent から同じことを回せず、「画面で見た値」と
+「集計に載った値」が別の道から出る。`ephys.recording` と `ephys.procedure` がその
+段取りを 1 つだけ持つ。上に乗るのは slice-controller の viewer と `scli`、
+slice-analysis の `roicli mepsc` と集計。
 
 ```python
-from ylabcommon.ephys.event_detection import DetectionParams, detect
-from ylabcommon.ephys.event_record import build_result, save_result
-from ylabcommon.ephys.sorted_trace import SortedRecording
+from ylabcommon.ephys.procedure import run_detection
+from ylabcommon.ephys.recording import TraceSelection, describe, open_recording
+from ylabcommon.ephys.event_record import save_result
 
-rec = SortedRecording.open(session_dir / "V-test_260904-001_df.h5")
-params = DetectionParams()                       # 既定は取得側の画面と同じ
-events = detect(rec.values(), rec.dt_s, params)  # values() は全 train の連結
-save_result(session_dir, build_result(
-    events, source_file=rec.path.name, sampling_rate_khz=rec.sampling_rate_khz,
-    analysed_seconds=rec.duration_s(), params=params, config_name=rec.config_name))
+# 1. 何が入っているかを機械が読める形で見る (agent はここから train を決める)
+rec = open_recording(path)            # 取得直後の h5 でも *_df.h5 でも同じ
+describe(rec)                         # {"kind": "raw"|"sorted", "n_trains": 3, ...}
+
+# 2. どの波形に掛けるかを 1 つの値で表す
+selection = TraceSelection()                      # 既定: 全 train を連結
+selection = TraceSelection(train_idx=0)           # train 1 本
+selection = TraceSelection(average_trains=True)   # 表示用。検出には渡せない
+
+# 3. 掛けて記録を組み、決まった名前で書く
+result = run_detection(path, selection=selection)
+save_result(session_dir, result)
 ```
+
+* `open_recording` はファイルの形 (`*_df.h5` かどうか) で読み口を振り分ける。
+  どちらで開いても `sampling_rate_khz` / `n_trains` / `values` / `duration_s` は
+  同じ意味
+* `describe` は `--json` にそのまま出せる dict。長さと train の数が分からないと、
+  頻度が意味を持つ掛け方かどうかを agent が判断できない
+* **平均波形は検出に渡せない** (`refuse_average_for_detection`)。画面も CLI も
+  同じ言葉 (`AVERAGE_REFUSAL`) で断る
+* 取得直後の h5 は **取得できた train だけ** を返す。バッファは全長ぶん 0 埋めで
+  確保されるので、全長を読むと未取得の train が平坦な実測と区別できなくなる
 
 決めごと:
 
