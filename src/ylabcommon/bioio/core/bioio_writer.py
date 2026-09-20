@@ -6,6 +6,7 @@ from math import prod
 import numpy as np
 from bioio import PhysicalPixelSizes
 
+from ylabcommon.bioio.core.dim_order import CANONICAL_DIM_ORDER
 from ylabcommon.bioio.core.ome_acquisition import (
     AcquisitionConditions,
     write_acquisition_metadata,
@@ -154,7 +155,10 @@ class BioIOWriter:
         Parameters
         ----------
         data:
-            5D numpy array (TCZYX). May be a lazy (dask) array.
+            5D ``TCZYX`` or 4D ``CZYX`` array. May be a lazy (dask) array.
+            ``CZYX`` is the lab's canonical layout (``TCZYX`` without the time
+            axis); it is expanded here with ``T=1`` rather than at every call
+            site.
         source_bytes_per_frame:
             How many bytes of *source* data one output time point costs to read.
             **Pass it whenever the array reduces its input** (a Z projection reads
@@ -175,6 +179,12 @@ class BioIOWriter:
         無かったもの。呼び出し側が非公開のメソッドへ手を伸ばすのは、公開 API に
         必要な口が無いということなので、ここに出す。
         """
+
+        # 正準レイアウト (CZYX) をそのまま受ける。呼び出し側ごとに data[None] を
+        # 書かせると、書き忘れた 1 か所が「T 軸のつもりの C 軸」として通ってしまう。
+        if dim_order == CANONICAL_DIM_ORDER:
+            data = data[np.newaxis]
+            dim_order = "TCZYX"
 
         self._validate_array(data, dim_order)
 
@@ -218,7 +228,9 @@ class BioIOWriter:
             )
 
         if dim_order != "TCZYX":
-            raise ValueError("BioIOWriter currently requires TCZYX ordering.")
+            raise ValueError(
+                "BioIOWriter requires %s or TCZYX ordering, got %r."
+                % (CANONICAL_DIM_ORDER, dim_order))
 
     # ------------------------------------------------------------------
     # OME-TIFF writer
