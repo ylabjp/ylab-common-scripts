@@ -52,6 +52,15 @@ from typing import Any
 import numpy as np
 import tifffile
 
+from ylabcommon.bioio.core.mosaic_seam import (
+    OVERLAP_POLICIES,
+    PairShift,
+    Registration,
+    blend_into,
+    edge_ratio,
+    measure_pair,
+    solve_offsets,
+)
 from ylabcommon.bioio.core.ome_acquisition import AcquisitionConditions
 from ylabcommon.bioio.keyence.keyence_metadata_extractor import channel_of
 from ylabcommon.bioio.keyence.keyence_metainfo import ImageMetadata
@@ -59,6 +68,9 @@ from ylabcommon.bioio.keyence.keyence_metainfo import ImageMetadata
 #: 並べる対象。``Overlay`` を含む名前は Keyence が作る合成画像なので外す。
 TILE_GLOB = "Image_*.tif"
 OVERLAY_MARKER = "Overlay"
+
+#: 重なりがこれより狭いと、位相相関の当てにならない。画素。
+_MIN_BAND = 8
 
 #: ``..._Z00012_CH1.tif`` の Z。**1 始まり**なので添字にするとき 1 引く。
 _Z_PATTERN = re.compile(r"_Z(\d+)_")
@@ -79,6 +91,10 @@ class Mosaic:
     conditions: AcquisitionConditions = field(default_factory=AcquisitionConditions)
     #: Z 間隔 [µm]。Z 位置が 1 つしか無ければ None。
     z_interval_um: float | None = None
+    #: 重なりから測った置き直し。``register=False`` なら None。
+    registration: Registration | None = None
+    #: 重なりの扱い (``last`` / ``mean``)。
+    overlap_policy: str = "last"
 
     @property
     def physical_pixel_sizes(self) -> tuple[float | None, float, float]:
@@ -118,14 +134,38 @@ def _channel_order(names: list[str]) -> list[str]:
     return sorted((c for c in labels if c), key=lambda c: int(c[2:]))
 
 
-def stitch_mosaic(folder: str | os.PathLike) -> Mosaic:
+def stitch_mosaic(
+    folder: str | os.PathLike,
+    *,
+    register: bool = True,
+    overlap: str = "last",
+) -> Mosaic:
     """``XY##`` 1 組を並べて 1 枚にする。
+
+    Args:
+        register: 重なり帯からタイルの置き直し量を推定して当てる。**既定で入れる**
+            —— ステージ座標は画像の中身とぴったりではなく、ずれは取得ごとに
+            測れる (:mod:`ylabcommon.bioio.core.mosaic_seam` に実測)。推定が
+            通らなかったペアは**当てない**ので、テクスチャの無い重なりで
+            でたらめに動くことはない。``False`` にすると移植元と同じ、
+            ステージ座標そのままの配置になる。
+        overlap: ``"last"`` (既定、後に置いたタイルが勝つ) か ``"mean"``。
+            **``mean`` は継ぎ目を消さない。** 実測では最大段差が典型の 2.35 倍
+            から 2.54 倍になった —— 視野内に左右の傾きがあるので、平均しても
+            段差が重なりの端へ移るだけである。そのうえ重なりぶん (ここでは
+            30% の面積) の画素の値が変わる。平均が情報を増やすのは視野内の
+            傾きを取り除いたあと、つまりキャリブレーションのあとである
+            (:mod:`ylabcommon.bioio.core.mosaic_seam` に実測)。
 
     Raises:
         ValueError: タイルが無い、16 bit でない、画素の大きさやレンズがタイル間で
-            食い違う、など。**食い違いは黙って片方を採らない** —— どちらが正しいか
-            はファイルからは決められない。
+            食い違う、``overlap`` が知らない値、など。**食い違いは黙って片方を
+            採らない** —— どちらが正しいかはファイルからは決められない。
     """
+    if overlap not in OVERLAP_POLICIES:
+        raise ValueError("unknown overlap policy %r; expected one of %s"
+                         % (overlap, ", ".join(OVERLAP_POLICIES)))
+
     folder = os.fspath(folder)
     names = list_tiles(folder)
     if not names:
@@ -157,37 +197,172 @@ def stitch_mosaic(folder: str | os.PathLike) -> Mosaic:
     for t in tiles:
         t["x_rel"] = t["X"] - x0
         t["y_rel"] = t["Y"] - y0
+        t["position"] = _position_key(t)
 
-    width = max(t["x_rel"] for t in tiles) + max(t["W"] for t in tiles)
-    height = max(t["y_rel"] for t in tiles) + max(t["H"] for t in tiles)
+    registration = _register(folder, tiles) if register else None
+    if registration is not None:
+        for t in tiles:
+            dy, dx = registration.offsets.get(t["position"], (0, 0))
+            t["x_rel"] += dx
+            t["y_rel"] += dy
+        # 置き直しで負にふれることがある。原点を取り直す —— 全体の平行移動は
+        # 継ぎ目を変えない。
+        x_shift = min(t["x_rel"] for t in tiles)
+        y_shift = min(t["y_rel"] for t in tiles)
+        for t in tiles:
+            t["x_rel"] -= x_shift
+            t["y_rel"] -= y_shift
+
+    width = max(t["x_rel"] + t["W"] for t in tiles)
+    height = max(t["y_rel"] + t["H"] for t in tiles)
     z_size = max(t["z_index"] for t in tiles) + 1
 
     canvas = np.zeros((1, len(channels), z_size, height, width), np.uint16)
+    counts = (np.zeros(canvas.shape, np.uint16) if overlap == "mean" else None)
     for t in tiles:
-        image = tifffile.imread(os.path.join(folder, t["name"]))
-        if image.ndim > 2:
-            # 取得設定によっては 1 枚に複数成分が入る。移植元と同じく先頭だけ使う。
-            image = image[:, :, 0]
-        if image.dtype != np.uint16:
-            raise ValueError(
-                "%s is %s, not uint16. The canvas is uint16 and a narrower or "
-                "wider type would change the pixel values." % (t["name"], image.dtype))
-        # **180 度回す。** 上の module docstring を参照 (移植元の挙動)。
-        image = np.flipud(np.fliplr(image))
-        canvas[
+        image = _read_tile(folder, t["name"])
+        selection = (
             0,
             t["c_index"],
             t["z_index"],
-            t["y_rel"]:t["y_rel"] + t["H"],
-            t["x_rel"]:t["x_rel"] + t["W"],
-        ] = image
+            slice(t["y_rel"], t["y_rel"] + t["H"]),
+            slice(t["x_rel"], t["x_rel"] + t["W"]),
+        )
+        blend_into(canvas, counts, image, selection, overlap)
 
     return Mosaic(
         data=canvas,
         channel_names=channels,
-        conditions=_conditions(tiles, channels),
+        conditions=_conditions(tiles, channels, registration, overlap),
         pixel_size_um=tiles[0]["umPerPixel"],
         z_interval_um=_z_interval_um(tiles),
+        registration=registration,
+        overlap_policy=overlap,
+    )
+
+
+def _position_key(tile: dict) -> str:
+    """ステージ位置の名前。**チャネルにも Z にもよらない** —— ずれはステージと
+    光学の性質なので、同じ位置のタイルは同じだけ動かす。"""
+    return "x%d_y%d" % (tile["x_rel"], tile["y_rel"])
+
+
+def _read_tile(folder: str, name: str) -> np.ndarray:
+    """1 枚読んで、移植元と同じ向きに直す。"""
+    image = tifffile.imread(os.path.join(folder, name))
+    if image.ndim > 2:
+        # 取得設定によっては 1 枚に複数成分が入る。移植元と同じく先頭だけ使う。
+        image = image[:, :, 0]
+    if image.dtype != np.uint16:
+        raise ValueError(
+            "%s is %s, not uint16. The canvas is uint16 and a narrower or "
+            "wider type would change the pixel values." % (name, image.dtype))
+    # **180 度回す。** module docstring を参照 (移植元の挙動)。
+    return np.flipud(np.fliplr(image))
+
+
+def _overlap_bands(a: dict, b: dict) -> tuple[tuple, tuple] | None:
+    """2 つのタイルが重なっている部分を、それぞれのタイル内の slice で返す。"""
+    x_from = max(a["x_rel"], b["x_rel"])
+    x_to = min(a["x_rel"] + a["W"], b["x_rel"] + b["W"])
+    y_from = max(a["y_rel"], b["y_rel"])
+    y_to = min(a["y_rel"] + a["H"], b["y_rel"] + b["H"])
+    if x_to - x_from < _MIN_BAND or y_to - y_from < _MIN_BAND:
+        return None
+    return (
+        (slice(y_from - a["y_rel"], y_to - a["y_rel"]),
+         slice(x_from - a["x_rel"], x_to - a["x_rel"])),
+        (slice(y_from - b["y_rel"], y_to - b["y_rel"]),
+         slice(x_from - b["x_rel"], x_to - b["x_rel"])),
+    )
+
+
+def _register(folder: str, tiles: list[dict]) -> Registration:
+    """重なり帯からタイルの置き直し量を測る。
+
+    読むのは **Z 1 面ぶん、全チャネル**である。ずれはステージと光学の性質なので
+    Z ごとには変わらず、チャネルをまたいで測ると中央値で外れ値を落とせる
+    (実測では CH1 と CH3 が同じ ``dx=+5`` を出す)。C=2, Z=40 の取得なら
+    読み込みは 80 枚中 2 枚ぶん増えるだけで済む。
+    """
+    by_position: dict[str, list[dict]] = {}
+    for t in tiles:
+        by_position.setdefault(t["position"], []).append(t)
+    positions = sorted(by_position, key=lambda k: (by_position[k][0]["y_rel"],
+                                                   by_position[k][0]["x_rel"]))
+    if len(positions) < 2:
+        return Registration(offsets={p: (0, 0) for p in positions}, pairs=())
+
+    plane_cache: dict[str, np.ndarray] = {}
+
+    def plane(tile: dict) -> np.ndarray:
+        if tile["name"] not in plane_cache:
+            plane_cache[tile["name"]] = _read_tile(folder, tile["name"])
+        return plane_cache[tile["name"]]
+
+    def representatives(key: str) -> dict[str, dict]:
+        """位置 ``key`` の、チャネルごとの代表タイル (いちばん小さい Z)。"""
+        chosen: dict[str, dict] = {}
+        for tile in sorted(by_position[key], key=lambda t: t["z_index"]):
+            chosen.setdefault(tile["channel"], tile)
+        return chosen
+
+    ratios: dict[str, float] = {}
+    pairs: list[PairShift] = []
+    for i, a_key in enumerate(positions):
+        for b_key in positions[i + 1:]:
+            a_reps = representatives(a_key)
+            b_reps = representatives(b_key)
+            measured: list[PairShift] = []
+            for channel in sorted(set(a_reps) & set(b_reps)):
+                a_tile, b_tile = a_reps[channel], b_reps[channel]
+                bands = _overlap_bands(a_tile, b_tile)
+                if bands is None:
+                    continue
+                a_band, b_band = bands
+                measured.append(measure_pair(
+                    a_key, b_key, plane(a_tile)[a_band], plane(b_tile)[b_band]))
+            if measured:
+                pairs.append(_combine_channels(a_key, b_key, measured))
+
+    # 視野内の傾きの実測。**補正はしない** —— 模型が決まっていないので
+    # (mosaic_seam の docstring)、次の段のために記録だけ残す。
+    # **読み直さない。** ペアの推定で既に読んだ面だけから測る。記録のための
+    # おまけに読み込みを増やすと、ネットワーク越しでは実行時間が倍になる。
+    band = max(1, min(t["W"] for t in tiles) // 4)
+    for key in positions:
+        seen = [edge_ratio(plane_cache[t["name"]], band)
+                for t in representatives(key).values()
+                if t["name"] in plane_cache]
+        usable = [r for r in seen if r is not None]
+        if usable:
+            ratios[key] = float(np.median(usable))
+
+    plane_cache.clear()
+    return Registration(offsets=solve_offsets(positions, pairs),
+                        pairs=tuple(pairs), edge_ratios=ratios)
+
+
+def _combine_channels(a: str, b: str, measured: list[PairShift]) -> PairShift:
+    """同じペアをチャネルごとに測った結果を 1 つにする。
+
+    採れたものの**中央値**を採る。1 チャネルが外れても残りで決まるようにする
+    ため。どれも採れなければ、いちばん当てになりそうな 1 つを理由ごと返す。
+    """
+    accepted = [p for p in measured if p.accepted]
+    if not accepted:
+        return max(measured, key=lambda p: p.correlation_after)
+    return PairShift(
+        a=a, b=b,
+        dy=int(np.median([p.dy for p in accepted])),
+        dx=int(np.median([p.dx for p in accepted])),
+        peak=float(np.median([p.peak for p in accepted])),
+        correlation_before=float(np.median([p.correlation_before for p in accepted])),
+        correlation_after=float(np.median([p.correlation_after for p in accepted])),
+        intensity_ratio=float(np.median([p.intensity_ratio for p in accepted
+                                         if p.intensity_ratio is not None]))
+        if any(p.intensity_ratio is not None for p in accepted) else None,
+        accepted=True,
     )
 
 
@@ -210,8 +385,15 @@ def _z_interval_um(tiles: list[dict]) -> float | None:
     return float(np.median(np.diff(positions)) / 1000)  # nm -> µm
 
 
-def _conditions(tiles: list[dict], channels: list[str]) -> AcquisitionConditions:
-    """チャネルごとの露光とゲイン。**割れている項目は埋めない。**"""
+def _conditions(tiles: list[dict], channels: list[str],
+                registration: Registration | None = None,
+                overlap: str = "last") -> AcquisitionConditions:
+    """チャネルごとの露光とゲイン。**割れている項目は埋めない。**
+
+    継ぎ目に何をしたかも一緒に入れる。出力を見ただけで、どう並べたものか
+    分かるようにするため —— 置き直しは画素の位置を変えるので、記録が無いと
+    別々の日に作った出力を突き合わせられない。
+    """
     exposure: dict[str, Any] = {}
     gains: dict[str, dict[str, Any]] = {}
     for channel in channels:
@@ -222,12 +404,17 @@ def _conditions(tiles: list[dict], channels: list[str]) -> AcquisitionConditions
             "CameraHardwareGain": _one(same, "CameraHardwareGain"),
         }
     sectioning = _one(tiles, "Sectioning")
+    extra: dict[str, Any] = {"Seam/Overlap": overlap}
+    if sectioning is not None:
+        extra["Sectioning"] = sectioning
+    if registration is not None:
+        extra.update(registration.as_metadata())
     return AcquisitionConditions(
         channel_names=list(channels),
         exposure_by_channel=exposure,
         gain_by_channel=gains,
         lens=tiles[0]["LensName"],
-        extra={"Sectioning": sectioning} if sectioning is not None else {},
+        extra=extra,
     )
 
 
