@@ -28,10 +28,13 @@ from ylabcommon.ephys.event_detection import (
 )
 from ylabcommon.ephys.event_record import (
     EVENT_CSV_COLUMNS,
-    RESULT_FILENAME,
+    RESULT_GLOB,
+    RESULT_SUFFIX,
     build_result,
     export_events_csv,
     load_result,
+    result_basename,
+    result_path_for,
     result_row,
     save_result,
 )
@@ -250,7 +253,9 @@ def test_the_record_keeps_the_conditions_that_produced_the_numbers(tmp_path):
                           display_cutoff_hz=1000.0)
     written = save_result(tmp_path, result)
 
-    assert written.name == RESULT_FILENAME
+    assert written.name == "V-test_2609xx-001" + RESULT_SUFFIX
+    assert written == result_path_for(tmp_path, result.source_file)
+    assert list(tmp_path.glob(RESULT_GLOB)) == [written]  # 集計が探す形
     assert not list(tmp_path.glob("*.tmp"))              # 書き掛けを残さない
     back = load_result(written)
     assert back.source_file == "V-test_2609xx-001_df.h5" and back.train_idx is None
@@ -264,7 +269,8 @@ def test_the_record_keeps_the_conditions_that_produced_the_numbers(tmp_path):
     assert [e.event_num for e in back.events] == [0, 1, 2]
     assert back.created_at
 
-    rows = list(csv.reader((tmp_path / "mepsc_events.csv").open(newline="")))
+    rows = list(csv.reader(
+        (tmp_path / "V-test_2609xx-001_mepsc_events.csv").open(newline="")))
     assert rows[0] == list(EVENT_CSV_COLUMNS) and len(rows) == 4
 
     row = result_row(back)
@@ -315,3 +321,17 @@ def test_detection_through_to_a_record_on_a_sorted_recording(tmp_path):
     assert result.frequency_hz == pytest.approx(
         result.n_included / result.analysed_seconds)
     assert not math.isnan(result.frequency_hz)
+
+
+def test_two_recordings_in_one_cell_do_not_overwrite_each_other(tmp_path):
+    """1 つのセルに V-test と STDP が入ることがある。固定名だと後勝ちで消える。"""
+    for name in ("V-test_260904-001_df.h5", "STDP_260904-002_df.h5"):
+        save_result(tmp_path, build_result(
+            [_row(0, 0.1, 20.0)], source_file=name, sampling_rate_khz=SR_KHZ,
+            analysed_seconds=1.0, params=DetectionParams()))
+
+    found = sorted(p.name for p in tmp_path.glob(RESULT_GLOB))
+    assert found == ["STDP_260904-002" + RESULT_SUFFIX,
+                     "V-test_260904-001" + RESULT_SUFFIX]
+    assert result_basename("V-test_260904-001_df.h5") == "V-test_260904-001"
+    assert result_basename("raw.h5") == "raw"        # 取得直後の h5 を直接掛けた場合

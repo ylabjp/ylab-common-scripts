@@ -60,7 +60,7 @@ Repository Structure
 | --- | --- |
 | `ephys.filters` | 4 次ゼロ位相 Butterworth の低域通過 (`apply_lowpass_filter`) |
 | `ephys.event_detection` | 二重指数関数テンプレートとの相関で内向きイベントを拾う (`detect_epsc_events` / `detect` / `summarize`) |
-| `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`mepsc_result.json` / `mepsc_events.csv`) |
+| `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`<記録名>_mepsc_result.json` / `<記録名>_mepsc_events.csv`) |
 | `ephys.sorted_trace` | sorter が書いた `*_df.h5` と相方の json を読む (`SortedRecording`) |
 
 使い方 (仕分け後の記録 1 つを掛けて記録まで):
@@ -86,8 +86,9 @@ save_result(session_dir, build_result(
   並んでいるのと見分けが付かない
 * **記録には値だけでなく条件も入れる。** どのファイルの、どの train を、表示用の
   どのフィルタと、どの検出パラメータで掛けたのか。無いと後から確かめられない
-* **保存名は固定** (`mepsc_result.json`)。集計 (crawl) が決まった名前を探すので、
-  人がその場で選んだ名前ではセッションと結び付かない
+* **保存名は元の記録から決まる** (`<記録名>_mepsc_result.json`)。集計 (crawl) は
+  `*_mepsc_result.json` を探すので、人がその場で選んだ名前ではセッションと結び付かない。
+  1 つのセルに V-test と STDP のように記録が 2 つあっても上書きにならない
 * **train の平均は検出に掛けない。** 平均するとランダムなイベントは消える
 
 検出そのものは slice-controller から **振る舞いを変えずに** 移した。持ち越して
