@@ -275,3 +275,33 @@ def test_one_run_gives_the_trace_the_events_and_the_record(tmp_path):
     for event in got.events:
         assert "onset_idx" in event and "trace" in event      # 重ね描きに要る
         assert 0 <= event["onset_idx"] < got.values.shape[0]
+
+
+def test_a_file_written_before_train_sample_number_falls_back_to_the_interval(tmp_path):
+    """この鍵が書かれる前の記録がまだ現役。全長を 1 train とみなすと一覧が潰れる。"""
+    path = tmp_path / "legacy.h5"
+    each = 250 * SR_KHZ                      # interval [ms] x rate [kHz]
+    with h5py.File(path, "w") as f:
+        f.create_dataset("train_param_000/param/sampling_rate_in_kHz", data=SR_KHZ)
+        f.create_dataset("train_param_000/param/train_train_interval", data="250")
+        f.create_dataset("train_param_000/param/train_train_number", data="3")
+        f.create_dataset("train_param_000/data",
+                         data=np.ones((1, 3 * each), dtype=np.float32))
+
+    rec = RawRecording.open(path)
+
+    assert rec.samples_per_train == each     # train_sample_number の代わり
+    assert rec.n_trains == 3
+    assert rec.train_indices == [0, 1, 2]
+    assert rec.values(1).shape[0] == each
+
+
+def test_a_file_with_neither_key_is_one_long_train(tmp_path):
+    path = tmp_path / "bare.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("train_param_000/param/sampling_rate_in_kHz", data=SR_KHZ)
+        f.create_dataset("train_param_000/data", data=np.ones((1, 500), dtype=np.float32))
+
+    rec = RawRecording.open(path)
+
+    assert (rec.samples_per_train, rec.n_trains) == (500, 1)

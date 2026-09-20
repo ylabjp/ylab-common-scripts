@@ -35,6 +35,8 @@ KEY_TRAIN_SAMPLES = "train_sample_number"
 #: 最後まで記録できた train の数。
 KEY_ACQUIRED_TRAINS = "acquired_train_number"
 KEY_TRAIN_NUMBER = "train_train_number"
+#: 旧ファイル用。切り上げ前の設定値 [ms] なので train_sample_number を優先する。
+KEY_TRAIN_INTERVAL = "train_train_interval"
 KEY_SAMPLING_RATE = "sampling_rate_in_kHz"
 
 
@@ -124,12 +126,27 @@ class RawRecording:
 
     @property
     def samples_per_train(self) -> int:
-        """1 train の標本数。無い古いファイルは全長を 1 train とみなす。"""
+        """1 train の標本数。
+
+        ``train_sample_number`` が正。**無い古いファイルは
+        ``train_train_interval`` [ms] x レート [kHz] に倒す** —— この鍵が書かれる
+        前の記録がまだ現役で、全長を 1 train とみなすと train の一覧が 1 本に
+        潰れる (tests/test_save_partial_recording.py が値で押さえている)。
+        どちらも無ければ全長を 1 train とする。
+        """
         try:
             n = int(self.param[KEY_TRAIN_SAMPLES])
+            if n > 0:
+                return n
         except (KeyError, TypeError, ValueError):
-            return int(self.data.shape[0])
-        return n if n > 0 else int(self.data.shape[0])
+            pass
+        try:
+            legacy = int(float(self.param[KEY_TRAIN_INTERVAL]) * self.sampling_rate_khz)
+            if legacy > 0:
+                return legacy
+        except (KeyError, TypeError, ValueError):
+            pass
+        return int(self.data.shape[0])
 
     @property
     def n_trains(self) -> int:
