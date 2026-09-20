@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 import tifffile
 
-from ylabcommon.bioio.core.dim_order import to_czyx
+from ylabcommon.bioio.core.dim_order import to_tczyx
 from ylabcommon.bioio.core.lazy_read import (
     close_lazy_readers,
     open_lazy_reader_count,
-    read_lazy_czyx,
+    read_lazy_tczyx,
 )
 
 
@@ -36,24 +36,24 @@ def zcyx_file(tmp_path):
 
 def test_it_comes_back_lazy(zcyx_file):
     """dask 配列であること —— numpy が返っていたら全部 RAM に載っている。"""
-    array = read_lazy_czyx(zcyx_file)
+    array = read_lazy_tczyx(zcyx_file)
 
     assert type(array).__module__.startswith("dask.")
     assert hasattr(array, "compute")
 
 
 def test_the_shape_is_canonical(zcyx_file):
-    array = read_lazy_czyx(zcyx_file)
+    array = read_lazy_tczyx(zcyx_file)
 
-    assert array.shape == (2, 3, 8, 6)  # CZYX
+    assert array.shape == (1, 2, 3, 8, 6)  # TCZYX
 
 
 def test_pixels_are_right_once_computed(zcyx_file):
-    array = read_lazy_czyx(zcyx_file)
+    array = read_lazy_tczyx(zcyx_file)
 
     for c in range(2):
         for z in range(3):
-            assert np.all(np.asarray(array[c, z]) == 10 * z + c)
+            assert np.all(np.asarray(array[0, c, z]) == 10 * z + c)
 
 
 def _bytes_read(work):
@@ -87,9 +87,9 @@ def test_a_slice_does_not_read_the_whole_stack(tmp_path):
     data = np.random.randint(0, 4096, (1, 2, 3, 256, 256), np.uint16)  # 6 面
     path = _write(tmp_path / "big.ome.tif", data, "TCZYX")
     try:
-        array = read_lazy_czyx(path)
+        array = read_lazy_tczyx(path)
 
-        one_plane = _bytes_read(lambda: np.asarray(array[0, 0]))
+        one_plane = _bytes_read(lambda: np.asarray(array[0, 0, 0]))
         whole = _bytes_read(lambda: np.asarray(array))
 
         # 6 面のうち 1 面。端数を見込んでも 1/4 を超えていたら読み過ぎ。
@@ -103,17 +103,24 @@ def test_a_squeezed_axis_comes_back(tmp_path):
     """tifffile は大きさ 1 の軸を落とす。正準レイアウトでは戻っていること。"""
     path = _write(tmp_path / "single.ome.tif", np.zeros((8, 6), np.uint16), "YX")
     try:
-        array = read_lazy_czyx(path)
-        assert array.shape == (1, 1, 8, 6)
+        array = read_lazy_tczyx(path)
+        assert array.shape == (1, 1, 1, 8, 6)
     finally:
         close_lazy_readers(path)
 
 
-def test_a_real_time_series_is_not_read_as_czyx(tmp_path):
-    """T>1 は畳めない。``None`` を返して呼び出し側の従来経路へ落とす。"""
-    path = _write(tmp_path / "movie.ome.tif", np.zeros((3, 1, 1, 8, 6), np.uint16), "TCZYX")
+def test_a_real_time_series_reads(tmp_path):
+    """T>1 がそのまま読めること —— slice-analysis が扱うのはこれ。"""
+    data = np.zeros((3, 1, 1, 8, 6), np.uint16)
+    for t in range(3):
+        data[t] = t
+    path = _write(tmp_path / "movie.ome.tif", data, "TCZYX")
     try:
-        assert read_lazy_czyx(path) is None
+        array = read_lazy_tczyx(path)
+
+        assert array.shape == (3, 1, 1, 8, 6)
+        for t in range(3):
+            assert np.all(np.asarray(array[t]) == t)
     finally:
         close_lazy_readers(path)
 
@@ -122,39 +129,41 @@ def test_a_file_that_is_not_a_tiff_gives_none(tmp_path):
     path = tmp_path / "notatiff.tif"
     path.write_bytes(b"this is not a tiff")
 
-    assert read_lazy_czyx(path) is None
+    assert read_lazy_tczyx(path) is None
 
 
 def test_a_refused_file_leaves_no_handle_open(tmp_path):
     """返さないのにハンドルだけ残ると、そのファイルは二度と上書きできない。
 
     Windows は開かれているファイルを置き換えられない (slice-analysis が実機で
-    踏んだ ``PermissionError [WinError 5]``)。
+    踏んだ ``PermissionError [WinError 5]``)。RGB は正準レイアウトへ置けないので、
+    断られる側の例として使う。
     """
-    path = _write(tmp_path / "movie.ome.tif", np.zeros((3, 1, 1, 8, 6), np.uint16), "TCZYX")
+    path = tmp_path / "rgb.tif"
+    tifffile.imwrite(str(path), np.zeros((8, 6, 3), np.uint8), photometric="rgb")
 
-    assert read_lazy_czyx(path) is None
+    assert read_lazy_tczyx(path) is None
     assert open_lazy_reader_count(path) == 0
 
 
 def test_handles_are_tracked_and_closeable(zcyx_file):
-    read_lazy_czyx(zcyx_file)
-    read_lazy_czyx(zcyx_file)
+    read_lazy_tczyx(zcyx_file)
+    read_lazy_tczyx(zcyx_file)
 
     assert open_lazy_reader_count(zcyx_file) == 2
     assert close_lazy_readers(zcyx_file) == 2
     assert open_lazy_reader_count(zcyx_file) == 0
 
 
-def test_to_czyx_does_not_materialise_a_lazy_array():
-    """``to_czyx`` 自身が実体化しないこと。
+def test_to_tczyx_does_not_materialise_a_lazy_array():
+    """``to_tczyx`` 自身が実体化しないこと。
 
     ``np.asarray`` を 1 つ挟むだけで、遅延で読んだ意味が消える。静かに効くので
     ここで留める。
     """
     import dask.array as da
 
-    got = to_czyx(da.zeros((3, 2, 8, 6), dtype="uint16"), "ZCYX")
+    got = to_tczyx(da.zeros((3, 2, 8, 6), dtype="uint16"), "ZCYX")
 
     assert type(got).__module__.startswith("dask.")
-    assert got.shape == (2, 3, 8, 6)
+    assert got.shape == (1, 2, 3, 8, 6)

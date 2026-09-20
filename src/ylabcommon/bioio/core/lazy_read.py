@@ -1,8 +1,8 @@
-"""TIFF を **遅延 (dask) 配列** として正準レイアウト ``CZYX`` で読む。
+"""TIFF を **遅延 (dask) 配列** として正準レイアウト ``TCZYX`` で読む。
 
-slice-analysis の ``models/stack_image.read_lazy_tczyx`` が元。あちらは時系列を
-扱うので ``TCZYX`` を返すが、こちらは正準の ``CZYX`` を返す。**いずれ
-slice-analysis 側もここへ寄せたい**ので、踏んだ問題と実測はこちらに写してある。
+slice-analysis の ``models/stack_image.read_lazy_tczyx`` が元。**名前も返す形も
+そちらに合わせてある** —— slice-analysis がそのまま import に差し替えられるように。
+踏んだ問題と実測はこちらに写した。
 
 いつ遅延が得か (**測ってから使うこと**)
 --------------------------------------
@@ -46,7 +46,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from ylabcommon.bioio.core.dim_order import to_czyx
+from ylabcommon.bioio.core.dim_order import to_tczyx
 
 #: 開いたまま持っている ``TiffFile``。**パス -> ハンドルの一覧**。
 _OPEN_LAZY_READERS: dict[str, list[Any]] = {}
@@ -82,16 +82,16 @@ def open_lazy_reader_count(path: str | os.PathLike) -> int:
     return len(_OPEN_LAZY_READERS.get(_reader_key(path), []))
 
 
-def read_lazy_czyx(path: str | os.PathLike) -> Any:
-    """TIFF を遅延配列として ``CZYX`` で返す。遅延で読めなければ ``None``。
+def read_lazy_tczyx(path: str | os.PathLike) -> Any:
+    """TIFF を遅延配列として ``TCZYX`` で返す。遅延で読めなければ ``None``。
 
-    ``None`` になるのは、TIFF でない・開けない・軸が ``TCZYX`` 以外を含む・
-    ``T`` に実体がある (T>1) 場合。呼び出し側は実体で読む従来の経路へ落とす。
-    **理由を知りたいときは実体で読んでから** :func:`to_czyx` **を呼ぶこと** ——
-    そちらは黙って ``None`` にせず、どの軸が駄目かを言って落ちる。
+    ``None`` になるのは、TIFF でない・開けない・軸が ``TCZYX`` 以外を含む場合。
+    呼び出し側は実体で読む従来の経路へ落とす。**理由を知りたいときは実体で
+    読んでから** :func:`to_tczyx` **を呼ぶこと** —— そちらは黙って ``None`` に
+    せず、どの軸が駄目かを言って落ちる。
 
     tifffile は**大きさ 1 の軸を落とす** (Z=1 で保存した OME-TIFF は ``TCYX``
-    になる、slice-analysis 実測)。落ちた軸は :func:`to_czyx` が戻す。
+    になる、slice-analysis 実測)。落ちた軸は :func:`to_tczyx` が戻す。
     """
     import dask.array as da
     import tifffile
@@ -105,7 +105,7 @@ def read_lazy_czyx(path: str | os.PathLike) -> Any:
 
     try:
         series = tif.series[0]
-        array = to_czyx(da.from_zarr(series.aszarr()), series.axes)
+        array = to_tczyx(da.from_zarr(series.aszarr()), series.axes)
     except Exception:
         # 配列を返さないのにハンドルだけ残ると、そのファイルは以降どこからも
         # 上書きできなくなる。**ここで閉じる。**
