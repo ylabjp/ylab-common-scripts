@@ -117,16 +117,50 @@ class BioIOWriter:
     That belongs to BioIOBuilder.
     """
 
+    #: Codecs that take no effort argument. **Sending one is a TypeError, not
+    #: a no-op** — measured against imagecodecs 2026-09-24,
+    #: ``lzw_encode() got an unexpected keyword argument 'level'`` — so a
+    #: writer that always sends ``{"level": ...}`` cannot reach them at all.
+    #: ``zlib`` / ``zstd`` / ``lzma`` all take ``level``.
+    NO_LEVEL = frozenset({"lzw", "packbits", "none"})
+
     def __init__(
         self,
         output_path: Path | str,
         *,
         compression: str = "zlib",
         compression_level: int = 6,
+        predictor: bool | int | None = None,
     ) -> None:
+        """
+        Args:
+            compression: a **lossless** TIFF codec. ``zlib`` (the default),
+                ``zstd``, ``lzma``, ``lzw``, or ``None`` for uncompressed.
+            compression_level: effort, for the codecs that take one.
+            predictor: horizontal differencing before the codec. **This is
+                usually worth more than raising the level**: measured on a
+                merged 20x fluorescence volume (2026-09-24), ``zlib`` alone
+                reached 94.0% of raw at level 6 and 94.0% at level 9, while
+                ``zlib`` + predictor reached 86.2%. It is not free everywhere —
+                on a bright-field tile with little local structure the same
+                pair went 59.2% → 61.8% — so it is a switch, not a default.
+        """
         self.output_path = Path(output_path)
         self.compression = compression
         self.compression_level = compression_level
+        self.predictor = predictor
+
+    def _tiff_compression_kwargs(self) -> dict:
+        """What to hand tifffile, with only the arguments the codec accepts."""
+        if not self.compression or str(self.compression).lower() == "none":
+            return {}
+        kwargs: dict = {"compression": self.compression}
+        if (str(self.compression).lower() not in self.NO_LEVEL
+                and self.compression_level is not None):
+            kwargs["compressionargs"] = {"level": self.compression_level}
+        if self.predictor is not None:
+            kwargs["predictor"] = self.predictor
+        return kwargs
 
     # ------------------------------------------------------------------
     # Public API
@@ -280,10 +314,7 @@ class BioIOWriter:
             dim_order=dim_order,
             channel_names=list(channel_names) if channel_names else None,
             physical_pixel_sizes=pps,
-            tifffile_kwargs={
-                "compression": self.compression,
-                "compressionargs": {"level": self.compression_level},
-            },
+            tifffile_kwargs=self._tiff_compression_kwargs(),
         )
 
         print(f"[BioIOWriter] OME-TIFF written → {out_file}")
@@ -387,8 +418,7 @@ class BioIOWriter:
                     dtype=dtype,
                     photometric="minisblack",
                     metadata=metadata,
-                    compression=self.compression,
-                    compressionargs={"level": self.compression_level},
+                    **self._tiff_compression_kwargs(),
                 )
 
         print(f"[BioIOWriter] OME-TIFF (streamed) written → {out_file}")
