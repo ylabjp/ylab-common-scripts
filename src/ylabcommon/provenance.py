@@ -256,6 +256,7 @@ def _source(base: Path, script: str | Path | None) -> SourceRef:
 
 
 def capture(stage: str, *, config: Any = None, config_fields: Iterable[str] | None = None,
+            config_hash_value: str | None = None,
             inputs: Any = None, package: str | None = None,
             script: str | Path | None = None, base: str | Path | None = None,
             extra: dict[str, Any] | None = None) -> ProvenanceRecord:
@@ -265,6 +266,10 @@ def capture(stage: str, *, config: Any = None, config_fields: Iterable[str] | No
         stage: 工程の名前。
         config: 結果を決める設定。そのまま記録し、ハッシュも取る。
         config_fields: ハッシュに入れる top-level 項目を絞る。
+        config_hash_value: **既に計算済みのハッシュ**をそのまま入れる。呼び出し側が
+            別の式で出したハッシュを既に他所に書いている場合に使う (behavior-analysis
+            の ``analysis_meta.yaml`` がそれで、3,346 件の既存記録と値を揃える必要が
+            ある)。渡したときは ``config`` からは計算し直さない。
         inputs: どの入力から作ったか。**記録だけ**で、比較はしない。
         package: 呼び出し側のパッケージ名 (版を記録するため)。
         script: 記録するスクリプト。
@@ -274,7 +279,8 @@ def capture(stage: str, *, config: Any = None, config_fields: Iterable[str] | No
     caller_base = Path(base) if base is not None else (
         Path(script).parent if script is not None else Path.cwd())
     source = _source(caller_base, script)
-    source.config_hash = config_hash(config, config_fields)
+    source.config_hash = (config_hash_value if config_hash_value is not None
+                          else config_hash(config, config_fields))
     record_model = ProvenanceRecord(
         schema_version=SCHEMA_VERSION,
         stage=stage,
