@@ -30,24 +30,29 @@ behavior-analysis は記録と判断を 1 つにしていた: ``analysis_meta.ya
 自由に足せるし、場合分け (「この項目は比較から外す」) も要らない。**作り直す対象を
 決めるのは、記録を読む別のプロセス** (一覧・集計して人が決める) の仕事。
 
+読み書きは pydantic で型を付ける
+--------------------------------
+**ただし「厳しく検証する」ためではない。** 記録は追記だけで、**古い版が書いた
+レコードも、新しい版が書いたレコードも読めなければ困る**。そこで:
+
+- すべての項目に既定値を持たせる —— 項目が増える前に書かれた古いレコードも読める
+- :class:`ProvenanceRecord` は ``extra="allow"`` —— **知らない項目が来ても捨てずに
+  保持する**。新しい版が足した項目を、古い版で読んで書き戻しても消えない
+- 読めない行は飛ばす (:func:`read`)
+
+つまり型は「決まった形を強制する」ためではなく、**項目名と意味を 1 か所に書いて
+おくため**と、**前後の版と行き違っても壊れないため**に使う。
+
 記録する形
 ----------
 出力フォルダに ``_provenance.jsonl``。**追記のみ**なので、作り直した履歴が
-そのまま残る。1 行 1 レコード:
-
-    {"schema": 1, "stage": "sorter", "created_at": "2026-09-23T10:11:12+09:00",
-     "source": {"repo": "slice-analysis", "commit": "<40桁>", "dirty": false,
-                "script": "src/.../sorter.py", "config_hash": "<16桁>"},
-     "deps": {"package": {"name": "sliceanalysis", "version": "0.1.0"},
-              "ylabcommon": {"version": "0.3.1", "commit": "<40桁>"},
-              "python": "3.12.9"},
-     "config": {...}, "inputs": {...}, "host": "ws-hpc", "user": "shoyag"}
+そのまま残る。1 行 1 レコード (:class:`ProvenanceRecord` の JSON)。
 
 **取れなくても解析は止めない。** git が無い・パッケージ情報が読めない環境でも
 ``None`` を入れて先へ進む。キーごと消さないのは「調べていない」のか「調べて
 分からなかった」のかを区別するため (``ylabcommon.reporting.source`` と同じ方針)。
 
-``dirty: true`` は **未コミットの変更で走らせた**印で、commit だけでは再現できない。
+``dirty=True`` は **未コミットの変更で走らせた**印で、commit だけでは再現できない。
 """
 from __future__ import annotations
 
@@ -61,10 +66,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from pydantic import BaseModel, ConfigDict, Field
+
 #: 追記先。``_`` 始まりなので、構造チェックや glob の対象から外れる。
 PROVENANCE_FILE = "_provenance.jsonl"
 
-#: レコードの形の版。読む側が形の違いを判別できるようにする。
+#: レコードの形の版。読む側が形の違いを判別できるようにする。**項目を足しただけ
+#: では上げない** (足しても古い読み手が壊れないのがこの形の要点)。意味が変わった
+#: ときだけ上げる。
 SCHEMA_VERSION = 1
 
 #: ハッシュの桁数 (sha256 の先頭)。
@@ -73,7 +82,88 @@ HASH_DIGITS = 16
 #: git は 1 プロセスに 1 回だけ読む。``git status`` は大きな作業ツリーだと数秒
 #: かかるので、何十件も回すバッチで毎回呼ばない。
 _source_cache: dict[str, Any] | None = None
-_deps_cache: dict[str, Any] | None = None
+_deps_cache: "Deps | None" = None
+_deps_cache_key: str | None = None
+
+
+class _Tolerant(BaseModel):
+    """前後の版と行き違っても壊れない土台。
+
+    ``extra="allow"`` は「雑に受ける」ためではない。記録は追記だけなので、
+    **新しい版が足した項目を古い版で読んでも捨てない**ことが要る。捨てると、
+    読んで書き戻しただけで情報が減る。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class SourceRef(_Tolerant):
+    """作ったコードの出所。``reporting.SourceInfo`` と同じ意味・同じ取り方。"""
+
+    #: リポジトリ名 (origin の URL から)。
+    repo: str | None = None
+    #: **短縮せず 40 桁**。短縮 sha は将来衝突しうるし復元もできない。
+    commit: str | None = None
+    #: 未コミットの変更があったか。**True なら commit だけでは再現できない。**
+    dirty: bool | None = None
+    #: 走らせたスクリプト。
+    script: str | None = None
+    #: 設定のハッシュ。**これ自体は判断をしない** —— 違うと分かるだけ。
+    config_hash: str | None = None
+
+
+class PackageRef(_Tolerant):
+    """呼び出し側パッケージの名前と版。"""
+
+    name: str | None = None
+    version: str | None = None
+
+
+class YlabCommonRef(_Tolerant):
+    """ylabcommon の版と git commit。
+
+    git から入れた依存の commit は、uv が dist-info の ``direct_url.json`` に書く。
+    ここが唯一の手掛かり (パッケージは ``__version__`` を持たない)。
+    """
+
+    version: str | None = None
+    commit: str | None = None
+
+
+class Deps(_Tolerant):
+    """走らせた環境。"""
+
+    package: PackageRef = Field(default_factory=PackageRef)
+    ylabcommon: YlabCommonRef = Field(default_factory=YlabCommonRef)
+    python: str | None = None
+
+
+class ProvenanceRecord(_Tolerant):
+    """1 回の実行の記録。**比較には使わない。**"""
+
+    #: 形の版 (:data:`SCHEMA_VERSION`)。
+    schema_version: int = SCHEMA_VERSION
+    #: 工程の名前 (``sorter`` / ``preprocess_video`` など)。
+    stage: str = ""
+    #: ISO8601 (タイムゾーン付き)。
+    created_at: str = ""
+    source: SourceRef = Field(default_factory=SourceRef)
+    deps: Deps = Field(default_factory=Deps)
+    #: 結果を決めた設定。そのまま残す。
+    config: Any = None
+    #: どの入力から作ったか。**記録だけ**で、比較して何かを決めることはしない。
+    inputs: Any = None
+    #: 追加で残したいもの。
+    extra: dict[str, Any] | None = None
+    host: str | None = None
+    user: str | None = None
+
+    def short(self) -> str:
+        """1 行にする (一覧表示用)。"""
+        commit = (self.source.commit or "unknown")[:12]
+        dirty = self.source.dirty
+        mark = "+dirty" if dirty else ("" if dirty is False else "+unknown")
+        return "%s %s%s %s" % (self.stage or "?", commit, mark, (self.created_at or "")[:19])
 
 
 def config_hash(config: Any, fields: Iterable[str] | None = None) -> str | None:
@@ -103,57 +193,47 @@ def config_hash(config: Any, fields: Iterable[str] | None = None) -> str | None:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:HASH_DIGITS]
 
 
-def _package_info(package: str | None) -> dict[str, Any]:
-    """呼び出し側パッケージの名前と版。"""
-    info: dict[str, Any] = {"name": package, "version": None}
+def _package_ref(package: str | None) -> PackageRef:
+    ref = PackageRef(name=package)
     if not package:
-        return info
+        return ref
     try:
         from importlib.metadata import version as _v
 
-        info["version"] = _v(package)
+        ref.version = _v(package)
     except Exception:
         pass
-    return info
+    return ref
 
 
-def _ylabcommon_info() -> dict[str, Any]:
-    """ylabcommon の版と commit。
-
-    git から入れた依存の commit は、uv が dist-info の ``direct_url.json`` に書く。
-    ここが唯一の手掛かり (パッケージは ``__version__`` を持たない)。
-    """
-    info: dict[str, Any] = {"version": None, "commit": None}
+def _ylabcommon_ref() -> YlabCommonRef:
+    ref = YlabCommonRef()
     try:
         from importlib.metadata import distribution
 
         dist = distribution("ylabcommon")
-        info["version"] = dist.version
+        ref.version = dist.version
         raw = dist.read_text("direct_url.json")
         if raw:
-            info["commit"] = (json.loads(raw).get("vcs_info") or {}).get("commit_id")
+            ref.commit = (json.loads(raw).get("vcs_info") or {}).get("commit_id")
     except Exception:
         pass
-    return info
+    return ref
 
 
-def _deps(package: str | None) -> dict[str, Any]:
+def _deps(package: str | None) -> Deps:
     """実行環境。1 回読んで覚える。"""
-    global _deps_cache
+    global _deps_cache, _deps_cache_key
     key = package or ""
-    if _deps_cache is not None and _deps_cache.get("_key") == key:
-        return {k: v for k, v in _deps_cache.items() if k != "_key"}
-    deps = {
-        "_key": key,
-        "package": _package_info(package),
-        "ylabcommon": _ylabcommon_info(),
-        "python": platform.python_version(),
-    }
-    _deps_cache = deps
-    return {k: v for k, v in deps.items() if k != "_key"}
+    if _deps_cache is not None and _deps_cache_key == key:
+        return _deps_cache.model_copy(deep=True)
+    deps = Deps(package=_package_ref(package), ylabcommon=_ylabcommon_ref(),
+                python=platform.python_version())
+    _deps_cache, _deps_cache_key = deps, key
+    return deps.model_copy(deep=True)
 
 
-def _source(base: Path, script: str | Path | None) -> dict[str, Any]:
+def _source(base: Path, script: str | Path | None) -> SourceRef:
     """リポジトリの commit / 未コミット変更の有無。1 回読んで覚える。
 
     ``reporting.SourceInfo`` をそのまま使う —— 図の manifest が既に同じ形で
@@ -169,53 +249,51 @@ def _source(base: Path, script: str | Path | None) -> dict[str, Any]:
             _source_cache = info
         except Exception:
             _source_cache = {"repo": None, "commit": None, "dirty": None, "script": None}
-    out = dict(_source_cache)
+    ref = SourceRef(**_source_cache)
     if script is not None:
-        out["script"] = str(script)
-    return out
+        ref.script = str(script)
+    return ref
 
 
 def capture(stage: str, *, config: Any = None, config_fields: Iterable[str] | None = None,
             inputs: Any = None, package: str | None = None,
             script: str | Path | None = None, base: str | Path | None = None,
-            extra: dict[str, Any] | None = None) -> dict[str, Any]:
+            extra: dict[str, Any] | None = None) -> ProvenanceRecord:
     """1 レコードぶんを組み立てる (ファイルには書かない)。
 
     Args:
-        stage: 工程の名前 (``sorter`` / ``preprocess_video`` など)。
+        stage: 工程の名前。
         config: 結果を決める設定。そのまま記録し、ハッシュも取る。
         config_fields: ハッシュに入れる top-level 項目を絞る。
-        inputs: どの入力から作ったか (パス・上流工程など)。**記録だけ**で、
-            これを比較して何かを決めることはしない。
+        inputs: どの入力から作ったか。**記録だけ**で、比較はしない。
         package: 呼び出し側のパッケージ名 (版を記録するため)。
         script: 記録するスクリプト。
-        base: どのリポジトリを見るか。省略時は呼び出し元のファイルの場所。
+        base: どのリポジトリを見るか。省略時は ``script`` の場所、それも無ければ cwd。
         extra: 追加で残したいもの。
     """
     caller_base = Path(base) if base is not None else (
         Path(script).parent if script is not None else Path.cwd())
     source = _source(caller_base, script)
-    source["config_hash"] = config_hash(config, config_fields)
-    record_dict: dict[str, Any] = {
-        "schema": SCHEMA_VERSION,
-        "stage": stage,
-        "created_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "source": source,
-        "deps": _deps(package),
-        "config": _jsonable(config),
-        "inputs": _jsonable(inputs),
-    }
-    if extra:
-        record_dict["extra"] = _jsonable(extra)
+    source.config_hash = config_hash(config, config_fields)
+    record_model = ProvenanceRecord(
+        schema_version=SCHEMA_VERSION,
+        stage=stage,
+        created_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        source=source,
+        deps=_deps(package),
+        config=_jsonable(config),
+        inputs=_jsonable(inputs),
+        extra=extra,
+    )
     try:
-        record_dict["host"] = socket.gethostname()
+        record_model.host = socket.gethostname()
     except Exception:
-        record_dict["host"] = None
+        pass
     try:
-        record_dict["user"] = getpass.getuser()
+        record_model.user = getpass.getuser()
     except Exception:
-        record_dict["user"] = None
-    return record_dict
+        pass
+    return record_model
 
 
 def _jsonable(value: Any) -> Any:
@@ -243,7 +321,8 @@ def record(out_dir: str | Path, stage: str, **kwargs: Any) -> Path | None:
     try:
         path = Path(out_dir) / PROVENANCE_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(capture(stage, **kwargs), ensure_ascii=False, default=str)
+        payload = capture(stage, **kwargs).model_dump(mode="json")
+        line = json.dumps(payload, ensure_ascii=False, default=str)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
         return path
@@ -252,64 +331,67 @@ def record(out_dir: str | Path, stage: str, **kwargs: Any) -> Path | None:
         return None
 
 
-def read(out_dir: str | Path) -> list[dict[str, Any]]:
-    """``_provenance.jsonl`` を読む。無ければ空。壊れた行は飛ばす。"""
+def read(out_dir: str | Path) -> list[ProvenanceRecord]:
+    """``_provenance.jsonl`` を読む。無ければ空。**読めない行は飛ばす。**
+
+    古い版が書いたレコード (項目が少ない) も、新しい版が書いたレコード (知らない
+    項目がある) も読める。前者は既定値で、後者は ``extra="allow"`` で保持される。
+    """
     path = Path(out_dir) / PROVENANCE_FILE
     if not path.exists():
         return []
-    records = []
+    records: list[ProvenanceRecord] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(ProvenanceRecord.model_validate_json(line))
+        except Exception:
+            continue
     return records
 
 
-def latest(out_dir: str | Path, stage: str | None = None) -> dict[str, Any] | None:
+def latest(out_dir: str | Path, stage: str | None = None) -> ProvenanceRecord | None:
     """いちばん新しいレコード。``stage`` を渡せばその工程のうちで。"""
-    records = [r for r in read(out_dir) if stage is None or r.get("stage") == stage]
+    records = [r for r in read(out_dir) if stage is None or r.stage == stage]
     return records[-1] if records else None
 
 
-def scan(root: str | Path, stage: str | None = None) -> list[dict[str, Any]]:
-    """``root`` 以下を歩き、フォルダ×工程ごとの最新を集める。
+class ScanHit(_Tolerant):
+    """:func:`scan` の 1 件。"""
 
-    返すのは ``{"dir": <root からの相対>, "record": <レコード>}`` の並び。
-    """
+    #: 歩き始めた場所からの相対パス。
+    dir: str
+    record: ProvenanceRecord
+
+
+def scan(root: str | Path, stage: str | None = None) -> list[ScanHit]:
+    """``root`` 以下を歩き、フォルダ×工程ごとの最新を集める。"""
     root = Path(root)
-    out: list[dict[str, Any]] = []
+    out: list[ScanHit] = []
     for path in sorted(root.rglob(PROVENANCE_FILE)):
-        by_stage: dict[str, dict[str, Any]] = {}
+        by_stage: dict[str, ProvenanceRecord] = {}
         for rec in read(path.parent):
-            if stage is not None and rec.get("stage") != stage:
+            if stage is not None and rec.stage != stage:
                 continue
-            by_stage[str(rec.get("stage"))] = rec      # 後勝ち = 最新
+            by_stage[rec.stage] = rec      # 後勝ち = 最新
         for rec in by_stage.values():
             try:
                 rel = path.parent.relative_to(root).as_posix()
             except ValueError:
                 rel = str(path.parent)
-            out.append({"dir": rel or ".", "record": rec})
+            out.append(ScanHit(dir=rel or ".", record=rec))
     return out
 
 
-def describe(rec: dict[str, Any] | None) -> str:
-    """レコードを 1 行にする (一覧表示用)。"""
-    if not rec:
-        return "(no provenance)"
-    src = rec.get("source") or {}
-    commit = (src.get("commit") or "unknown")[:12]
-    dirty = src.get("dirty")
-    mark = "+dirty" if dirty else ("" if dirty is False else "+unknown")
-    return "%s %s%s %s" % (rec.get("stage", "?"), commit, mark,
-                           (rec.get("created_at") or "")[:19])
+def describe(rec: ProvenanceRecord | None) -> str:
+    """レコードを 1 行にする。無ければその旨。"""
+    return rec.short() if rec is not None else "(no provenance)"
 
 
 def cli(argv: list[str] | None = None) -> int:
@@ -339,7 +421,8 @@ def cli(argv: list[str] | None = None) -> int:
 
     found = scan(root, stage=args.stage)
     if args.json:
-        json.dump(found, sys.stdout, ensure_ascii=False, indent=1, default=str)
+        json.dump([h.model_dump(mode="json") for h in found], sys.stdout,
+                  ensure_ascii=False, indent=1, default=str)
         print()
         return 0
     if not found:
@@ -349,18 +432,17 @@ def cli(argv: list[str] | None = None) -> int:
 
     if args.by_commit:
         counter: Counter = Counter()
-        for item in found:
-            src = item["record"].get("source") or {}
-            counter[((src.get("commit") or "unknown")[:12], bool(src.get("dirty")),
-                     item["record"].get("stage"))] += 1
+        for hit in found:
+            src = hit.record.source
+            counter[((src.commit or "unknown")[:12], bool(src.dirty), hit.record.stage)] += 1
         print("%-14s %-6s %-22s %s" % ("commit", "dirty", "stage", "count"))
         for (commit, dirty, stage_name), n in counter.most_common():
             print("%-14s %-6s %-22s %d" % (commit, "yes" if dirty else "no", stage_name, n))
         return 0
 
     print("%-60s %s" % ("dir", "stage commit created_at"))
-    for item in found:
-        print("%-60s %s" % (item["dir"][:60], describe(item["record"])))
+    for hit in found:
+        print("%-60s %s" % (hit.dir[:60], hit.record.short()))
     return 0
 
 

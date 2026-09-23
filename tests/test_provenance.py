@@ -18,12 +18,12 @@ def test_record_writes_commit_and_is_readable(tmp_path: Path) -> None:
     assert out is not None and out.name == P.PROVENANCE_FILE
 
     rec = P.latest(tmp_path, "sorter")
-    assert rec is not None and rec["stage"] == "sorter"
-    assert rec["schema"] == P.SCHEMA_VERSION
-    commit = rec["source"]["commit"]
+    assert rec is not None and rec.stage == "sorter"
+    assert rec.schema_version == P.SCHEMA_VERSION
+    commit = rec.source.commit
     assert commit is None or (len(commit) == 40 and all(c in "0123456789abcdef" for c in commit))
-    assert rec["deps"]["python"]
-    assert rec["deps"]["package"]["name"] == "ylabcommon"
+    assert rec.deps.python
+    assert rec.deps.package.name == "ylabcommon"
 
 
 def test_record_appends_so_the_history_survives(tmp_path: Path) -> None:
@@ -32,9 +32,9 @@ def test_record_appends_so_the_history_survives(tmp_path: Path) -> None:
     P.record(tmp_path, "sorter", config={"a": 2})
     P.record(tmp_path, "aggregation", config={"b": 1})
 
-    assert [r["stage"] for r in P.read(tmp_path)] == ["sorter", "sorter", "aggregation"]
-    assert P.latest(tmp_path, "sorter")["config"] == {"a": 2}   # 後勝ち
-    assert P.latest(tmp_path)["stage"] == "aggregation"
+    assert [r.stage for r in P.read(tmp_path)] == ["sorter", "sorter", "aggregation"]
+    assert P.latest(tmp_path, "sorter").config == {"a": 2}   # 後勝ち
+    assert P.latest(tmp_path).stage == "aggregation"
 
 
 def test_adding_a_field_does_not_disturb_existing_records(tmp_path: Path) -> None:
@@ -47,10 +47,10 @@ def test_adding_a_field_does_not_disturb_existing_records(tmp_path: Path) -> Non
     P.record(tmp_path, "sorter", config={"a": 1}, extra={"new_field": "x"})
 
     first, second = P.read(tmp_path)
-    assert "extra" not in first            # 古い記録はそのまま
-    assert second["extra"] == {"new_field": "x"}
+    assert first.extra is None             # 古い記録はそのまま
+    assert second.extra == {"new_field": "x"}
     # 同じ設定なら hash は変わらない (項目を足しても)
-    assert first["source"]["config_hash"] == second["source"]["config_hash"]
+    assert first.source.config_hash == second.source.config_hash
 
 
 def test_config_hash_is_stable_and_discriminating() -> None:
@@ -88,7 +88,7 @@ def test_a_broken_line_does_not_hide_the_good_ones(tmp_path: Path) -> None:
         f.write("{not json\n")
     P.record(tmp_path, "aggregation")
 
-    assert [r["stage"] for r in P.read(tmp_path)] == ["sorter", "aggregation"]
+    assert [r.stage for r in P.read(tmp_path)] == ["sorter", "aggregation"]
 
 
 def test_reading_a_folder_without_a_record_is_empty_not_an_error(tmp_path: Path) -> None:
@@ -110,9 +110,9 @@ def test_scan_collects_the_latest_per_folder_and_stage(tmp_path: Path) -> None:
     P.record(tmp_path / "cond_B" / "s2", "aggregation")
 
     found = P.scan(tmp_path)
-    assert sorted((f["dir"], f["record"]["stage"]) for f in found) == [
+    assert sorted((f.dir, f.record.stage) for f in found) == [
         ("cond_A/s1", "sorter"), ("cond_B/s2", "aggregation")]
-    assert [f["dir"] for f in P.scan(tmp_path, stage="sorter")] == ["cond_A/s1"]
+    assert [f.dir for f in P.scan(tmp_path, stage="sorter")] == ["cond_A/s1"]
 
 
 def test_record_is_valid_jsonl(tmp_path: Path) -> None:
@@ -146,3 +146,56 @@ def test_cli_lists_and_groups(tmp_path: Path, capsys: pytest.CaptureFixture) -> 
 
     assert P.cli([str(tmp_path), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)
+
+
+# -------------------------------------------------------------------------
+#  版が行き違っても読めること。**記録は追記だけなので、ここが要点**
+# -------------------------------------------------------------------------
+
+def test_a_record_from_a_newer_version_keeps_its_unknown_fields(tmp_path: Path) -> None:
+    """知らない項目が来ても**捨てない**。
+
+    捨てると、新しい版が書いたレコードを古い版で読んで書き戻しただけで情報が減る。
+    項目を自由に足せることがこの設計の要点なので、読む側が落としてはいけない。
+    """
+    line = json.dumps({
+        "schema_version": 1, "stage": "sorter", "created_at": "2026-09-23T10:00:00+09:00",
+        "source": {"commit": "a" * 40, "dirty": False, "brand_new_source_field": 1},
+        "deps": {"python": "3.12.9", "brand_new_dep": "x"},
+        "some_future_top_level_field": {"k": "v"},
+    }, ensure_ascii=False)
+    (tmp_path / P.PROVENANCE_FILE).write_text(line + "\n", encoding="utf-8")
+
+    rec = P.latest(tmp_path)
+    assert rec is not None and rec.stage == "sorter"
+    assert rec.source.commit == "a" * 40
+    # 知らない項目が残っていること
+    dumped = rec.model_dump(mode="json")
+    assert dumped["some_future_top_level_field"] == {"k": "v"}
+    assert dumped["source"]["brand_new_source_field"] == 1
+    assert dumped["deps"]["brand_new_dep"] == "x"
+
+
+def test_a_record_from_an_older_version_still_reads(tmp_path: Path) -> None:
+    """項目が少ない古いレコードも、既定値で読める。"""
+    line = json.dumps({"stage": "sorter"}, ensure_ascii=False)
+    (tmp_path / P.PROVENANCE_FILE).write_text(line + "\n", encoding="utf-8")
+
+    rec = P.latest(tmp_path)
+    assert rec is not None
+    assert rec.stage == "sorter"
+    assert rec.source.commit is None      # 無い項目は None
+    assert rec.deps.python is None
+    assert rec.schema_version == P.SCHEMA_VERSION
+
+
+def test_the_record_model_is_typed(tmp_path: Path) -> None:
+    """属性でたどれること (dict の綴り違いで静かに None にならない)。"""
+    P.record(tmp_path, "sorter", config={"a": 1}, package="ylabcommon")
+    rec = P.latest(tmp_path)
+    assert isinstance(rec, P.ProvenanceRecord)
+    assert isinstance(rec.source, P.SourceRef)
+    assert isinstance(rec.deps, P.Deps)
+    assert isinstance(rec.deps.package, P.PackageRef)
+    assert isinstance(rec.deps.ylabcommon, P.YlabCommonRef)
+    assert rec.short().startswith("sorter ")

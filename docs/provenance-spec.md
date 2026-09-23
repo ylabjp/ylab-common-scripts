@@ -38,7 +38,7 @@ so: **記録は追記するだけ・誰も等値比較しない。** そうす�
 出力フォルダに `_provenance.jsonl`。**追記のみ**なので、作り直した履歴が残る。
 
 ```json
-{"schema": 1, "stage": "sorter", "created_at": "2026-09-23T10:11:12+09:00",
+{"schema_version": 1, "stage": "sorter", "created_at": "2026-09-23T10:11:12+09:00",
  "source": {"repo": "slice-analysis", "commit": "<40桁の sha>", "dirty": false,
             "script": "src/.../sorter.py", "config_hash": "<16桁>"},
  "deps": {"package": {"name": "sliceanalysis", "version": "0.1.0"},
@@ -46,6 +46,19 @@ so: **記録は追記するだけ・誰も等値比較しない。** そうす�
           "python": "3.12.9"},
  "config": {...}, "inputs": {...}, "host": "ws-hpc", "user": "shoyag"}
 ```
+
+型は pydantic (`ProvenanceRecord` / `SourceRef` / `Deps` / ...)。**厳しく検証する
+ためではない。** 記録は追記だけなので、**古い版が書いたレコードも新しい版が書いた
+レコードも読めなければ困る**。そこで:
+
+* すべての項目に既定値 —— 項目が増える前の古いレコードも読める
+* `extra="allow"` —— **知らない項目が来ても捨てずに保持する**。新しい版が足した
+  項目を古い版で読んで書き戻しても消えない
+* 読めない行は飛ばす
+
+つまり型は「決まった形を強制する」ためではなく、**項目名と意味を 1 か所に書いて
+おくため**と、**前後の版と行き違っても壊れないため**に使う。`SCHEMA_VERSION` は
+**項目を足しただけでは上げない**(足しても壊れないのがこの形の要点)。
 
 * `commit` は **短縮せず 40 桁**。短縮 sha は将来衝突しうるし復元もできない
   (reporting-spec と同じ方針)。表示側で短くする
