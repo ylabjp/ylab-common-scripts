@@ -199,3 +199,21 @@ def test_the_record_model_is_typed(tmp_path: Path) -> None:
     assert isinstance(rec.deps.package, P.PackageRef)
     assert isinstance(rec.deps.ylabcommon, P.YlabCommonRef)
     assert rec.short().startswith("sorter ")
+
+
+def test_a_precomputed_config_hash_can_be_passed_through(tmp_path: Path) -> None:
+    """呼び出し側が別の式で出したハッシュをそのまま入れられる。
+
+    behavior-analysis は `analysis_meta.yaml` に自前の式のハッシュを既に
+    3,346 件書いている。出所レコードだけ別の式にすると値が食い違って読めないので、
+    **既存の値に揃えられる**必要がある。
+    """
+    P.record(tmp_path, "preprocess_cc", config={"a": 1},
+             config_hash_value="59f4d3a28e9d721b")
+
+    rec = P.latest(tmp_path)
+    assert rec is not None
+    assert rec.source.config_hash == "59f4d3a28e9d721b"   # 渡した値がそのまま
+    assert rec.config == {"a": 1}                          # 設定自体も残る
+    # 渡さなければ従来どおり config から計算する
+    assert P.config_hash({"a": 1}) != "59f4d3a28e9d721b"

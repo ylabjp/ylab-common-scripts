@@ -78,6 +78,15 @@ provenance.record(out_dir, "sorter", config=image_param,
                   package="sliceanalysis", script=__file__)
 ```
 
+既に別の式でハッシュを出して他所に書いている場合は、`config_hash_value` でその値を
+そのまま入れる (behavior-analysis の `analysis_meta.yaml` がそれ。3,346 件の既存記録と
+値を揃える必要があるので、ここで計算し直さない):
+
+```python
+provenance.record(path, stage, config_hash_value=config_hash,
+                  package="behavior-analysis", script=__file__)
+```
+
 一覧・集計 (読むだけ。何も作り直さない):
 
 ```
