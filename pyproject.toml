@@ -41,6 +41,10 @@ dependencies = [
 ]
 license = {text = "MIT"}
 
+[project.scripts]
+# 解析結果がどの版のコードで作られたかを一覧する (読むだけ。何も作り直さない)。
+prov = "ylabcommon.provenance:cli"
+
 [optional-dependencies]
 dev = [
     "ipykernel>=6.29.5",
