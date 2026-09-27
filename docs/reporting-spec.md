@@ -177,7 +177,7 @@ third is a deliberate difference.
 
 | | `create_pdf_pages` + `close_fig` | `FigureStore` |
 | --- | --- | --- |
-| house rcParams (Arial, fonttype 42) | applied as an import side effect of `matplot_util` | applied by `FigureStore` (`house_style=True`, the default). Pass `house_style=False` to manage them yourself |
+| house rcParams (Arial incl. mathtext, fonttype 42) | applied as an import side effect of `matplot_util` | applied by `FigureStore` (`house_style=True`, the default). **Callers do not set fonts themselves.** Both paths raise `FontNotFoundError` if matplotlib cannot see Arial (regular, italic and bold); there is no fallback font |
 | closing the figure | `close_fig` called `plt.close()` | `save(..., close_figure=True)`. **Default is False** — a batch script that emits hundreds of figures must pass it or they accumulate |
 | `subplots_adjust` margins | `close_fig` applied fixed margins (`wspace=0.5, hspace=1.5, bottom=0.15, top=0.85, left=0.07, right=0.93`) | **not applied.** Call `plt.subplots_adjust(...)` yourself, or pass `bbox_inches="tight"` to `save` |
 

@@ -33,6 +33,19 @@ AI セッションから出た PR の作成者は、そのセッションを回�
 
 正: [repository-workflow.md](https://github.com/ylabjp/general/blob/main/docs/research-guidelines/80-operations/repository-workflow.md#ブランチ名)。
 
+## Reach the specified goal; do not build kind branches (always on)
+
+**指定したゴールにたどり着くことが目的である。** このシステムは専門家向けで、
+多様な使い方を許容しない。**親切な設計は、場合によってはゴールの位置を変えてしまう**
+（SY、2026-09-27）。
+
+* **条件が満たされないときは止める。** 代わりの値・代わりのフォント・代わりの経路へ
+  黙って（あるいは警告つきで）切り替える分岐を作らない。例: 図は Arial で描くと決めたので、
+  Arial が無ければ `FontNotFoundError` で止まる。DejaVu へ切り替える分岐は作らない
+* **症状ごとに回避策を積み上げない。** 以前の問題への対処として足された分岐も、
+  ゴールから見て要らなければ取り除く——AI が親切なものを積み上げていたので除去する
+* 設定の正本は 1 か所に置き、呼び出し側で設定し直さない（フォントは `utils/mpl_style.py`）
+
 ## Fill from evidence, never from helpfulness (always on)
 
 **ここは科学研究のリポジトリである。根拠があれば論理的に埋め、根拠が無ければ埋めない。
