@@ -94,6 +94,7 @@ __all__ = [
     "slot_bands",
     "slot_band_names",
     "slot_span",
+    "slot_sort_key",
     "slots_overlap",
 ]
 
@@ -249,6 +250,30 @@ def slots_overlap(a: Any, a_min: int, b: Any, b_min: int) -> bool:
     if sa is None or sb is None:
         return False
     return sa[0] < sb[1] and sb[0] < sa[1]
+
+
+def slot_sort_key(name: Any) -> Tuple[str, int, int, int]:
+    """1 予約を **実験台ごと、その中は実施時間順**に並べるためのキー。
+
+    ``bench`` の文字列をそのまま比べると ``"B10-10:30" < "B10-9:30"`` —— 文字と
+    しては ``'1' < '9'`` なので、**その日の 1 番目が一覧の最後に来る**。CC
+    controller のポップアップがそうなっていた(han、2026-09-28)。時刻として比べ
+    れば直る。
+
+    **書式のほうを 0 詰めして直さない。** 時を 0 詰めしないのは書式の決まりで
+    (behavior-config ``docs/plan-schema-spec.md`` の *実験台の予約は時刻で書く*)、
+    並べ替えの都合で保存する値を変えると、記録名にも Occupancy にも Google
+    Calendar にも出ている既存の値と食い違う。
+
+    実験台が先、時刻が後。読む人は「自分の PC のぶん」をひとかたまりで見て、その
+    中を上から順に実施する。時刻を持たない予約(旧 ``B10-01``、実験台だけ、空)は
+    **その実験台の時刻つきの予約より後**——いつとは言っていないので、時間軸のどこ
+    にも置けない。旧形式どうしはその日の実施順(``order``)で並ぶ。
+    """
+    ref = parse_slot(name)
+    if ref.start is not None:
+        return (ref.rig, 0, ref.start.hour * 60 + ref.start.minute, 0)
+    return (ref.rig, 1, 0, ref.order if ref.order is not None else 0)
 
 
 # 相対日ラベル(offset 日 -> 表示文字列)。表示は英語に統一している。
@@ -1142,7 +1167,9 @@ def find_scheduled_mice(
     「今日のマウス / Slot を選ぶ」ために使う。1 個体 × 1 予定日 = 1 :class:`ScheduledMouse`。
     ``task_param`` / ``photometry_param`` は個体別上書き → day の順で解決する。
 
-    ``window_days=0`` なら当日のみ。戻り値は offset(昇順)→ slot → prj → mouse_id 順。
+    ``window_days=0`` なら当日のみ。戻り値は **offset(昇順) → 実験台 → 開始時刻 →
+    prj → mouse_id** 順(:func:`slot_sort_key`)。CC controller のポップアップは
+    この順のまま並べるので、**1 台ぶんを上から読むと実施時間順**になる。
     """
     if ref_date is None:
         ref_date = DateType.today()
@@ -1202,5 +1229,5 @@ def find_scheduled_mice(
                         )
                     )
 
-    found.sort(key=lambda s: (s.offset, s.slot, s.prj, s.mouse_id))
+    found.sort(key=lambda s: (s.offset, slot_sort_key(s.slot), s.prj, s.mouse_id))
     return found

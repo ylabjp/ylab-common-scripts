@@ -35,6 +35,7 @@ from ylabcommon.models.plan import (  # noqa: E402
     parse_slot_time,
     slot_band_names,
     slot_bands,
+    slot_sort_key,
     slot_span,
     slots_overlap,
     find_scheduled_configs,
@@ -680,6 +681,49 @@ def test_a_rig_whose_name_ends_in_a_digit_is_not_a_run_number():
         assert (ref.rig, ref.order, ref.start) == (name, None, None), ref
     # 2 桁ならその実験台の実施順として読む
     assert parse_slot("Pseud-cham-3-02") == ("Pseud-cham-3-02", "Pseud-cham-3", None, 2)
+
+
+def test_slots_sort_by_the_clock_inside_a_rig_not_by_the_string():
+    """``9:30`` は ``10:30`` より前。文字列のままだと最後に来ていた。
+
+    ``bench`` の値をそのまま比べると ``"B10-10:30" < "B10-9:30"`` (``'1' < '9'``)
+    なので、**その日の 1 番目が一覧の最後**に来る。CC controller のポップアップが
+    そうなっていた (han、2026-09-28)。書式のほうを 0 詰めして直さない —— 時を 0
+    詰めしないのは書式の決まりなので、並べ替えは時刻として比べて直す。
+    """
+    same_rig = ["B10-9:30", "B10-10:30", "B10-12:00", "B10-8:30"]
+    assert sorted(same_rig) == ["B10-10:30", "B10-12:00", "B10-8:30", "B10-9:30"]
+    assert sorted(same_rig, key=slot_sort_key) == [
+        "B10-8:30", "B10-9:30", "B10-10:30", "B10-12:00"]
+
+
+def test_slot_sort_groups_by_rig_and_puts_the_untimed_last():
+    """実験台ごとにまとまり、その中が時間順。時刻を持たない予約はその台の最後。
+
+    読む人は「自分の PC のぶん」をひとかたまりで見て、その中を上から順に実施する。
+    旧形式 (``B10-01``) と実験台だけの値は「いつ」と言っていないので、時刻つきの
+    予約のうしろへ回す。旧形式どうしはその日の実施順で並ぶ。
+    """
+    mixed = ["B11-9:30", "B10-02", "B10-9:30", "B10", "B10-01", "B11-8:30"]
+    assert sorted(mixed, key=slot_sort_key) == [
+        "B10-9:30", "B10", "B10-01", "B10-02", "B11-8:30", "B11-9:30"]
+    assert slot_sort_key("")[0] == ""
+
+
+def test_scheduled_mice_come_out_in_running_order_per_rig():
+    """``find_scheduled_mice`` の並びがそのまま CC のポップアップの並びになる。"""
+    plan = _sample_plan()
+    plan.trials[0].mice[0].bench = {"day1": "B10-12:30"}
+    plan.trials[0].mice[1].bench = {"day1": "B10-9:30"}
+    plan.trials[0].mice.append(
+        PlanMouse(prj="prj27-3-5", mouse_id="m3", bench={"day1": "B11-10:00"}))
+    plan.trials[0].mice.append(
+        PlanMouse(prj="prj27-3-5", mouse_id="m4", bench={"day1": "B10-10:00"}))
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "OFL_Holmes_2026.yaml"))
+        mice = find_scheduled_mice(d, ref_date=date(2026, 4, 26), window_days=0)
+    assert [s.slot for s in mice] == [
+        "B10-9:30", "B10-10:00", "B10-12:30", "B11-10:00"]
 
 
 def test_slot_bands_run_from_the_first_band_to_the_last():
