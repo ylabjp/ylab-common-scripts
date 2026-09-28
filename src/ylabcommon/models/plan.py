@@ -38,7 +38,8 @@ except ImportError:  # pragma: no cover - libyaml 無しの環境
 # マウスの日ごと辞書。保存時はこれらだけ 1 行のフロー形式で書き、縦に伸びるのを防ぐ
 # (意味もキー集合も変えない。``bench: {day1: B10, day2: B10}`` のように出る)。
 PERDAY_DICT_KEYS = ("bench", "bw_before", "bw_after", "water_adjust", "phase", "session",
-                    "task_param", "photometry_param", "within_factor", "user", "session_min")
+                    "task_param", "photometry_param", "within_factor", "user", "session_min",
+                    "administration")
 
 
 class _FlowMap(dict):
@@ -60,6 +61,8 @@ __all__ = [
     "USING_LIBYAML",
     "Period",
     "CCConfig",
+    "Drug",
+    "Administration",
     "PlanDay",
     "ProgramStep",
     "ResolvedDay",
@@ -315,19 +318,99 @@ class CCConfig(BaseModel):
     config_dir: str = ""
 
 
+class Drug(BaseModel):
+    """投与する薬剤 1 種の定義 (:attr:`ExperimentPlan.drugs` の値)。
+
+    用量をステップごとに書き写さないために、**計画の先頭で 1 度だけ宣言**して
+    :attr:`Administration.drug` から短い別名で指す
+    (``Sul`` -> ``{name: sulpiride, dose: 10, unit: mg/kg, route: ip}``)。
+
+    ここは「薬剤そのもの」の性質だけを持ち、**いつ打つか**は持たない。
+    同じ薬を別の用量で使う日は :attr:`Administration.dose` で上書きする。
+    """
+
+    name: str = ""                  # 一般名 (sulpiride / DCZ / saline)
+    dose: Optional[float] = None    # 既定用量。日ごとに変えるなら Administration 側
+    unit: str = ""                  # mg/kg / mg/ml / ug/ul など
+    route: str = ""                 # ip / sc / po / iv / icv
+    vehicle: str = ""               # 溶媒 (saline / DMSO 1% など)
+    note: Optional[str] = None
+
+
+class Administration(BaseModel):
+    """1 回の薬剤投与。**何を・どれだけ・セッション開始の何分前(後)に**。
+
+    予約の長さ (``session_min``) や :attr:`PlanMouse.within_factor` の綴りから
+    **逆算してはならない**。札は命名の約束であって宣言ではなく、実際に計画と
+    食い違う (13-5 の phase4 以降は投与があるのに札は ``bTsk-woFib``)。
+    投与は計画の情報なので、計画がこの形で明示する
+    (SY、2026-09-28。behavior-config#162 のレビュー)。
+
+    - ``drug``: :attr:`ExperimentPlan.drugs` のキー。宣言が無ければ薬剤名そのもの
+      として扱う (1 回しか使わない薬をわざわざ宣言させない)。
+    - ``offset_min``: セッション開始を 0 とした分。**負 = 開始前、正 = 開始後**。
+      「30 分前」は ``-30``、「投与して 15 分後に走らせる」も同じ ``-15``、
+      「セッション後に打つ」は ``+10`` のように書く。0 は直前。
+      **30 分という数はデータであって定数ではない** ので、プロトコルが変われば
+      ここだけが変わる。
+    - ``dose`` / ``unit`` / ``route``: :class:`Drug` の宣言をその回だけ上書きする
+      ときに入れる (用量反応曲線など)。空なら宣言の値。
+    """
+
+    drug: str = ""
+    offset_min: int = 0
+    dose: Optional[float] = None
+    unit: str = ""
+    route: str = ""
+    note: Optional[str] = None
+
+    @property
+    def before_min(self) -> int:
+        """セッション開始の何分前に作業が要るか。開始後の投与なら 0。
+
+        Occupancy が「開始 N 分前に作業が要る実験」を出すのに使う。
+        """
+        return -self.offset_min if self.offset_min < 0 else 0
+
+
+def _as_administrations(v: Any) -> Any:
+    """``administration`` の値を常に list へ正規化する。
+
+    1 回だけの投与を ``administration: {drug: Sul, offset_min: -30}`` と 1 行で
+    書けるようにしつつ、**2 剤を同じ日に打つ** (vehicle + 薬、拮抗薬の前投与) も
+    同じ項目で書けるようにするため。空・None は「投与なし」。
+    """
+    if v is None or v == "" or v == {}:
+        return []
+    if isinstance(v, dict):
+        return [v]
+    return v
+
+
 class ProgramStep(BaseModel):
     """実験プログラムの 1 ステップ。Plan 直下 (:attr:`ExperimentPlan.program`)。
 
     プログラムは「何を・どの順で」だけを持ち、**日付も day 番号も持たない**。
     配列の index が実施順そのもの。実時間への割り当ては Trial が行う
     (:meth:`ExperimentPlan.resolve_trial`)。
+
+    ``administration`` は**そのステップで行う薬剤投与**
+    (:class:`Administration`)。1 件なら辞書 1 つ、2 剤なら list で書ける。
+    個体・日ごとに違う日は :attr:`PlanMouse.administration` が上書きする
+    (解決は :meth:`ExperimentPlan.administration_for`)。
     """
 
     phase: str = ""
     session: Optional[int] = None
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
+    administration: List[Administration] = Field(default_factory=list)
     note: Optional[str] = None
+
+    @field_validator("administration", mode="before")
+    @classmethod
+    def _norm_administration(cls, v: Any) -> Any:
+        return _as_administrations(v)
 
 
 class PlanDay(BaseModel):
@@ -397,6 +480,7 @@ class ResolvedDay(BaseModel):
     session: Optional[int] = None
     task_param: Optional[str] = None
     photometry_param: Optional[str] = None
+    administration: List[Administration] = Field(default_factory=list)
     note: Optional[str] = None
 
     @property
@@ -484,6 +568,12 @@ class PlanMouse(BaseModel):
     から選ぶ。標準は無く、指定した日だけ入れる。
     ``user`` は day ラベル -> その個体・その日の実験実施者(例 ``{"day01": "Etani"}``)
     の辞書。候補は settings.yaml の ``users`` リスト。指定した日だけ入れる。
+    ``administration`` は day ラベル -> その個体・その日の薬剤投与
+    (:class:`Administration` の list)。ステップの標準
+    (:attr:`ProgramStep.administration`) を**その日その個体だけ変えたいとき**に入れる
+    (用量を変える、その個体だけ vehicle、など)。``[]`` を明示すれば
+    「この日この個体は投与しない」になる。解決は
+    :meth:`ExperimentPlan.administration_for`。
     その他の当日測定値は ``extra`` に自由に保持できる(後方互換のため許容)。
 
     個体の基礎情報:
@@ -568,6 +658,16 @@ class PlanMouse(BaseModel):
     photometry_param: Dict[str, str] = Field(default_factory=dict)
     within_factor: Dict[str, str] = Field(default_factory=dict)
     user: Dict[str, str] = Field(default_factory=dict)
+    #: day ラベル -> その個体・その日の薬剤投与。ステップの標準を上書きする日だけ入れる。
+    administration: Dict[str, List[Administration]] = Field(default_factory=dict)
+
+    @field_validator("administration", mode="before")
+    @classmethod
+    def _norm_administration(cls, v: Any) -> Any:
+        """各日の値を list へ揃える(1 件なら辞書 1 つで書けるようにする)。"""
+        if not isinstance(v, dict):
+            return v
+        return {k: _as_administrations(x) for k, x in v.items()}
     #: Plan が宣言した追加列の値。``{列キー: {day ラベル: 値}}``。
     custom: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     note: Optional[str] = None
@@ -610,6 +710,13 @@ class ExperimentPlan(BaseModel):
     ``within_factors`` は within-subject 因子の候補リスト。Per-day で各個体・各日の
     :attr:`PlanMouse.within_factor` を選ぶときの選択肢になる。
 
+    薬剤投与:
+    - ``drugs``: この計画で使う薬剤の宣言 (``{別名: Drug}``)。用量・単位・経路を
+      1 度だけ書き、:attr:`ProgramStep.administration` の ``drug`` から別名で指す。
+    - 「いつ打つか」は :class:`Administration` が持つ (``offset_min``。負 = 開始前)。
+      **予約の長さや within_factor の綴りから投与を逆算しない**
+      (:class:`Administration` の注記)。
+
     給水(絶水)管理:
     - ``bodyweight_management``: この計画で体重管理を行うか。**既定は False**。
       週シート(体重表)に出るのは True の計画だけで、取り込みも True の計画にしか
@@ -636,6 +743,8 @@ class ExperimentPlan(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     within_factors: List[str] = Field(default_factory=list)
+    #: 薬剤の宣言。``{別名: Drug}``。:attr:`ProgramStep.administration` から別名で指す。
+    drugs: Dict[str, Drug] = Field(default_factory=dict)
     custom_columns: List["CustomColumn"] = Field(default_factory=list)
     bodyweight_management: bool = False
     water_restriction_ratio: Optional[float] = None
@@ -667,6 +776,45 @@ class ExperimentPlan(BaseModel):
         """
         own = (mouse.session_min or {}).get(day_label) if mouse is not None else None
         return int(own) if isinstance(own, int) and own > 0 else self.slot_minutes
+
+    def administration_for(self, mouse: Optional["PlanMouse"], day_label: str,
+                           day: Any = None) -> List[Administration]:
+        """その個体・その日に行う薬剤投与。**個体・日ごと → ステップ → 無し** の順。
+
+        ``day`` には :class:`ResolvedDay` (:meth:`resolve_trial` の返り値) か、
+        凍結済みの :class:`PlanDay` を渡す。渡さなければ個体側の上書きだけを見る。
+
+        個体側にキーがあれば、値が空 list でもそれを採る (「この日この個体は
+        投与しない」を書けるようにするため)。
+        """
+        if mouse is not None:
+            own = mouse.administration or {}
+            if day_label in own:
+                return list(own[day_label] or [])
+        if day is None:
+            return []
+        step = getattr(day, "step", None)          # 凍結した PlanDay なら step 側
+        src = step if step is not None else day
+        return list(getattr(src, "administration", None) or [])
+
+    def drug_of(self, admin: Administration) -> Drug:
+        """投与 1 件を、:attr:`drugs` の宣言と併せて 1 つの :class:`Drug` にする。
+
+        宣言が無い別名は名前そのものとして扱い、``administration`` 側に書かれた
+        用量・単位・経路だけを持つ :class:`Drug` を返す。宣言があれば、
+        ``administration`` 側に書かれた項目だけが宣言を上書きする。
+        """
+        base = self.drugs.get(admin.drug)
+        d = base.model_copy(deep=True) if base is not None else Drug(name=admin.drug)
+        if not d.name:
+            d.name = admin.drug
+        if admin.dose is not None:
+            d.dose = admin.dose
+        if admin.unit:
+            d.unit = admin.unit
+        if admin.route:
+            d.route = admin.route
+        return d
 
     @model_validator(mode="before")
     @classmethod
@@ -728,6 +876,7 @@ class ExperimentPlan(BaseModel):
                     day=d.day, phase=d.step.phase, session=d.step.session,
                     task_param=d.step.task_param,
                     photometry_param=d.step.photometry_param,
+                    administration=list(d.step.administration),
                     note=d.note or d.step.note))
                 continue
             st = next(steps, None)
@@ -743,6 +892,7 @@ class ExperimentPlan(BaseModel):
             out.append(ResolvedDay(
                 day=d.day, phase=st.phase, session=sess,
                 task_param=st.task_param, photometry_param=st.photometry_param,
+                administration=list(st.administration),
                 note=d.note or st.note))
         return out
 
@@ -757,11 +907,13 @@ class ExperimentPlan(BaseModel):
         for day, r in zip(trial.days, self.resolve_trial(trial)):
             if day.skip or day.step is not None:
                 continue
-            if not (r.phase or r.task_param or r.photometry_param or r.session):
+            if not (r.phase or r.task_param or r.photometry_param or r.session
+                    or r.administration):
                 continue
             day.step = ProgramStep(
                 phase=r.phase, session=r.session, task_param=r.task_param,
-                photometry_param=r.photometry_param)
+                photometry_param=r.photometry_param,
+                administration=list(r.administration))
             n += 1
         return n
 
@@ -825,8 +977,8 @@ class ScheduledMouse(BaseModel):
     CC controller / video recorder が「今日のマウス / Slot を選ぶ」ための情報。
     config(``config_dir`` / ``task_param`` / ``photometry_param``)に加えて、個体メタ
     (``prj`` / ``cond`` / ``mouse_id`` / ``within_factor`` / ``slot`` 等)を持つ。
-    ``task_param`` / ``photometry_param`` は **個体別上書き → day**の順で
-    解決済みの実効値。
+    ``task_param`` / ``photometry_param`` / ``administration`` は
+    **個体別上書き → day** の順で解決済みの実効値。
     """
 
     offset: int
@@ -850,6 +1002,8 @@ class ScheduledMouse(BaseModel):
     sex: str = ""
     ear_tag: str = ""
     within_factor: str = ""   # その day の水準
+    #: その個体・その日の薬剤投与 (個体別上書き -> ステップの順で解決済み)。
+    administration: List[Administration] = Field(default_factory=list)
 
     @property
     def rel_label_ja(self) -> str:
@@ -923,12 +1077,34 @@ def load_plan(path: Union[str, Path]) -> ExperimentPlan:
     return ExperimentPlan.model_validate(data)
 
 
+def _flow_administration(holder: Any) -> None:
+    """``administration`` の各要素を 1 行(フロー形式)で書き出すよう印を付ける。"""
+    if not isinstance(holder, dict):
+        return
+    admin = holder.get("administration")
+    if isinstance(admin, list):
+        holder["administration"] = [_FlowMap(a) if isinstance(a, dict) and a else a
+                                    for a in admin]
+
+
 def save_plan(plan: ExperimentPlan, path: Union[str, Path]) -> None:
     """実験計画を YAML として書き出す(既定値/None 項目は省略して読みやすく)。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # exclude_defaults: 空の periods / days / mice や未設定項目を書かず簡潔に保つ。
     data = plan.model_dump(mode="python", exclude_defaults=True)
+    # 薬剤の宣言と投与の 1 件は 1 行で書く。縦に伸ばすと program の表が読めなくなる
+    # (内容は一切変えない)。
+    drugs = data.get("drugs")
+    if isinstance(drugs, dict):
+        for alias, spec in list(drugs.items()):
+            if isinstance(spec, dict) and spec:
+                drugs[alias] = _FlowMap(spec)
+    for step in (data.get("program") or []):
+        _flow_administration(step)
+    for trial in data.get("trials", []) or []:
+        for day in (trial.get("days") or []):
+            _flow_administration(day.get("step"))
     # 日ごとの辞書は 1 行にまとめる。1 日 1 行だと 1 個体で数百行になり、
     # 実験内容より体重表のほうが長くなってしまうため(内容は一切変えない)。
     for trial in data.get("trials", []) or []:
@@ -1208,6 +1384,7 @@ def find_scheduled_mice(
                         (m.photometry_param.get(label) if label else None)
                         or day.photometry_param
                     )
+                    admin = plan.administration_for(m, label, day)
                     found.append(
                         ScheduledMouse(
                             offset=offset,
@@ -1230,6 +1407,7 @@ def find_scheduled_mice(
                             sex=m.sex or "",
                             ear_tag=m.ear_tag or "",
                             within_factor=(m.within_factor.get(label, "") if label else ""),
+                            administration=admin,
                         )
                     )
 

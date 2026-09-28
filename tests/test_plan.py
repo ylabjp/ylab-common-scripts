@@ -18,8 +18,10 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from ylabcommon.models.plan import (  # noqa: E402
+    Administration,
     CCConfig,
     DEFAULT_SESSION_MIN,
+    Drug,
     ExperimentTrial,
     ExperimentPlan,
     Period,
@@ -805,6 +807,172 @@ def test_plan_declares_how_long_one_booking_holds_the_rig():
         assert "session_min: 35" in open(p, encoding="utf-8").read()
         assert load_plan(p).slot_minutes == 35
 
+
+
+# ------------------------------------------------------- 薬剤投与 (administration)
+
+def _dosing_plan() -> ExperimentPlan:
+    """投与を計画が明示している計画。30 分という数はデータとして入っている。"""
+    return ExperimentPlan(
+        session_min=30,
+        drugs={
+            "Sul": Drug(name="sulpiride", dose=10, unit="mg/kg", route="ip", vehicle="saline"),
+            "Veh": Drug(name="saline", unit="ml/kg", route="ip"),
+        },
+        cc_config=CCConfig(config_dir="config_3CSRTT_2022"),
+        program=[
+            ProgramStep(phase="1", task_param="before_task.json"),
+            ProgramStep(phase="4", session=11, task_param="phase4_3choice.json",
+                        administration=[Administration(drug="Sul", offset_min=-30)]),
+            ProgramStep(phase="5", task_param="phase5_3choice.json",
+                        administration=[Administration(drug="Veh", offset_min=-30)]),
+        ],
+        trials=[
+            ExperimentTrial(
+                name="prj-STR-13-5-7",
+                period=Period(start=date(2026, 10, 5)),
+                days=[PlanDay(day=1), PlanDay(day=2), PlanDay(day=3)],
+                mice=[PlanMouse(mouse_id="B1234", prj="prj-STR-13-5-7",
+                                bench={"day1": "B10-9:30", "day2": "B10-9:30",
+                                       "day3": "B10-9:30"})],
+            )
+        ],
+    )
+
+
+def test_administration_is_declared_by_the_plan_not_guessed_from_the_booking():
+    """投与の有無は ``administration`` が言う。予約の長さや札からは読まない。
+
+    30 分の枠だから投与、``within_factor`` に ``aInj`` と書いてあるから投与、では
+    札と実態が食い違ったときに黙って飲み込む(SY、2026-09-28。behavior-config#162)。
+    """
+    plan = _dosing_plan()
+    tr = plan.trials[0]
+    m = tr.mice[0]
+    days = plan.resolve_trial(tr)
+    got = [[a.drug for a in plan.administration_for(m, d.label, d)] for d in days]
+    assert got == [[], ["Sul"], ["Veh"]], got
+    # 枠の長さは投与とは別の話。30 分の日でも投与を宣言していなければ投与ではない。
+    plan.program[0].administration = []
+    assert plan.slot_minutes_for(m, "day1") == 30
+    assert plan.administration_for(m, "day1", plan.resolve_trial(tr)[0]) == []
+    # 札も根拠にならない。within_factor を付けても投与は生えない。
+    m.within_factor["day1"] = "bTsk-aInjSul-woFib"
+    assert plan.administration_for(m, "day1", plan.resolve_trial(tr)[0]) == []
+
+
+def test_administration_offset_says_how_long_before_the_session():
+    """``offset_min`` は負が開始前・正が開始後。30 は定数ではなくデータ。"""
+    before30 = Administration(drug="Sul", offset_min=-30)
+    before60 = Administration(drug="Sul", offset_min=-60)
+    after10 = Administration(drug="Sul", offset_min=10)
+    at_start = Administration(drug="Sul")
+    assert before30.before_min == 30
+    assert before60.before_min == 60          # プロトコルが変わればここだけ変わる
+    assert after10.before_min == 0            # 開始後の投与は「前の作業」ではない
+    assert at_start.offset_min == 0 and at_start.before_min == 0
+
+
+def test_administration_accepts_one_mapping_or_several():
+    """1 件は辞書 1 つで書ける。2 剤打つ日は list で同じ項目に書ける。"""
+    one = ProgramStep.model_validate(
+        {"phase": "4", "administration": {"drug": "Sul", "offset_min": -30}})
+    assert [a.drug for a in one.administration] == ["Sul"]
+    two = ProgramStep.model_validate({"phase": "4", "administration": [
+        {"drug": "Veh", "offset_min": -30}, {"drug": "Sul", "offset_min": -30, "dose": 3}]})
+    assert [(a.drug, a.dose) for a in two.administration] == [("Veh", None), ("Sul", 3.0)]
+    for empty in (None, "", {}, []):
+        assert ProgramStep.model_validate(
+            {"phase": "4", "administration": empty}).administration == []
+
+
+def test_administration_resolves_mouse_day_then_step():
+    """解決順は既存の task_param と同じ **個体・日ごと → ステップ → 無し**。"""
+    plan = _dosing_plan()
+    tr = plan.trials[0]
+    m = tr.mice[0]
+    m.administration = PlanMouse.model_validate(
+        {"administration": {"day2": {"drug": "Veh", "offset_min": -30}, "day3": []}}
+    ).administration
+    days = {d.label: d for d in plan.resolve_trial(tr)}
+    # day2: ステップは Sul だが、この個体この日は vehicle
+    assert [a.drug for a in plan.administration_for(m, "day2", days["day2"])] == ["Veh"]
+    # day3: 空 list を明示 = この日この個体は投与しない(ステップの Veh を消す)
+    assert plan.administration_for(m, "day3", days["day3"]) == []
+    # 上書きの無い個体はステップどおり
+    other = PlanMouse(mouse_id="B9999")
+    assert [a.drug for a in plan.administration_for(other, "day3", days["day3"])] == ["Veh"]
+    # day を渡さなければ個体側の上書きだけを見る
+    assert plan.administration_for(other, "day2") == []
+
+
+def test_drug_declaration_supplies_the_dose_and_the_step_can_override_it():
+    """用量・単位・経路は ``drugs`` で 1 度だけ宣言し、その回だけ上書きできる。"""
+    plan = _dosing_plan()
+    d = plan.drug_of(Administration(drug="Sul", offset_min=-30))
+    assert (d.name, d.dose, d.unit, d.route, d.vehicle) == (
+        "sulpiride", 10.0, "mg/kg", "ip", "saline")
+    low = plan.drug_of(Administration(drug="Sul", offset_min=-30, dose=3))
+    assert (low.name, low.dose, low.unit) == ("sulpiride", 3.0, "mg/kg")
+    assert plan.drugs["Sul"].dose == 10.0      # 宣言は書き換えない
+    # 宣言の無い別名は名前そのものとして扱う(1 回しか使わない薬を宣言させない)
+    once = plan.drug_of(Administration(drug="Clz", dose=1, unit="mg/kg", route="ip"))
+    assert (once.name, once.dose, once.unit, once.route) == ("Clz", 1.0, "mg/kg", "ip")
+
+
+def test_administration_survives_save_and_load():
+    plan = _dosing_plan()
+    plan.trials[0].mice[0].administration = PlanMouse.model_validate(
+        {"administration": {"day3": {"drug": "Veh", "offset_min": -30}}}).administration
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "analysis-13-5.yaml")
+        save_plan(plan, f)
+        text = open(f, encoding="utf-8").read()
+        # 薬剤の宣言と投与の 1 件は 1 行で出る(program の表を読めるままにする)
+        assert "Sul: {name: sulpiride" in text, text
+        assert "- {drug: Sul, offset_min: -30}" in text, text
+        assert "administration: {day3: [{drug: Veh, offset_min: -30}]}" in text, text
+        back = load_plan(f)
+        assert back.model_dump() == plan.model_dump()
+        m = back.trials[0].mice[0]
+        days = {x.label: x for x in back.resolve_trial(back.trials[0])}
+        assert [a.drug for a in back.administration_for(m, "day2", days["day2"])] == ["Sul"]
+        assert [a.drug for a in back.administration_for(m, "day3", days["day3"])] == ["Veh"]
+
+
+def test_freezing_burns_the_administration_into_the_day():
+    """凍結した日は program を参照しない。投与も一緒に焼き付ける。"""
+    plan = _dosing_plan()
+    tr = plan.trials[0]
+    assert plan.freeze_trial(tr) == 3
+    assert [a.drug for a in tr.days[1].step.administration] == ["Sul"]
+    plan.program = []                          # program をあとで書き換えても
+    days = plan.resolve_trial(tr)
+    assert [a.drug for a in days[1].administration] == ["Sul"]   # 過去は動かない
+    assert [a.drug for a in plan.administration_for(tr.mice[0], "day2", tr.days[1])] == ["Sul"]
+
+
+def test_scheduled_mouse_carries_the_administration():
+    """CC controller / Occupancy が読む 1 行にも投与が乗る。"""
+    plan = _dosing_plan()
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "analysis-13-5.yaml"))
+        rows = find_scheduled_mice(d, date(2026, 10, 6), window_days=0)   # day2
+    assert len(rows) == 1
+    assert [a.drug for a in rows[0].administration] == ["Sul"]
+    assert [a.before_min for a in rows[0].administration] == [30]
+    # 投与の無い日は空。項目が無いのではなく「投与なし」と分かる
+    with tempfile.TemporaryDirectory() as d:
+        save_plan(plan, os.path.join(d, "analysis-13-5.yaml"))
+        rows = find_scheduled_mice(d, date(2026, 10, 5), window_days=0)   # day1
+    assert rows and rows[0].administration == []
+
+
+def test_administration_is_a_perday_key_so_the_editor_keeps_that_day():
+    """日ごとの値として扱う。投与だけを持つ日が空扱いで落ちないようにする。"""
+    from ylabcommon.models.plan import PERDAY_DICT_KEYS, RESERVED_CUSTOM_KEYS
+    assert "administration" in PERDAY_DICT_KEYS
+    assert "administration" in RESERVED_CUSTOM_KEYS   # 追加列の名前には使えない
 
 if __name__ == "__main__":
     raise SystemExit(_run_standalone())
