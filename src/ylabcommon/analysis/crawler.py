@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -403,13 +405,91 @@ class GenericCrawler:
         target = log_dir / f"analysis_log_{timestamp}.csv"
         self.get_log().to_csv(target,index=False)
         
+# ============================================================
+# 読まないフォルダ (どの段でも)
+# ============================================================
+#
+# crawler は cond / mouse / day / cell のどの段でも、次の名前のフォルダへ降りない。
+#
+# * **人が退避したもの** —— 名前が ``_`` で始まる (``_XYZ-T_..._failed_experiment``、
+#   ``_before_redo_*``、``_backup_results``、``_..._needs-clarification``)
+# * **データではないもの** —— 名前が ``@`` で始まる (Synology の ``@eaDir``)、または Synology が
+#   予約している名前そのもの (``#recycle``、``#snapshot``)。``#`` で始まる名前を頭で外しては
+#   いけない: **データにもある** (raw-slice の Keyence の木の ``#775``、``#824-826`` は個体番号。
+#   2026-10-06 に確かめた)
+#
+# crawler を通らずに数える・探す道具 (回す前の dry-run、深さを決めずに探す検査) も、この規則を
+# 使うこと (:func:`is_skipped_name` / :func:`is_skipped_path` / :func:`find_in_tree`)。呼び出し側で
+# 写すと食い違う: 2026-10-06 に slice-analysis で 13 モジュール 23 か所が別々の規則を書いていて
+# (``_`` だけ見て ``@`` を見ない、何も外さない)、``agge --dry-run`` は退避した 72 セッションも
+# 数えていた。behavior-analysis の ``gui/models/day_scan.py`` にも写しがある。
+
+#: 人が退避したフォルダの名前の頭。
+SET_ASIDE_PREFIX = "_"
+#: データではないフォルダの名前の頭 (Synology の ``@eaDir``)。
+SYSTEM_PREFIX = "@"
+#: データではないフォルダの名前そのもの (Synology のごみ箱とスナップショット)。
+SYSTEM_NAMES: frozenset[str] = frozenset({"#recycle", "#snapshot"})
+
+
+def is_set_aside_name(name: str) -> bool:
+    """人が退避したフォルダの名前か (``_`` で始まる)。"""
+    return str(name).startswith(SET_ASIDE_PREFIX)
+
+
+def is_system_name(name: str) -> bool:
+    """データではないフォルダの名前か (``@`` で始まる、または ``#recycle`` / ``#snapshot``)。"""
+    name = str(name)
+    return name.startswith(SYSTEM_PREFIX) or name in SYSTEM_NAMES
+
+
+def is_skipped_name(name: str, include_set_aside: bool = False) -> bool:
+    """crawler が降りない名前か。
+
+    ``include_set_aside`` を立てると、人の退避 (``_``) には降りる (退避したものも見たい道具用)。
+    データではないフォルダには、立てても降りない。
+    """
+    return is_system_name(name) or (not include_set_aside and is_set_aside_name(name))
+
+
+def is_skipped_path(path: Path | str, root: Path | str, include_set_aside: bool = False) -> bool:
+    """``root`` より下のどこかの段 (``path`` 自身を含む) が、crawler の降りない名前か。
+
+    深さを決めずに見つけたものをこれで外すと、crawler が降りるところだけが残る。``root``
+    自身とその上は見ない。``path`` が ``root`` の下に無ければ False。
+    """
+    try:
+        rel = Path(path).relative_to(Path(root))
+    except ValueError:
+        return False
+    return any(is_skipped_name(part, include_set_aside) for part in rel.parts)
+
+
+def find_in_tree(root: Path | str, pattern: str, include_set_aside: bool = False) -> List[Path]:
+    """``root`` 以下で名前が ``pattern`` に当たるもの (ファイルもフォルダも) を名前順に。
+
+    深さは決めない (取り込んだ後に並べ替えられた出力でも見つかる)。**crawler が降りない
+    フォルダの下へは降りない** (:func:`is_skipped_name`)。降りないフォルダそのものは、名前が
+    ``pattern`` に当たれば返す (``_before_redo_*`` を名前で探すとき)。降りない以外は
+    「``Path.rglob`` してから :func:`is_skipped_path` で外す」と同じ答えで、退避の下を読まない
+    ぶん往復が少ない (ネットワークドライブでは往復の数で決まる)。照合は ``rglob`` と同じく
+    大文字小文字を区別する。無いフォルダには空を返す。
+    """
+    base = Path(root)
+    if not base.is_dir():
+        return []
+    found = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        for name in dirnames + filenames:
+            if fnmatch.fnmatchcase(name, pattern):
+                found.append(Path(dirpath) / name)
+        dirnames[:] = [d for d in dirnames if not is_skipped_name(d, include_set_aside)]
+    return sorted(found)
+
+
 def __filter_dir_basic(d: Path) -> bool:
-    name = d.name
-    if not d.is_dir():
-        return False
-    if name[0] in ("_", "@"):
-        return False
-    return True
+    """crawler が降りるフォルダか (規則は上の「読まないフォルダ」)。"""
+    return d.is_dir() and not is_skipped_name(d.name)
 
 
 # ============================================================
@@ -634,6 +714,15 @@ def build_slice_prj_tree(prj_root: Path) -> List[SlicePrjNode]:
     )
 
     return nodes
+
+
+def slice_prj_session_dirs(prj_root: Path | str) -> List[Path]:
+    """slice の prj の木で crawler が読むセッション (``cond*/*XY*``) のフォルダを、木の順に。
+
+    :func:`build_slice_prj_tree` の葉そのもの。回す前に対象を数える (dry-run) ときや一覧を
+    出すときに使う —— 自前で glob すると、退避 (``_``) したセッションまで数える。
+    """
+    return [cell.path for cond in build_slice_prj_tree(Path(prj_root)) for cell in cond.children]
 
 
 def build_slice_raw_tree(prj_root: Path) -> List[SliceRawNode]:
