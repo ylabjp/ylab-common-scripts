@@ -105,7 +105,17 @@ def close_fig(pp: Any, wspace: float = 0.5, hspace: float = 1.5, bottom: float =
     plt.close()
 
 
-def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame) -> None:
+def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame,
+                 edgecolor: Any = None) -> None:
+    """条件 1 つの棒 (平均 ± SEM) と、1 単位ずつの点を描く。
+
+    ``edgecolor`` を渡すと、``color`` は棒の塗りだけに使い、棒の縁と誤差棒を ``edgecolor`` にする。
+    点は白で塗って縁を ``edgecolor`` にする。塗りが黒でも白でも点が見えるようにするため
+    (条件を黒 → 灰 → 白の段階で見せる図。slice-analysis の ``analysis_info[].cond[].edgecolor``)。
+    渡さなければこれまでと同じ (縁も誤差棒も ``color``、点は ``color`` を暗くした色)。
+    """
+    # 縁と誤差棒の色。edgecolor が無ければ塗りと同じ (従来)
+    line = color if edgecolor is None else edgecolor
     if y_data is None:
         ax.bar(
             cond_label,
@@ -113,8 +123,8 @@ def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame) ->
             yerr=[[0], [0]],
             width=0.5,
             color=color,
-            edgecolor=color,
-            ecolor=color,
+            edgecolor=line,
+            ecolor=line,
             align="center",
             alpha=1,
             zorder=-1,
@@ -138,8 +148,8 @@ def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame) ->
         yerr=y_err,
         width=0.5,
         color=color,
-        edgecolor=color,
-        ecolor=color,
+        edgecolor=line,
+        ecolor=line,
         align="center",
         alpha=1,
         zorder=-1,
@@ -150,15 +160,19 @@ def standard_bar(ax: Axes, cond_label: Any, color: Any, y_data: pd.DataFrame) ->
             "capthick": STANDARD_FIGURE_SIZE.LINE_WIDTH
         }
     )
+    if edgecolor is None:
+        dots: dict[str, Any] = {"marker": ".", "facecolor": darken_color(color, amount=0.4), "size": 3.0}
+    else:
+        # 黒い棒の上でも見えるように白で塗り、縁を付ける
+        dots = {"marker": "o", "facecolor": "white", "edgecolor": edgecolor,
+                "linewidth": STANDARD_FIGURE_SIZE.LINE_WIDTH_THIN, "size": 2.5}
     sns.stripplot(
         x=[cond_label] * len(y_data),
         y=y_data.values,
         ax=ax,
         # order=xlabel_list,
-        marker=".",
-        facecolor=darken_color(color, amount=0.4),
-        size=3.0,
-        jitter=0.2  # 横幅を指定できる
+        jitter=0.2,  # 横幅を指定できる
+        **dots,
     )
 
 def standard_bar_for_agg_data(ax: Axes, cond_label: Any, color:list[str], agg_data: pd.DataFrame) -> None:
