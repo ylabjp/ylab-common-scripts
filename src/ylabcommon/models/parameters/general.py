@@ -13,8 +13,14 @@ class TransferLog(BaseModel):
 
 class ArgModel(BaseModel):
     overwrite: bool = Field(False)
+    gpu: int | None = Field(None)
 
-def standard_arg_parser() -> ArgModel:
+def standard_arg_parser(gpu: bool = False) -> ArgModel:
+    """Parse the standard command-line arguments.
+
+    ``gpu=True`` adds ``--gpu`` (CUDA device index). It is off by default so
+    that commands which do not use a GPU keep rejecting ``--gpu``.
+    """
     parser = argparse.ArgumentParser(description='Standard parser')
     parser.add_argument(
         '-o',
@@ -29,6 +35,13 @@ def standard_arg_parser() -> ArgModel:
         help="config subfolder",
         default=""
     )
+    if gpu:
+        parser.add_argument(
+            "--gpu",
+            type=int,
+            default=None,
+            help="CUDA device index to use (cupy / CUDA numbering)"
+        )
     args = parser.parse_args()
     # print(vars(args))
     return ArgModel(**vars(args))
