@@ -65,9 +65,15 @@ class RawRecording:
 
     @staticmethod
     def groups(path: str | Path) -> list[str]:
-        """その h5 に入っている train グループの名前 (書かれた順)。"""
+        """その h5 に入っている train グループの名前 (書かれた順)。
+
+        **``data`` を持つグループだけ** を数える。patch-clamp mode の記録は同じ
+        ファイルにカメラや seal test の表 (``/patch``) を並べて持つが、それは
+        train ではない (:mod:`ylabcommon.ephys.patch_recording`)。
+        """
         with h5py.File(str(path), "r") as f:
-            return list(f.keys())
+            return [k for k in f.keys()
+                    if isinstance(f[k], h5py.Group) and "data" in f[k]]
 
     @classmethod
     def open(cls, path: str | Path, group: str | None = None) -> "RawRecording":
@@ -84,9 +90,13 @@ class RawRecording:
             raise FileNotFoundError("No acquisition h5 at %s." % p)
         with h5py.File(str(p), "r") as f:
             names = list(f.keys())
-            if not names:
-                raise ValueError("%s holds no train group." % p)
-            name = names[0] if group is None else group
+            trains = [k for k in names if isinstance(f[k], h5py.Group) and "data" in f[k]]
+            if group is None:
+                if not trains:
+                    raise ValueError("%s holds no train group." % p)
+                name = trains[0]       # ``data`` を持つ最初のグループ (/patch などは飛ばす)
+            else:
+                name = group
             if name not in names:
                 raise ValueError("No train group %r in %s; it holds %s."
                                  % (name, p, names))
