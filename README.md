@@ -65,6 +65,8 @@ Repository Structure
 | `ephys.recording` | **2 つの形を同じ形で開いて切り出す中間層** (`open_recording` / `TraceSelection` / `describe`) |
 | `ephys.procedure` | 開く→選ぶ→掛ける→記録を組む、の手順 (`run_detection`) |
 | `ephys.event_record` | 検出結果と、その値が出た条件の記録 (`<記録名>_mepsc_result.json` / `<記録名>_mepsc_events.csv`) |
+| `ephys.test_pulse` | seal test (テストパルス) の位置決めと R_total / Rs / Rm / Cm / τ の測定 (`locate_pulses` / `analyse_trace` / `TestPulseTracker`)。取得側の patch-clamp mode がリアルタイムに掛け、解析側が後から同じ式で掛け直す |
+| `ephys.patch_recording` | patch-clamp mode の記録 (電流 + 動画の時刻 + seal test の表 + 先端の位置) の形と読み書き (`PatchSessionWriter` / `PatchRecording`)。電流は取得直後の h5 と同じ `train_param_000` の形なので viewer と `scli info` がそのまま開ける |
 
 ### 中間層 — 画面も CLI も agent も同じ手順を通る
 
