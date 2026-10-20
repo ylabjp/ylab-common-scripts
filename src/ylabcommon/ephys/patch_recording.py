@@ -254,6 +254,73 @@ class PatchSessionWriter:
             self.__f.close()
             self.__closed = True
 
+    def discard(self) -> None:
+        """何も記録しないまま終わるとき: 閉じて ``.writing`` を消す。"""
+        self.abort()
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+
+# ------------------------------------------------------------------ re-analysis record
+
+#: 記録に後から掛け直した seal test の表と要約の名前 (h5 の隣に書く)。
+TEST_PULSE_CSV_SUFFIX = "_test_pulse.csv"
+TEST_PULSE_RESULT_SUFFIX = "_test_pulse_result.json"
+
+
+def test_pulse_rows(metrics: list[PulseMetrics], sampling_rate_hz: float) -> list[dict[str, Any]]:
+    """パルス 1 つ 1 行 (時刻つき)。"""
+    rows = []
+    for m in metrics:
+        row = m.as_record()
+        row["t_s"] = m.onset_idx / sampling_rate_hz
+        rows.append(row)
+    return rows
+
+
+def save_test_pulse_result(out_dir: str | Path, source_file: str,
+                           metrics: list[PulseMetrics], sampling_rate_hz: float,
+                           params: dict[str, Any], summary: dict[str, Any],
+                           phases: dict[str, Any] | None = None) -> Path:
+    """``<記録名>_test_pulse.csv`` と ``<記録名>_test_pulse_result.json`` を書く。
+
+    値だけでなく **どのパラメータで掛けたか** も残す (記録に無い条件で出した数字は
+    後から確かめられない)。別名に書いてから差し替える。
+    """
+    import csv
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = Path(source_file).name
+    for suffix in (WRITING_SUFFIX, ".h5"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    rows = test_pulse_rows(metrics, sampling_rate_hz)
+    columns = ["t_s"] + list(PULSE_COLUMNS)
+    csv_path = out_dir / (base + TEST_PULSE_CSV_SUFFIX)
+    tmp = csv_path.with_name("_" + csv_path.name + ".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: ("" if row.get(k) is None else row.get(k)) for k in columns})
+    tmp.replace(csv_path)
+    result = {
+        "source_file": source_file, "sampling_rate_hz": float(sampling_rate_hz),
+        "params": params, "n_pulses": len(metrics), "summary": summary,
+        "phases": phases or {},
+        "created_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "events_csv": csv_path.name,
+    }
+    out = out_dir / (base + TEST_PULSE_RESULT_SUFFIX)
+    tmp = out.with_name("_" + out.name + ".tmp")
+    tmp.write_text(json.dumps(result, indent=4, ensure_ascii=False, default=_plain),
+                   encoding="utf-8")
+    tmp.replace(out)
+    return out
+
 
 # ------------------------------------------------------------------ reader
 
