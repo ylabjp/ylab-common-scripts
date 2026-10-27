@@ -77,3 +77,23 @@ class TestRejected:
         with pytest.raises(ValidationError) as e:
             _ga(cond_by_mouse={"R": ["m1"], "N": ["m1"]})
         assert "m1" in str(e.value) and "'R'" in str(e.value) and "'N'" in str(e.value)
+
+
+class TestDayFrom:
+    def test_absent_by_default(self):
+        assert _ga().day_from is None
+
+    def test_accepts_int(self):
+        assert _ga(day_from=15).day_from == 15
+
+    def test_combines_with_cond_by_mouse(self):
+        ga = _ga(day_from=15, cond_by_mouse={"WT": ["m1"], "KO": ["m2"]})
+        assert ga.day_from == 15 and list(ga.cond_by_mouse) == ["WT", "KO"]
+
+
+class TestBodyweight:
+    def test_off_by_default(self):
+        assert _ga().bodyweight is False
+
+    def test_can_be_enabled(self):
+        assert _ga(bodyweight=True).bodyweight is True

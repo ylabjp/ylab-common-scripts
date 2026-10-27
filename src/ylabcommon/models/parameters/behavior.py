@@ -262,6 +262,15 @@ class GroupAnalysisItemParam(BaseModel):
     # cond の構成はそのままに、指定した個体だけを全集計から外す。cond_group とも
     # cond_by_mouse とも併用でき、他のどの処理よりも先に適用される。
     exclude_mice: Optional[List[str]] = None
+    # day 番号(記録名の day 欄の先頭 `dayNN`)がこの値以上の day だけを集計に使う。
+    # 例: 15 なら day15 以降。phase の無い day 名(before-task の day01 / day08 …)は
+    # phase_selection では絞れないので、day 番号で絞る。None なら絞らない。
+    # 適用は behavior_analysis 側の resolve_cond_selection(個体の選択のあと)。
+    day_from: Optional[int] = None
+    # この ga の群で体重の推移を bodyweight_<ga_key>.pdf に描く(behavior_analysis の rg)。
+    # 体重は behavior-config の計画 YAML(bodyweight_management: true の計画の mice[].bw_before)から読む。
+    # 解析ドライブには体重が無いため。既定は False(描かない)。
+    bodyweight: bool = False
 
     @model_validator(mode="after")
     def _check_cond_selection(self) -> "GroupAnalysisItemParam":
