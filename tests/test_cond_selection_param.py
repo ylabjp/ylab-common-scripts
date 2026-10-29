@@ -91,6 +91,22 @@ class TestDayFrom:
         assert ga.day_from == 15 and list(ga.cond_by_mouse) == ["WT", "KO"]
 
 
+class TestDayTo:
+    def test_absent_by_default(self):
+        assert _ga().day_to is None
+
+    def test_range_with_day_from(self):
+        ga = _ga(day_from=15, day_to=26)
+        assert (ga.day_from, ga.day_to) == (15, 26)
+
+    def test_single_day_is_allowed(self):
+        assert _ga(day_from=15, day_to=15).day_to == 15
+
+    def test_reversed_range_is_rejected(self):
+        with pytest.raises(ValidationError, match="day_from"):
+            _ga(day_from=26, day_to=15)
+
+
 class TestBodyweight:
     def test_off_by_default(self):
         assert _ga().bodyweight is False

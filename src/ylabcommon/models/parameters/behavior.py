@@ -267,6 +267,9 @@ class GroupAnalysisItemParam(BaseModel):
     # phase_selection では絞れないので、day 番号で絞る。None なら絞らない。
     # 適用は behavior_analysis 側の resolve_cond_selection(個体の選択のあと)。
     day_from: Optional[int] = None
+    # day 番号がこの値以下の day だけを集計に使う(day_from の上側。両端を含む)。
+    # 例: day_from 15 / day_to 26 なら day15–26。None なら絞らない。適用は day_from と同じ所。
+    day_to: Optional[int] = None
     # この ga の群で体重の推移を bodyweight_<ga_key>.pdf に描く(behavior_analysis の rg)。
     # 体重は behavior-config の計画 YAML(bodyweight_management: true の計画の mice[].bw_before)から読む。
     # 解析ドライブには体重が無いため。既定は False(描かない)。
@@ -309,6 +312,10 @@ class GroupAnalysisItemParam(BaseModel):
                     f"mouse(s) {both} appear in both cond_by_mouse and exclude_mice. "
                     "Drop them from one of the two."
                 )
+        if self.day_from is not None and self.day_to is not None and self.day_from > self.day_to:
+            raise ValueError(
+                f"day_from ({self.day_from}) is after day_to ({self.day_to}): no day would be used."
+            )
         return self
 
 
