@@ -105,11 +105,16 @@ def __build_tree_generic(
     root: Path,
     level_specs: List[LevelSpec],
     node_class: Type[N],
+    include_set_aside: bool = False,
 ) -> List[N]:
     """
     root 配下を level_specs にしたがって再帰的に走査し、
     node_factory で生成した HierNode(N) の木を構築して返す。
     戻り値は最上位レベル (level_specs[0].level) のノードのリスト。
+
+    include_set_aside=True なら人の退避 (``_``) にも降りる。``cond*`` / ``day*`` の
+    ような頭で決める pattern は ``_cond*`` / ``_day*`` も拾う。データではないフォルダ
+    (``@eaDir`` など) には立てても降りない (:func:`is_skipped_name`)。
     """
 
     def _build_level(parent: Optional[N], base_path: Path, depth: int) -> List[N]:
@@ -119,10 +124,15 @@ def __build_tree_generic(
         spec = level_specs[depth]
         nodes: List[N] = []
 
-        for d in sorted(base_path.glob(spec.pattern)):
+        candidates = set(base_path.glob(spec.pattern))
+        if include_set_aside and not spec.pattern.startswith(("*", SET_ASIDE_PREFIX)):
+            candidates |= set(base_path.glob(SET_ASIDE_PREFIX + spec.pattern))
+        for d in sorted(candidates):
             if not d.is_dir():
                 continue
-            if not spec.filter_dir(d):
+            # spec の規則で外れても、退避 (``_``) なら include_set_aside のとき読む
+            set_aside_ok = include_set_aside and not is_skipped_name(d.name, include_set_aside=True)
+            if not (spec.filter_dir(d) or set_aside_ok):
                 continue
 
             # 前処理（rename など）
@@ -611,12 +621,18 @@ def __make_day_behavior_spec() -> LevelSpec:
     )
 
 
-def build_behavior_tree(prj_root: Path) -> List[BehaviorNode]:
+def build_behavior_tree(prj_root: Path, include_set_aside: bool = False) -> List[BehaviorNode]:
+    """cond / mouse / day の木。
+
+    include_set_aside=True で人の退避 (``_cond_*``、``_ET1420--_videorecorder-error-f`` など)
+    にも降りる。既定は降りない (上の「読まないフォルダ」)。
+    """
     level_specs = [__make_cond_spec(), __make_mouse_spec(), __make_day_behavior_spec()]
     nodes: List[BehaviorNode] = __build_tree_generic(
         root=prj_root,
         level_specs=level_specs,
         node_class=BehaviorNode,
+        include_set_aside=include_set_aside,
     )
 
     return nodes

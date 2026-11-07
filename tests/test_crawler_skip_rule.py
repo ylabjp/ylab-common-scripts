@@ -145,3 +145,42 @@ def test_find_in_tree_gives_the_same_answer_as_rglob_then_filter(
 
 def test_a_missing_root_has_nothing(tmp_path: Path) -> None:
     assert find_in_tree(tmp_path / "nowhere", "*") == []
+
+
+# ---- 行動の木: include_set_aside ---------------------------------------------------------
+
+def _behavior_prj(root: Path) -> Path:
+    return _tree(root, dirs=(
+        "cond_A/M1/day01_/raw_video",
+        "cond_A/_M2-videorecorder-error/day01_/raw_video",
+        "cond_A/M3/_day01-device-problem/raw_video",
+        "_cond_Demo/M4/day01_/raw_video",
+        "cond_A/@eaDir/day01_",
+        "#recycle/M5/day01_",
+    ))
+
+
+def _days(nodes) -> set[str]:
+    out = set()
+    for c in nodes:
+        for m in c.children:
+            for d in m.children:
+                out.add(f"{c.name}/{m.name}/{d.name}")
+    return out
+
+
+def test_behavior_tree_skips_set_aside_by_default(tmp_path: Path) -> None:
+    from ylabcommon.analysis.crawler import build_behavior_tree
+    assert _days(build_behavior_tree(_behavior_prj(tmp_path))) == {"cond_A/M1/day01_"}
+
+
+def test_behavior_tree_reads_set_aside_when_asked(tmp_path: Path) -> None:
+    """``_cond_*`` / ``_day*`` は pattern の頭が ``_`` になるので、それも拾う。"""
+    from ylabcommon.analysis.crawler import build_behavior_tree
+    got = _days(build_behavior_tree(_behavior_prj(tmp_path), include_set_aside=True))
+    assert got == {
+        "cond_A/M1/day01_",
+        "cond_A/_M2-videorecorder-error/day01_",
+        "cond_A/M3/_day01-device-problem",
+        "_cond_Demo/M4/day01_",
+    }   # @eaDir / #recycle には立てても降りない
