@@ -17,7 +17,8 @@ from typing import (
     cast,
 )
 from ylabcommon.models.parameters.general import ArgModel
-from ylabcommon.utils.betterstack_log import analysis_context, log_error, log_info
+from ylabcommon.utils.betterstack_log import analysis_context, log_error, log_info, log_warning
+from ylabcommon.analysis.claim import claim_day
 from abc import ABC
 import pandas as pd
 from datetime import datetime
@@ -185,6 +186,12 @@ class GenericKernel(ABC, Generic[N]):
     ※ここでは level 固有の on_cond / on_mouse / on_day などは定義しない。
       必要であれば on_node 内部で node.level を見て分岐する。
     """
+    #: 設定すると、crawler はこの名前の claim ファイルを node のフォルダに排他的に作れたときだけ
+    #: on_file を呼び、作ったあと check_overwrite を見直し、抜けるときに消す(analysis/claim.py)。
+    #: 同じ config を複数の GPU / PC で同時に走らせる段が置く。名前は段ごとに分ける
+    #: (`.pvd_claim.json` / `.pvdd_claim.json`)。None なら何もしない。
+    CLAIM_FILENAME: Optional[str] = None
+
     def __init__(self, target_filename: Optional[str] = None) -> None:
         self.target_filename = target_filename
         # この kernel が処理して失敗したファイルの記録 (path, message)。
@@ -382,7 +389,8 @@ class GenericCrawler:
                         with analysis_context(
                             stage=k.__class__.__name__, target_file=node.path
                         ):
-                            k.on_file(self.ctx, node, f)
+                            if not self._run_on_file(k, node, f):
+                                continue
                     except Exception as e:
                         print(e)
                         log_error(
@@ -406,6 +414,31 @@ class GenericCrawler:
         # 子ノードを再帰
         for child in node.children:
             self._walk_node(child)
+
+    def _run_on_file(self, k: GenericKernel, node: HierNode, f: Path) -> bool:
+        """on_file を呼ぶ。k.CLAIM_FILENAME があれば node を掴んでから。呼んだら True。
+
+        掴む前の check_overwrite は呼び出し側で済んでいる。掴むまでの間に他のプロセスが
+        処理を終えて claim を消していたら出力がもうあるので、掴んだあともう一度見る。
+        """
+        if k.CLAIM_FILENAME is None:
+            k.on_file(self.ctx, node, f)
+            return True
+        with claim_day(node.path, k.CLAIM_FILENAME, gpu=self.ctx.arg.gpu) as claim:
+            if not claim.acquired:
+                holder = claim.holder.label() if claim.holder is not None else "unreadable claim"
+                print(f"Other process is analyzing [{holder}]: {node.path}")
+                return False
+            if claim.taken_over is not None:
+                log_warning(
+                    f"Stale claim taken over [{claim.taken_over.label()}]: {node.path}",
+                    stage=k.__class__.__name__,
+                    target_file=node.path,
+                )
+            if not k.check_overwrite(node, self.ctx):
+                return False
+            k.on_file(self.ctx, node, f)
+            return True
     def get_log(self) -> pd.DataFrame:
         return pd.DataFrame(self.__log)
     def save_log(self) -> None:
