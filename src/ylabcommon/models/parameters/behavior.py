@@ -517,6 +517,7 @@ class BehaviorParam(BaseModel):
 #: DLC の1フォルダ(= 1 day 分の動画)は長くても数時間で終わるので、これを超えて
 #: 出力も status も動かないなら、掴んだPCが落ちた/中断されたと判断してよい。
 #: 短くしすぎると走行中の解析を別PCが奪って二重解析になる。
+#: analysis/claim.py の claim ファイルも同じ時間で古いと見なす。
 ANALYZING_STALE_HOURS = 12.0
 
 
