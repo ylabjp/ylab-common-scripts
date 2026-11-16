@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from ylabcommon.models.parameters.behavior import ANALYZING_STALE_HOURS
 
-from ylabcommon.analysis.claim import Claim, claim_day
+from ylabcommon.analysis.claim import Claim, claim_day, live_claim
 
 NAME = ".test_claim.json"
 
@@ -125,3 +125,16 @@ def test_label_shows_host_pid_gpu_and_age() -> None:
     label = c.label(now=started + timedelta(hours=1.5))
     assert label.startswith("ws-hpc pid 1234 gpu 1 since ")
     assert label.endswith("(1.5h ago)")
+
+
+def test_live_claim_reports_a_held_day_without_writing(tmp_path: Path) -> None:
+    assert live_claim(tmp_path, NAME).acquired              # 無ければ掴める
+    assert list(tmp_path.iterdir()) == []                   # 見るだけで何も作らない
+    with claim_day(tmp_path, NAME, gpu=2):
+        got = live_claim(tmp_path, NAME)
+        assert not got.acquired and got.holder is not None and got.holder.gpu == 2
+    _write_claim(tmp_path / NAME, hours_ago=ANALYZING_STALE_HOURS + 1)
+    assert live_claim(tmp_path, NAME).acquired              # 古いものは掴める
+    (tmp_path / NAME).write_text("", encoding="utf-8")      # 作成直後で中身がまだ無い
+    got = live_claim(tmp_path, NAME)
+    assert not got.acquired and got.holder is None

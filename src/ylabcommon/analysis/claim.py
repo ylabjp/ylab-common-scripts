@@ -129,6 +129,22 @@ def _take_over_stale(path: Path, now: datetime, hours: float) -> Claim | None | 
     return old
 
 
+def live_claim(day: Path, filename: str, *, hours: float = ANALYZING_STALE_HOURS) -> ClaimResult:
+    """day が他のプロセスに掴まれているかを、掴まずに見る(何も書かない)。
+
+    掴まれていれば acquired=False と持ち主(中身が読めなければ None)、
+    claim が無いか古ければ acquired=True を返す——「いま掴みにいけば掴める」の意味。
+    掴んだ day の状態を書き換える道具(qcdlc など)が、走っている解析の邪魔をしないために使う。
+    """
+    path = day / filename
+    if not path.exists():
+        return ClaimResult(acquired=True)
+    holder = _read(path)
+    if _is_stale(path, holder, datetime.now().astimezone(), hours):
+        return ClaimResult(acquired=True)
+    return ClaimResult(acquired=False, holder=holder)
+
+
 @contextmanager
 def claim_day(
     day: Path,
