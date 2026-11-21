@@ -105,6 +105,40 @@ def _axis_scales(dim_order: str,
     return [by_axis.get(axis, 1.0) for axis in dim_order]
 
 
+def _axis_size(data: Any, dim_order: str, axis: str) -> int | None:
+    return int(data.shape[dim_order.index(axis)]) if axis in dim_order else None
+
+
+def _no_spacing_for_one_plane(
+        physical_pixel_sizes: Optional[tuple[float | None, float, float]],
+        size_z: Optional[int]) -> Optional[tuple[float | None, float, float]]:
+    """``(Z, Y, X)`` with Z dropped when there is one plane: it has no spacing.
+
+    Callers pass whatever Z their source carried, and a single-plane Keyence
+    mosaic came out with ``PhysicalSizeZ`` 1.61 and 100.8 µm (2026-11-21) —
+    a spacing between planes that do not exist, which every reader of the file
+    then takes as measured.
+    """
+    if physical_pixel_sizes is None or size_z is None or size_z > 1:
+        return physical_pixel_sizes
+    return (None, physical_pixel_sizes[1], physical_pixel_sizes[2])
+
+
+def _tiles(plane: np.ndarray, tile: tuple[int, int]) -> Iterator[np.ndarray]:
+    """One plane as tifffile wants it from an iterator: tile by tile, row major,
+    each padded to the full tile shape."""
+    th, tw = tile
+    height, width = plane.shape
+    for y in range(0, height, th):
+        for x in range(0, width, tw):
+            block = plane[y:y + th, x:x + tw]
+            if block.shape != (th, tw):
+                padded = np.zeros((th, tw), dtype=plane.dtype)
+                padded[:block.shape[0], :block.shape[1]] = block
+                block = padded
+            yield block
+
+
 class BioIOWriter:
     """
     Low-level export engine.
@@ -131,6 +165,7 @@ class BioIOWriter:
         compression: str = "zlib",
         compression_level: int = 6,
         predictor: bool | int | None = None,
+        tile: int | tuple[int, int] | None = None,
     ) -> None:
         """
         Args:
@@ -144,11 +179,26 @@ class BioIOWriter:
                 ``zlib`` + predictor reached 86.2%. It is not free everywhere —
                 on a bright-field tile with little local structure the same
                 pair went 59.2% → 61.8% — so it is a switch, not a default.
+            tile: store each plane as square tiles of this many pixels (or a
+                ``(height, width)`` pair) instead of row strips. **What a
+                viewer pays for is the unit it has to decode**: a 1024 px
+                region of a strip-stored plane decodes every strip that
+                crosses it at the full width, a tiled one only the tiles
+                under it. Measured on merged Keyence sections (histology
+                ``scripts/section_format_bench.py``, 2026-11-21): a 1024 px
+                region 0.044-0.233 s with LZMA strips, 0.012-0.013 s with
+                zstd + 512 px tiles, for 8-14 % more bytes. Must be a
+                multiple of 16 (TIFF). ``None`` keeps strips.
         """
         self.output_path = Path(output_path)
         self.compression = compression
         self.compression_level = compression_level
         self.predictor = predictor
+        if isinstance(tile, int):
+            tile = (tile, tile)
+        if tile is not None and (len(tile) != 2 or any(t <= 0 or t % 16 for t in tile)):
+            raise ValueError("tile must be a positive multiple of 16: %r" % (tile,))
+        self.tile = tile
 
     def _tiff_compression_kwargs(self) -> dict:
         """What to hand tifffile, with only the arguments the codec accepts."""
@@ -161,6 +211,10 @@ class BioIOWriter:
         if self.predictor is not None:
             kwargs["predictor"] = self.predictor
         return kwargs
+
+    def _tiff_layout_kwargs(self) -> dict:
+        """How planes are cut on disk: tiles, or tifffile's default strips."""
+        return {} if self.tile is None else {"tile": tuple(self.tile)}
 
     # ------------------------------------------------------------------
     # Public API
@@ -300,6 +354,8 @@ class BioIOWriter:
             )
             return
 
+        physical_pixel_sizes = _no_spacing_for_one_plane(
+            physical_pixel_sizes, _axis_size(data, dim_order, "Z"))
         pps = None
         if physical_pixel_sizes is not None:
             pps = PhysicalPixelSizes(
@@ -314,7 +370,8 @@ class BioIOWriter:
             dim_order=dim_order,
             channel_names=list(channel_names) if channel_names else None,
             physical_pixel_sizes=pps,
-            tifffile_kwargs=self._tiff_compression_kwargs(),
+            tifffile_kwargs={**self._tiff_compression_kwargs(),
+                             **self._tiff_layout_kwargs()},
         )
 
         print(f"[BioIOWriter] OME-TIFF written → {out_file}")
@@ -357,6 +414,7 @@ class BioIOWriter:
         bigtiff = nbytes > 3_900_000_000  # standard TIFF caps out near 4 GB
 
         metadata: dict[str, Any] = {"axes": "TCZYX"}
+        physical_pixel_sizes = _no_spacing_for_one_plane(physical_pixel_sizes, Z)
         if physical_pixel_sizes is not None:
             pz, py, px = physical_pixel_sizes
             if px:
@@ -409,7 +467,13 @@ class BioIOWriter:
                         for c in range(C):
                             for z in range(Z):
                                 step.advance(item=f"T={t0 + i} C={c} Z={z}")
-                                yield chunk[i, c, z]
+                                if self.tile is None:
+                                    yield chunk[i, c, z]
+                                else:
+                                    # tifffile takes a tiled page from an
+                                    # iterator **one tile at a time**, row by
+                                    # row, each padded to the full tile shape.
+                                    yield from _tiles(chunk[i, c, z], self.tile)
 
             with tifffile.TiffWriter(out_file, bigtiff=bigtiff, ome=True) as tif:
                 tif.write(
@@ -419,6 +483,7 @@ class BioIOWriter:
                     photometric="minisblack",
                     metadata=metadata,
                     **self._tiff_compression_kwargs(),
+                    **self._tiff_layout_kwargs(),
                 )
 
         print(f"[BioIOWriter] OME-TIFF (streamed) written → {out_file}")
